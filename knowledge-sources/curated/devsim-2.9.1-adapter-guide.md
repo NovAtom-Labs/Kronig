@@ -4,7 +4,7 @@ Status: machine-curated from the pinned public source and local adapter, awaitin
 
 ## Version boundary
 
-The installed runtime reports DEVSIM 2.9.1. The local Apache-2.0 source checkout is pinned to commit `43b41ca845184c47e22b72d144db7e7db8509377`. Retrieval for executable guidance should filter both backend `devsim` and version `2.9.1`.
+The installed runtime reports DEVSIM 2.9.1. The local Apache-2.0 source checkout is pinned to commit `43b41ca845184c47e22b72d144db7e7db8509377`. The official documentation snapshot is pinned to the 2.9.0 documentation commit `8fbe81b5719307d654f37d630cf043dc6ae0512e` and is explicitly marked compatible with 2.9.1 because the 2.9.1 release notes describe internal C++ cleanup without a command-interface change. Retrieval for executable guidance should still retain both the source version and documentation version in citations.
 
 ## Deterministic compilation
 

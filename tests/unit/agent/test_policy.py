@@ -117,6 +117,23 @@ def test_repository_file_actions_are_low_risk(workspace: Path) -> None:
     )
 
 
+@pytest.mark.parametrize("operation", ["search_web", "fetch_source"])
+def test_scientific_web_research_requires_network_approval(
+    workspace: Path, operation: str
+) -> None:
+    event = action_event(
+        "tcad_domain",
+        TcadDomainAction(operation=operation, payload={"query": "contact equation"}),
+    )
+
+    assert classify_action(workspace, event) is SecurityRisk.HIGH
+    assert (
+        policy_module.permission_category(workspace, event).value
+        == "network_access"
+    )
+    assert "internet" in policy_module.approval_explanation(workspace, event).lower()
+
+
 def test_terminal_symlink_escape_requires_confirmation(
     workspace: Path, tmp_path: Path
 ) -> None:

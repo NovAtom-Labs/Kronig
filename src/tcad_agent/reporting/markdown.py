@@ -14,7 +14,7 @@ class MarkdownReport:
     ) -> str:
         outcome = "Completed" if validation.overall == "passed" else "Failed"
         lines = [
-            f"# {spec.name} TCAD Report",
+            f"# {spec.name} TCAD Evidence Summary",
             "",
             f"**Outcome:** {outcome}",
             f"**Backend:** {result.backend}",

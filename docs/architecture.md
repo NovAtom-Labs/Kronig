@@ -119,11 +119,26 @@ Bundle creation is atomic. A completed run contains:
   manifest.json           versions, state, digests, and artifact SHA-256 values
 ```
 
-Reports read structured data only. Logs remain evidence, not a source of numeric claims.
+The bundle `report.md` is a compact evidence summary generated for every run. A separate narrative research report is optional and intent-driven. Both read structured data only. Logs remain evidence, not a source of numeric claims.
+
+### Results Workbench
+
+The desktop workspace treats `results/canonical.json` as the entry point for a scientific result. A workspace-scoped reader derives the bundle root, loads `experiment.json`, `validation/report.json`, and `manifest.json`, validates all four typed contracts, and verifies manifest byte counts and SHA-256 values before returning a result view.
+
+The center-pane workbench consumes only that verified view. It derives metrics from canonical fields and bias points, displays configured structure from `ExperimentSpec`, and presents checks from `ValidationReport`. It never extracts numeric claims from logs, reports, chat text, or native simulator files.
+
+```text
+DEVSIM native result  -> DEVSIM adapter  -> CanonicalResult -> Results Workbench
+Sentaurus export      -> Sentaurus adapter -> CanonicalResult -> Results Workbench
+```
+
+The browser recognizes only repository-relative paths ending in `results/canonical.json`. A completed foreground agent run may auto-open a result only when that exact path is present as a created, modified, or renamed artifact in the run's immutable change manifest. Other JSON files remain generic repository files.
+
+The current canonical field contract and renderer are one-dimensional. Direct binary TDR or PLT parsing stays on the licensed Sentaurus side. Two-dimensional visualization requires a future canonical mesh contract and is not inferred from one-dimensional samples.
 
 ## Agent boundary
 
-OpenHands receives eight small skills for specification, capability checks, DEVSIM compilation, recovery, validation, citation, reporting, and Sentaurus policy. Its custom `tcad_domain` tool exposes typed actions only. The production profile does not expose a terminal. The agent may propose a plan, but execution remains approval-gated.
+OpenHands always receives the packaged Agent Kronig skills, including experiment specification, research method, physics-model selection, mesh design, capability checking, DEVSIM compilation, recovery, validation, citation, artifact intent, reporting, and Sentaurus policy. Repository-local skills may supplement but not replace these built-in policies. Its custom `tcad_domain` tool exposes typed scientific actions. Repository tools remain subject to the workspace security policy and approval broker.
 
 The repository IDE does not weaken this existing boundary. Its workspace-agent profile adds file,
 search, terminal, Git, and approval-broker tools around a process-scoped OpenHands runtime.
@@ -137,7 +152,51 @@ This separation makes the model replaceable. Model reasoning helps interpret int
 
 Sources enter through a versioned manifest with source ID, title, URL or controlled location, license, access class, trust level, backend, version, review status, and optional local path. Only allowlisted text formats are indexed. Each passage has a content hash and every hit returns a citation.
 
-Public DEVSIM source can be indexed locally. Proprietary Sentaurus documents must remain on the licensed machine or another approved restricted store. They must not be committed or sent to a model provider unless the license and company policy explicitly permit it.
+The packaged public corpus indexes a pinned, unmodified DEVSIM command reference under its documentation licence, the pinned Apache-2.0 simulator source and official examples, and source-grounded portable guides covering semiconductor equations, contacts, transport, mobility, recombination, band-gap narrowing, meshing, convergence, study design, and interpretation. The runtime reads the packaged index rather than expecting each research repository to contain its own copy.
+
+Markdown ingestion keeps each section heading attached to its scientific paragraphs so
+retrieval returns usable evidence rather than isolated headings. The index retains the
+source identity, version, review state, licence, access class, and a content hash for
+every passage. Backend and compatible-version filters are applied before context reaches
+the model.
+
+When local retrieval is missing, outdated, conflicting, or insufficient, the
+`tcad_domain` tool exposes two additional operations:
+
+```text
+search_web(query, preferred_domains, limit) -> ranked discovery records
+fetch_source(url, query, backend, version)   -> bounded evidence record
+```
+
+Web search and source fetch are classified as network access. The first request pauses
+for approval, and category approval covers later network operations only for that run.
+The fetcher permits public HTTPS targets on port 443, validates DNS and one redirect,
+rejects private or reserved addresses, accepts only HTML or plain text, bounds bytes and
+extracted characters, strips active page content, and caches records atomically with a
+24-hour TTL. Every record includes retrieval time and SHA-256 content hash and is marked
+as untrusted evidence.
+
+The model is instructed to ignore commands and prompt-like text inside a fetched page.
+It may use evidence to select a model, numerical strategy, or interpretation, but only
+the portable schema, capability registry, deterministic adapter, simulator output, and
+validators can authorize or accept an experiment.
+
+Proprietary Sentaurus documents must remain on the licensed machine or another approved restricted store. They must not be committed or sent to a model provider unless the licence and company policy explicitly permit it.
+
+## Scientific evaluation contract
+
+`evaluations/scientific/cases.yaml` defines natural-language research cases without
+encoding simulator commands in the prompts. The scorer checks backend, generic region
+composition, study type, local and public evidence, required canonical fields,
+validation checks, graphability, and immutable provenance. Integration tests execute
+the same simulator-neutral specs through real DEVSIM and reopen the bundles through the
+same verified reader used by the Results Workbench.
+
+Opt-in live Bedrock evaluations check two distinct behaviors: a complete researcher
+prompt must become a schema-valid supported `ExperimentSpec`, while a prompt missing
+essential doping concentrations must produce actionable clarification questions rather
+than guessed values. The live repository-agent evaluation then exercises file editing,
+terminal validation, approvals, delegated review, and deterministic grading end to end.
 
 ## Adding scope without hardcoding devices
 

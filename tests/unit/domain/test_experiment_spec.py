@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from tcad_agent.domain.models import Contact, ExperimentSpec, Observable
+from tcad_agent.domain.units import QuantityValue
 
 
 def minimal_spec() -> dict:
@@ -79,6 +80,18 @@ def test_normalization_is_independent_of_input_units() -> None:
 def test_normalized_spec_round_trips_through_persistence() -> None:
     spec = ExperimentSpec.model_validate(minimal_spec())
     assert ExperimentSpec.model_validate(spec.normalized()) == spec
+
+
+def test_canonical_quantity_accepts_equivalent_dimensionality_factor_order() -> None:
+    quantity = QuantityValue.model_validate(
+        {
+            "magnitude_si": 0.2,
+            "si_unit": "kilogram * meter ** 2 / ampere / second ** 3",
+            "dimensionality": "[mass] * [length] ** 2 / [time] ** 3 / [current]",
+        }
+    )
+
+    assert quantity.to("V") == pytest.approx(0.2)
 
 
 def test_default_temperature_is_validated_as_a_quantity() -> None:

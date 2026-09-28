@@ -428,6 +428,50 @@ def test_workspace_file_preview_classifies_and_formats_supported_text(
     assert table.json()["content"] == "bias,current\n0,0\n1,2e-6\n"
 
 
+def test_workspace_results_endpoint_returns_verified_canonical_bundle(
+    tmp_path: Path, result_bundle_factory
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    result_bundle_factory(root)
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+
+    response = web.get(
+        f"/api/workspaces/{workspace['id']}/results",
+        params={"path": "run-0001/results/canonical.json"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["bundle_path"] == "run-0001"
+    assert payload["manifest"]["run_id"] == "run-0001"
+    assert payload["result"]["backend"] == "devsim"
+    assert payload["result"]["fields"]["potential"]["unit"] == "V"
+
+
+def test_workspace_results_endpoint_sanitizes_invalid_bundle_error(
+    tmp_path: Path, result_bundle_factory
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    bundle = result_bundle_factory(root)
+    (bundle / "results" / "canonical.json").write_text("{}\n")
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+
+    response = web.get(
+        f"/api/workspaces/{workspace['id']}/results",
+        params={"path": "run-0001/results/canonical.json"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "invalid_result_bundle",
+        "message": "The result bundle is incomplete, malformed, or failed provenance checks.",
+    }
+
+
 def test_workspace_file_preview_recognizes_extensionless_utf8_text(
     tmp_path: Path,
 ) -> None:

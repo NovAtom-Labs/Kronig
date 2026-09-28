@@ -72,9 +72,20 @@ def test_workspace_route_restores_current_process_session_activity(
     assert 'id="agent-run-summary"' in restored_page.text
     assert 'id="agent-reasoning"' in restored_page.text
     assert 'id="agent-changes"' in restored_page.text
+    assert 'src="/static/results-workbench.js?v=20260927-1"' in restored_page.text
     assert "Foundation slice" not in restored_page.text
     assert [message["content"] for message in restored_messages] == [
         "Inspect the experiment definition"
     ]
     assert "event: conversation_created" in restored_events
     assert "event: message_created" in restored_events
+
+
+def test_results_workbench_asset_is_served_by_desktop_shell(tmp_path: Path) -> None:
+    web = TestClient(create_app())
+
+    response = web.get("/static/results-workbench.js")
+
+    assert response.status_code == 200
+    assert "AgentKronigResults" in response.text
+    assert "results-workbench" in response.text

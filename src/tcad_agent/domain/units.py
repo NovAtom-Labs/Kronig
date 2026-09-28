@@ -47,9 +47,10 @@ class QuantityValue(BaseModel):
             raise UnitError("physical quantity magnitude must be finite")
         try:
             quantity = UNIT_REGISTRY.Quantity(self.magnitude_si, self.si_unit)
+            declared_dimensionality = UNIT_REGISTRY.get_dimensionality(self.dimensionality)
         except (pint.UndefinedUnitError, ValueError) as exc:
             raise UnitError(f"invalid canonical SI unit: {self.si_unit!r}") from exc
-        if str(quantity.dimensionality) != self.dimensionality:
+        if quantity.dimensionality != declared_dimensionality:
             raise UnitError("canonical quantity dimensionality does not match its unit")
         return self
 

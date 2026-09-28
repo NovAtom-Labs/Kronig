@@ -5,14 +5,40 @@ description: Use when selecting a simulator backend or determining whether reque
 
 # Checking Backend Capability
 
-Use manifests as authority. Model knowledge is not a capability declaration.
+Capability is declared data, not a guess based on general simulator reputation.
 
-1. Start with a schema-valid `ExperimentSpec`.
-2. Call the capability tool for each candidate backend.
-3. Treat `supported`, `needs_input`, `backend_unsupported`, and `platform_unsupported` as distinct outcomes.
-4. For backend mismatches, name the exact field and supported values. Recommend another backend only when its manifest supports the request.
-5. Check execution configuration separately. A backend may support a feature while its licensed runner is unavailable.
+## Evaluation order
 
-Never remove requested physics merely to make a check pass. Any researcher-approved simplification becomes a new specification and a new validation record.
+1. Require a schema-valid `ExperimentSpec`.
+2. Compare every requested dimension, material, profile, contact, equation, physical model, study, observable, and resource limit with the candidate manifest.
+3. Keep scientific support separate from execution availability. A licensed backend may support the physics while its runner is unconfigured.
+4. Return one of `supported`, `needs_input`, `backend_unsupported`, or `platform_unsupported` with exact field paths.
 
-Evidence required: backend, manifest version, decision status, and every issue path.
+## Meaning of outcomes
+
+| Outcome | Meaning | Next action |
+|---|---|---|
+| `supported` | The adapter declares a mapping for the complete request | Compile deterministically |
+| `needs_input` | Scientific intent is incomplete | Ask one material clarification |
+| `backend_unsupported` | The portable contract can express it, but this adapter cannot | Select another declared backend or propose scoped implementation work |
+| `platform_unsupported` | The product contract cannot represent the request safely | Refuse and name the missing abstraction |
+
+Do not map “the simulator probably supports this” to `supported`. A feature is supported only when the manifest, compiler, normalizer, validators, and tests cover it.
+
+## Model compatibility checks
+
+Check combinations, not isolated names. Fermi statistics can affect carrier relations and contact conditions. Mobility models may require field, doping, temperature, or interface quantities. Recombination models require parameters and carrier definitions. Band-gap narrowing changes intrinsic concentration and band references. A backend that lists each label separately still needs an implemented combined path.
+
+Use `search_knowledge` to understand model meaning or version changes. Retrieved text can explain a capability declaration but cannot override it.
+
+## No silent simplification
+
+Never drop a requested model, collapse a nonuniform profile, replace a Schottky contact with an ohmic contact, reduce dimensionality, or omit an observable to make a backend pass. A researcher-approved simplification is a new specification with its own provenance.
+
+## Backend selection
+
+Prefer the backend that supports the request with the least semantic loss and has an available runner. DEVSIM is not a fake Sentaurus mode. Sentaurus is not selected merely because it is more comprehensive. Compare the exact requested contract.
+
+## Evidence
+
+Preserve manifest name and version, adapter version, execution state, every issue path, requested value, supported boundary, and any researcher-approved reformulation.

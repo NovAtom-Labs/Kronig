@@ -20,15 +20,17 @@ sources:
     version: "2.9.1"
     reviewed: true
     local_path: devsim/source
-  - id: devsim-manual-2.11.0
-    title: DEVSIM Manual
-    url: https://devsim.net/
-    license: documentation terms require review before redistribution
+  - id: devsim-documentation-2.9.0
+    title: DEVSIM official documentation and command reference
+    url: https://github.com/devsim/devsim_documentation/tree/8fbe81b5719307d654f37d630cf043dc6ae0512e
+    license: CC-BY-ND-4.0, unmodified upstream source
     access: public
     trust: primary
     backend: devsim
-    version: "2.11.0"
-    reviewed: false
+    version: "2.9.0"
+    compatible_versions: ["2.9.1"]
+    reviewed: true
+    local_path: devsim/documentation/pydoc
   - id: sentaurus-licensed-documentation
     title: Synopsys Sentaurus Device documentation
     url: licensed-machine-only

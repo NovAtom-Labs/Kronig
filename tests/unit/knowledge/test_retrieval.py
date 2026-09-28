@@ -14,6 +14,7 @@ def passage(
     version: str,
     reviewed: bool,
     backend: str = "devsim",
+    compatible_versions: tuple[str, ...] = (),
 ) -> Passage:
     return Passage.create(
         id=passage_id,
@@ -25,6 +26,7 @@ def passage(
         trust="primary",
         backend=backend,
         version=version,
+        compatible_versions=compatible_versions,
         reviewed=reviewed,
         content=content,
     )
@@ -49,6 +51,79 @@ def test_reviewed_version_compatible_source_outranks_stale_source(tmp_path: Path
     )
     assert [hit.id for hit in hits] == ["current"]
     assert hits[0].citation.source_id
+
+
+def test_version_filter_accepts_explicitly_reviewed_compatible_documentation(
+    tmp_path: Path,
+) -> None:
+    index = build_test_index(
+        tmp_path,
+        passages=[
+            passage(
+                "manual-2-9-0",
+                "DEVSIM solve maximum_iterations convergence",
+                version="2.9.0",
+                compatible_versions=("2.9.1",),
+                reviewed=True,
+            )
+        ],
+    )
+
+    hits = index.search(
+        "solve maximum iterations",
+        filters={"backend": "devsim", "version": "2.9.1"},
+        limit=2,
+    )
+
+    assert [hit.id for hit in hits] == ["manual-2-9-0"]
+    assert hits[0].citation.version == "2.9.0"
+
+
+def test_retrieval_keeps_primary_source_diversity_in_small_context_window(
+    tmp_path: Path,
+) -> None:
+    examples = [
+        Passage.create(
+            id=f"example:{index}",
+            source_id="devsim-source",
+            title="DEVSIM example",
+            url="https://github.com/devsim/devsim",
+            license="Apache-2.0",
+            access="public",
+            trust="primary",
+            backend="devsim",
+            version="2.9.1",
+            reviewed=True,
+            content=("solve maximum_iterations convergence " * (20 - index)).strip(),
+        )
+        for index in range(10)
+    ]
+    manual = Passage.create(
+        id="manual:solve",
+        source_id="devsim-manual",
+        title="DEVSIM command reference",
+        url="https://devsim.net/",
+        license="CC-BY-ND-4.0",
+        access="public",
+        trust="primary",
+        backend="devsim",
+        version="2.9.0",
+        compatible_versions=("2.9.1",),
+        reviewed=True,
+        content="solve maximum_iterations convergence command reference",
+    )
+    index = build_test_index(tmp_path, [*examples, manual])
+
+    hits = index.search(
+        "solve maximum iterations convergence",
+        filters={"backend": "devsim", "version": "2.9.1"},
+        limit=5,
+    )
+
+    assert {hit.citation.source_id for hit in hits} == {
+        "devsim-source",
+        "devsim-manual",
+    }
 
 
 def test_backend_filter_excludes_sentaurus_text(tmp_path: Path) -> None:
@@ -96,6 +171,81 @@ def test_ingest_local_directory_indexes_authorized_text_files(tmp_path: Path) ->
     content = "\n".join(passage.content for passage in passages)
     assert "manual.md" in content
     assert "example.py" in content
+
+
+def test_markdown_chunks_keep_section_heading_with_scientific_evidence() -> None:
+    source = SourceManifest(
+        id="portable-physics",
+        title="Portable physics",
+        url="internal://portable-physics",
+        license="internal",
+        access="restricted",
+        trust="secondary",
+        backend="portable",
+        version="1.0",
+        reviewed=False,
+    )
+    text = (
+        "# Semiconductor equations\n\n"
+        "Scope and assumptions.\n\n"
+        "## Equilibrium expectations\n\n"
+        "At equilibrium the Fermi level is spatially constant.\n\n"
+        "Net terminal current should approach zero within tolerance.\n"
+    )
+
+    passages = KnowledgeIngestor().ingest_text(source, text)
+
+    assert all(
+        not item.content.startswith("## Equilibrium expectations\n\n##")
+        for item in passages
+    )
+    assert any(
+        "## Equilibrium expectations" in item.content
+        and "Fermi level is spatially constant" in item.content
+        for item in passages
+    )
+    assert any(
+        "## Equilibrium expectations" in item.content
+        and "Net terminal current" in item.content
+        for item in passages
+    )
+    assert not any(item.content == "## Equilibrium expectations" for item in passages)
+
+
+def test_python_separator_comments_are_not_mistaken_for_markdown_headings() -> None:
+    source = SourceManifest(
+        id="devsim-source",
+        title="DEVSIM source",
+        url="https://github.com/devsim/devsim",
+        license="Apache-2.0",
+        access="public",
+        trust="primary",
+        backend="devsim",
+        version="2.9.1",
+        reviewed=True,
+    )
+
+    passages = KnowledgeIngestor().ingest_text(
+        source,
+        '###\nsolve(type="dc", maximum_iterations=30)\n',
+    )
+
+    assert passages == (
+        Passage.create(
+            id="devsim-source:0",
+            source_id="devsim-source",
+            title="DEVSIM source",
+            url="https://github.com/devsim/devsim",
+            license="Apache-2.0",
+            access="public",
+            trust="primary",
+            backend="devsim",
+            version="2.9.1",
+            compatible_versions=(),
+            reviewed=True,
+            content='###\nsolve(type="dc", maximum_iterations=30)',
+        ),
+    )
 
 
 def test_ingest_local_directory_rejects_symlink_escape(tmp_path: Path) -> None:

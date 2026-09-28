@@ -77,7 +77,7 @@ def test_http_workflow_runs_devsim_once_and_serves_artifacts(tmp_path: Path) -> 
             timeout=5,
         )
         assert report.status_code == 200
-        assert "TCAD Report" in report.text
+        assert "TCAD Evidence Summary" in report.text
         fields = httpx.get(
             f"{base_url}/api/requests/{request['id']}/artifacts/results/fields.csv",
             timeout=5,

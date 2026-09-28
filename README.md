@@ -43,8 +43,9 @@ Agent Kronig combines an agentic repository IDE with a constrained scientific ex
 - Checks a backend capability manifest before generating any simulator input.
 - Compiles supported DEVSIM and Sentaurus jobs through deterministic adapters.
 - Normalizes simulator output into canonical result fields and validates numerical evidence.
-- Builds reports and evidence bundles with versions, hashes, simulator identity, and validation provenance.
-- Retrieves reviewed TCAD context with source metadata and citations.
+- Builds an evidence summary for every run and creates a separate narrative report only when the research task calls for one.
+- Retrieves reviewed TCAD context from pinned DEVSIM documentation, source, examples, and portable physics guidance with source metadata and citations.
+- Escalates to bounded public web research only when local evidence is missing, stale, conflicting, or insufficient, with run-scoped network approval and hashed source records.
 
 The selected repository is the default authority boundary. Repository-local reads, edits, tests, and validation are allowed by policy. External paths, network activity, package installation, destructive commands, Git mutation, and remote mutation require an explicit approval. Category approval applies only to the current run.
 
@@ -75,7 +76,7 @@ Bounded simulator runner
 Canonical result and mandatory validation
       |
       v
-Report, hashes, provenance, and evidence bundle
+Evidence summary, hashes, provenance, and run bundle
 ```
 
 The language model interprets intent and operates tools. It is not the authority for units, simulator syntax, supported physics, or numerical acceptance. Schemas, capability manifests, adapters, runners, and validators own those decisions.
@@ -92,7 +93,7 @@ The language model interprets intent and operates tools. It is not the authority
 | Studies | Equilibrium and bounded DC sweeps |
 | DEVSIM | Local deterministic compilation, execution, normalization, validation, reporting, and evidence bundles |
 | Sentaurus | Deterministic command compilation, source maps, signed remote protocol, canonical result contract, and conformance rules |
-| Knowledge | Manifest-gated retrieval with review state, backend/version filters, hashes, source metadata, and citations |
+| Knowledge | Manifest-gated retrieval over pinned official DEVSIM documentation and source plus source-grounded portable TCAD guides, with review state, backend/version filters, hashes, and citations |
 | Results | Interactive spatial fields, metrics, samples, validation checks, structure details, and evidence downloads |
 | Provenance | Source versions, hashes, compiler identity, simulator identity, validation records, and atomic bundle manifests |
 
@@ -112,6 +113,25 @@ The language model interprets intent and operates tools. It is not the authority
 | Studies | Equilibrium and DC sweep, up to 10 points | Equilibrium and DC sweep, up to 10 points |
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
+
+### Adaptive scientific research
+
+The repository agent follows a local-first evidence loop. It searches the packaged,
+versioned corpus before consulting the public web. If a claim still needs support, it
+can search for official documentation or primary literature after one network approval
+for the active run, fetch a bounded HTTPS text source, and retain the URL, title,
+retrieval time, authority class, backend, version, and SHA-256 content hash.
+
+Search snippets are discovery aids, not evidence. Retrieved pages are treated as
+untrusted data and cannot override product policy, request credentials, or issue tool
+instructions. Private network targets, non-HTTPS URLs, nonstandard ports, unsupported
+content types, oversized responses, and unsafe redirects are refused. Evidence guides
+the agent's compile, run, inspect, repair, and validate loop, but deterministic schema,
+capability, simulator, and validation checks remain authoritative.
+
+The model must ask for scientifically essential missing intent. It may choose bounded
+numerical implementation details, but it must not invent geometry, doping, materials,
+contact behavior, temperature, or sweep endpoints from typical values.
 
 ## Known limitations
 
@@ -146,6 +166,18 @@ The stable product boundary is the experiment and evidence workflow. DEVSIM and 
 | `agent` | OpenHands tools, repository policy, normalized events, and bounded delegation |
 | `ide` | Workspaces, temporary sessions, runs, approvals, messages, activity, and changes |
 | `desktop` | Electron-owned native window, authenticated private loopback backend, and packaged sidecars |
+
+The runtime always loads Agent Kronig's built-in scientific skills and packaged knowledge index, even when the researcher opens an empty repository. Repository-local skills may add laboratory conventions but cannot replace built-in product policy. The skills guide scientific decisions and route detailed questions into retrieval instead of trying to place an entire simulator manual in the model prompt.
+
+Every controlled TCAD bundle contains `report.md` as a compact evidence summary. It is an audit artifact, not an unsolicited research paper. A separate narrative report is produced only when requested or when durable comparative analysis is the stated deliverable.
+
+### Scientific results in the workspace
+
+Completed experiment bundles open in the center pane as a Results Workbench. Selecting a repository artifact whose path ends in `results/canonical.json` shows structure, canonical metrics, interactive one-dimensional fields, operating points, validation evidence, and manifest provenance. The underlying JSON remains available through the Evidence view.
+
+When a foreground agent run creates or modifies a canonical result, Agent Kronig finds it through that run's immutable Changes manifest and opens the workbench automatically. Ordinary JSON files continue to use the generic file viewer.
+
+The workbench reads only verified `ExperimentSpec`, `CanonicalResult`, `ValidationReport`, and `BundleManifest` artifacts. DEVSIM and Sentaurus therefore share the same interface after their adapters normalize native results. The current renderer supports one-dimensional canonical field series. Direct TDR or PLT extraction and future two-dimensional mesh data remain responsibilities of the Sentaurus exporter and canonical schema, not the UI.
 
 Every simulator adapter implements the same conceptual boundary:
 
@@ -188,6 +220,27 @@ git diff --check
 ```
 
 Live Bedrock and licensed Sentaurus tests are opt-in. Ordinary local verification does not require either service.
+
+The synthetic scientific suite exercises natural researcher prompts across two, three,
+and four-region structures, equilibrium and DC studies, local and web evidence,
+real DEVSIM execution, immutable provenance, deterministic validation, and graphable
+Results Workbench fields:
+
+```bash
+.venv/bin/pytest -q \
+  tests/unit/evaluations/test_scientific_cases.py \
+  tests/integration/test_scientific_research_workbench.py
+```
+
+Live Bedrock behavior tests are intentionally opt-in because they incur API cost:
+
+```bash
+set -a && source .env && set +a
+.venv/bin/pytest -q tests/e2e/test_live_scientific_prompts.py --run-live-bedrock
+.venv/bin/pytest -q \
+  tests/e2e/test_agentic_repl.py::test_live_bedrock_repository_agent_is_opt_in \
+  --run-live-bedrock
+```
 
 ## Project documents
 

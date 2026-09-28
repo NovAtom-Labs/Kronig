@@ -82,6 +82,8 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "run_experiment": "execute",
             "validate_result": "validate",
             "search_knowledge": "inspect",
+            "search_web": "inspect",
+            "fetch_source": "inspect",
             "build_report": "report",
         }
         metadata: dict[str, JsonValue] = {
@@ -89,6 +91,11 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
         }
         if action.operation in {"validate_spec", "validate_result"}:
             metadata["evidence_kind"] = "validation"
+        elif action.operation in {"search_knowledge", "search_web", "fetch_source"}:
+            metadata["evidence_kind"] = "research"
+            metadata["research_scope"] = (
+                "local" if action.operation == "search_knowledge" else "web"
+            )
         return metadata
     if isinstance(action, TerminalAction):
         try:

@@ -148,6 +148,19 @@ def test_native_build_fetches_the_exact_public_devsim_knowledge_revision() -> No
     assert "--depth 1" in fetch["run"]
 
 
+def test_native_build_fetches_pinned_official_devsim_documentation() -> None:
+    workflow = load_workflow()
+    steps = workflow["jobs"]["build"]["steps"]
+    names = [step.get("name") for step in steps]
+    fetch = steps[names.index("Fetch pinned DEVSIM documentation")]
+    build = names.index("Build reviewed knowledge index")
+
+    assert names.index("Fetch pinned DEVSIM documentation") < build
+    assert "https://github.com/devsim/devsim_documentation.git" in fetch["run"]
+    assert "8fbe81b5719307d654f37d630cf043dc6ae0512e" in fetch["run"]
+    assert "devsim/documentation" in fetch["run"]
+
+
 def test_native_build_configures_a_portable_devsim_runtime_before_tests() -> None:
     workflow = load_workflow()
     steps = workflow["jobs"]["build"]["steps"]

@@ -87,6 +87,7 @@ let activeRun = null;
 let eventSource = null;
 let sendingPrompt = false;
 let activeFile = null;
+let activeResult = null;
 let editingFile = null;
 let fileRequestGeneration = 0;
 let selectedRunId = null;
@@ -245,6 +246,7 @@ function renderWorkspace(workspace) {
 function closeFileViewer() {
   fileRequestGeneration += 1;
   activeFile = null;
+  activeResult = null;
   editingFile = null;
   setFileEditing(false);
   fileViewer.classList.add("hidden");
@@ -261,7 +263,8 @@ function fileCanBeEdited(preview) {
   const editableKinds = new Set(["text", "markdown", "json", "csv", "tsv"]);
   const protectedPath = /(^|\/)(\.env(?:\.[^/]+)?|\.git|\.git-credentials|\.ssh|\.aws|\.gnupg|\.netrc|\.npmrc|\.pypirc|\.dockerconfigjson|auth\.json|credentials|id_rsa|id_ed25519|secrets)(\/|$)/i;
   const protectedSuffix = /\.(key|pem)$/i;
-  return editableKinds.has(preview.kind)
+  return !activeResult
+    && editableKinds.has(preview.kind)
     && !preview.truncated
     && !protectedPath.test(preview.path)
     && !protectedSuffix.test(preview.path);
@@ -276,7 +279,11 @@ function setFileEditing(isEditing) {
   fileViewerRefresh.disabled = isEditing;
   fileViewerModes.hidden = isEditing || !activeFile
     || window.AgentKronigFileViewer.viewModes(activeFile.kind).length < 2;
-  if (activeFile) fileViewerState.textContent = isEditing ? "Editing" : "Read only";
+  if (activeFile) {
+    fileViewerState.textContent = isEditing
+      ? "Editing"
+      : activeResult ? "Verified result" : "Read only";
+  }
 }
 
 async function beginFileEdit() {
@@ -481,6 +488,8 @@ function renderFileContent(mode = "preview") {
   fileViewerSource.classList.toggle("is-active", mode === "source");
   if (mode === "source") {
     renderSource(activeFile.content);
+  } else if (activeResult) {
+    window.AgentKronigResults.render(fileViewerBody, activeResult);
   } else if (activeFile.kind === "markdown") {
     renderMarkdown(activeFile.content);
   } else if (activeFile.kind === "json") {
@@ -500,6 +509,7 @@ function renderFileContent(mode = "preview") {
 
 function showFile(preview) {
   activeFile = preview;
+  activeResult = null;
   editingFile = null;
   workspaceWelcome.classList.add("hidden");
   fileViewer.classList.remove("hidden");
@@ -513,6 +523,8 @@ function showFile(preview) {
   fileViewerDownload.hidden = false;
   fileViewerDownload.href = window.AgentKronigFileViewer.fileUrl(activeWorkspace.id, preview.path, true);
   fileViewerDownload.download = preview.name;
+  fileViewerPreview.textContent = "Preview";
+  fileViewerSource.textContent = "Source";
   const modes = window.AgentKronigFileViewer.viewModes(preview.kind);
   fileViewerModes.hidden = modes.length < 2;
   fileViewerPreview.hidden = !modes.includes("preview");
@@ -521,8 +533,38 @@ function showFile(preview) {
   renderFileContent(modes[0]);
 }
 
+function showCanonicalResult(preview, payload) {
+  activeFile = preview;
+  activeResult = payload;
+  editingFile = null;
+  workspaceWelcome.classList.add("hidden");
+  fileViewer.classList.remove("hidden");
+  fileViewerTitle.textContent = `Results · ${payload.manifest.run_id}`;
+  fileViewerPath.textContent = payload.bundle_path;
+  fileViewerType.textContent = "CanonicalResult";
+  fileViewerSize.textContent = window.AgentKronigFileViewer.formatBytes(preview.size);
+  fileViewerState.textContent = "Verified result";
+  fileViewerRefresh.hidden = false;
+  fileViewerEdit.hidden = true;
+  fileViewerDownload.hidden = false;
+  fileViewerDownload.href = window.AgentKronigFileViewer.fileUrl(
+    activeWorkspace.id,
+    preview.path,
+    true,
+  );
+  fileViewerDownload.download = preview.name;
+  fileViewerPreview.textContent = "Results";
+  fileViewerSource.textContent = "Evidence";
+  fileViewerModes.hidden = false;
+  fileViewerPreview.hidden = false;
+  fileViewerSource.hidden = false;
+  setFileEditing(false);
+  renderFileContent("preview");
+}
+
 function showDiff(change) {
   activeFile = null;
+  activeResult = null;
   editingFile = null;
   workspaceWelcome.classList.add("hidden");
   fileViewer.classList.remove("hidden");
@@ -547,6 +589,12 @@ function showDiff(change) {
   else fileViewerBody.append(emptyCopy("A line-by-line diff is not available for this change."));
 }
 
+async function openCanonicalResult(preview, workspaceId) {
+  return api(
+    `/api/workspaces/${workspaceId}/results?path=${encodeURIComponent(preview.path)}`,
+  );
+}
+
 async function openFile(entry) {
   const requestGeneration = ++fileRequestGeneration;
   const workspaceId = activeWorkspace.id;
@@ -557,7 +605,13 @@ async function openFile(entry) {
       `/api/workspaces/${workspaceId}/files/preview?path=${encodeURIComponent(entry.path)}`,
     );
     if (requestGeneration !== fileRequestGeneration || activeWorkspace?.id !== workspaceId) return;
-    showFile(preview);
+    if (window.AgentKronigResults.isCanonicalResultPath(preview.path)) {
+      const result = await openCanonicalResult(preview, workspaceId);
+      if (requestGeneration !== fileRequestGeneration || activeWorkspace?.id !== workspaceId) return;
+      showCanonicalResult(preview, result);
+    } else {
+      showFile(preview);
+    }
     document.querySelectorAll(".tree-entry.is-selected").forEach((button) => button.classList.remove("is-selected"));
     document.querySelector(`.tree-entry[data-path="${CSS.escape(entry.path)}"]`)?.classList.add("is-selected");
   } catch (error) {
@@ -1106,13 +1160,14 @@ async function refreshChanges(runId = selectedRunId) {
     changesState.textContent = "NO RUN";
     clearNode(agentChanges);
     agentChanges.append(emptyCopy("Run changes will appear after the agent starts working."));
-    return;
+    return null;
   }
   changesState.textContent = "CHECKING";
   try {
     const changeSet = await api(`/api/runs/${runId}/changes`);
     if (selectedRunId !== runId) return;
     renderChanges(changeSet);
+    return changeSet;
   } catch (_error) {
     if (selectedRunId !== runId) return;
     activeChangeSet = null;
@@ -1120,6 +1175,7 @@ async function refreshChanges(runId = selectedRunId) {
     changesState.textContent = "UNAVAILABLE";
     clearNode(agentChanges);
     agentChanges.append(emptyCopy("Changes are unavailable for this historical run."));
+    return null;
   }
 }
 
@@ -1398,7 +1454,15 @@ function connectEvents(sessionKey) {
     if (window.AgentKronigIDEState.shouldRefreshRepository(event.kind)) {
       void refreshCurrentRepository().catch((error) => showError(error.message));
     }
-    if (["run_completed", "run_failed", "run_blocked", "run_cancelled"].includes(event.kind)) {
+    if (event.kind === "run_completed") {
+      const completedRunId = eventRunId || selectedRunId;
+      void refreshChanges(completedRunId).then((changeSet) => {
+        if (selectedRunId !== completedRunId || editingFile) return;
+        const resultPath = window.AgentKronigResults.findCanonicalResultPath(changeSet);
+        if (resultPath) void openFile({path: resultPath});
+      });
+      void refreshCoordinator.request(sessionKey).catch((error) => showError(error.message));
+    } else if (["run_failed", "run_blocked", "run_cancelled"].includes(event.kind)) {
       void refreshChanges(selectedRunId);
       void refreshCoordinator.request(sessionKey).catch((error) => showError(error.message));
     }

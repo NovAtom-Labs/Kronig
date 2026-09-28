@@ -33,6 +33,11 @@ from tcad_agent.ide.models import (
     WorkspaceTextFile,
 )
 from tcad_agent.ide.repository import WorkspaceFileConflictError
+from tcad_agent.ide.results import (
+    WorkspaceResultError,
+    WorkspaceResultReader,
+    WorkspaceResultView,
+)
 from tcad_agent.ide.sessions import WorkspaceSessionBusyError, WorkspaceSessionService
 from tcad_agent.ide.store import IDEStoreError, MessageNotFoundError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
@@ -66,6 +71,7 @@ class IDEServices:
     conversations: ConversationService
     events: EventFeed
     changes: WorkspaceChangeTracker = field(default_factory=WorkspaceChangeTracker)
+    results: WorkspaceResultReader = field(default_factory=WorkspaceResultReader)
     store: SqliteIDEStore = field(init=False)
     runtime_root: Path = field(init=False)
     sessions: WorkspaceSessionService = field(init=False)
@@ -258,6 +264,20 @@ def build_ide_router(
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+    @router.get("/workspaces/{workspace_id}/results")
+    def workspace_results(
+        workspace_id: UUID, path: str
+    ) -> WorkspaceResultView:
+        workspace = services.workspaces.get(workspace_id)
+        try:
+            return services.results.read(workspace.root, path)
+        except WorkspaceResultError as exc:
+            raise AgentAPIError(
+                409,
+                "invalid_result_bundle",
+                "The result bundle is incomplete, malformed, or failed provenance checks.",
+            ) from exc
 
     @router.get("/workspaces/{workspace_id}/files/content")
     def workspace_file_content(

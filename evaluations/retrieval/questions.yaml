@@ -9,6 +9,16 @@ questions:
     backend: devsim
     version: "2.9.1"
     required_source_ids: [devsim-source-2.9.1]
+  - id: devsim-manual-solve-command
+    query: Which DEVSIM solve command arguments control nonlinear convergence and iteration limits?
+    backend: devsim
+    version: "2.9.0"
+    required_source_ids: [devsim-documentation-2.9.0]
+  - id: devsim-manual-contact-equation
+    query: Which DEVSIM contact_equation options connect potential and carrier equations at a contact?
+    backend: devsim
+    version: "2.9.0"
+    required_source_ids: [devsim-documentation-2.9.0]
   - id: portable-no-device-taxonomy
     query: Why must experiments avoid named device execution modes?
     backend: portable
@@ -21,6 +31,16 @@ questions:
     required_source_ids: [novatom-curated-tcad-foundation-0.1]
   - id: portable-recovery-boundary
     query: Which solver recovery changes preserve scientific intent?
+    backend: portable
+    version: "0.1"
+    required_source_ids: [novatom-curated-tcad-foundation-0.1]
+  - id: portable-fermi-bgn-consistency
+    query: Why must Fermi statistics and band-gap narrowing use consistent carrier and intrinsic-density definitions?
+    backend: portable
+    version: "0.1"
+    required_source_ids: [novatom-curated-tcad-foundation-0.1]
+  - id: portable-mesh-convergence
+    query: How should peak electric field mesh convergence be evaluated?
     backend: portable
     version: "0.1"
     required_source_ids: [novatom-curated-tcad-foundation-0.1]

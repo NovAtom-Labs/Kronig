@@ -49,6 +49,22 @@ assertEqual(snapshot.steps[0].evidenceKind, "validation", "structured evidence t
 assertEqual(snapshot.lastEventId, 12, "duplicate replay is ignored");
 assertEqual(snapshot.technicalEvents.length, 0, "conversation lifecycle noise is excluded from run state");
 
+const researchView = globalThis.AgentKronigIDEEvents.createRunPresentation();
+researchView.accept(event(125, "tool_call_started", {
+  run_id: "run-1",
+  action_id: "research-1",
+  tool_call_id: "call-research-1",
+  tool_name: "tcad_domain",
+  summary: "tcad_domain: search_web",
+  phase: "inspect",
+  evidence_kind: "research",
+  research_scope: "web",
+  arguments: {operation: "search_web"},
+}));
+const researchSnapshot = researchView.snapshot();
+assertEqual(researchSnapshot.steps.at(-1).evidenceKind, "research", "research evidence remains distinct from validation");
+assertEqual(researchSnapshot.steps.at(-1).researchScope, "web", "web research scope survives event reduction");
+
 view.accept(toolStarted(13, "action-2", "task", "Delegate validation", "science-checker"));
 snapshot = view.snapshot();
 assertEqual(snapshot.steps[1].subagent, "science-checker", "subagent ownership is retained");

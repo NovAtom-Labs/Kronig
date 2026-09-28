@@ -81,6 +81,23 @@ assertEqual(progress[3].label, "Running validation", "active validation has a pl
 assertEqual(progress[3].detail, "pytest -q", "technical evidence stays inspectable");
 assertEqual(JSON.stringify(progress).includes("internal planning"), false, "private reasoning labels never leak into progress");
 
+const webResearch = agent.operationalUpdates({
+  runState: "running",
+  steps: [{
+    id: "research-1",
+    toolName: "tcad_domain",
+    summary: "tcad_domain: search_web",
+    status: "running",
+    phase: "inspect",
+    evidenceKind: "research",
+    researchScope: "web",
+    arguments: {operation: "search_web"},
+  }],
+  pendingApprovals: [],
+});
+assertEqual(webResearch.at(-1).label, "Searching scientific sources", "web research has a clear scientific activity label");
+assertEqual(webResearch.at(-1).detail, null, "web research does not expose technical tool syntax in chat");
+
 const researchTrail = agent.researchTrail({
   runState: "running",
   steps: Array.from({length: 8}, (_, index) => ({

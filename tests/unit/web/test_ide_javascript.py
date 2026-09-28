@@ -63,6 +63,25 @@ def test_file_viewer_helpers_preserve_scientific_data_and_safe_markdown() -> Non
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
+def test_results_workbench_recognizes_and_summarizes_canonical_results() -> None:
+    project_root = Path(__file__).parents[3]
+    source = (
+        project_root / "src/tcad_agent/web/static/results-workbench.js"
+    ).read_text()
+    assertions = (
+        project_root / "tests/js/results_workbench.test.js"
+    ).read_text()
+    completed = subprocess.run(
+        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_agent_events_reduce_restored_and_live_activity_deterministically() -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-events.js").read_text()
@@ -205,6 +224,11 @@ def test_production_ide_wires_chat_recovery_file_editing_and_panel_controls() ->
         "Affected file:",
         "row.validationActionIds.forEach",
         "unlinkedValidationChecks",
+        "AgentKronigResults.isCanonicalResultPath",
+        "AgentKronigResults.findCanonicalResultPath",
+        "AgentKronigResults.render",
+        "/results?path=",
+        "openCanonicalResult",
         'target.querySelector("summary")?.focus()',
     ):
         assert required in source or required in permission_source
@@ -238,6 +262,9 @@ def test_responsive_styles_keep_agent_panel_available_as_a_drawer() -> None:
     assert "border-left-color: var(--blue)" not in source
     assert "border-left-color: #6b8f83" not in source
     assert ".research-trail-current-marker" in source
+    assert ".results-workbench" in source
+    assert ".result-chart" in source
+    assert ".result-validation" in source
     assert "height: 100%" in source
     assert re.search(
         r"\.agent-chat\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column",

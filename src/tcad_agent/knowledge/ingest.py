@@ -26,6 +26,7 @@ class KnowledgeIngestor:
                 trust=source.trust,
                 backend=source.backend,
                 version=source.version,
+                compatible_versions=source.compatible_versions,
                 reviewed=source.reviewed,
                 content=chunk,
             )
@@ -66,6 +67,7 @@ class KnowledgeIngestor:
                         trust=source.trust,
                         backend=source.backend,
                         version=source.version,
+                        compatible_versions=source.compatible_versions,
                         reviewed=source.reviewed,
                         content=chunk,
                     )
@@ -76,8 +78,34 @@ class KnowledgeIngestor:
 
     @staticmethod
     def _chunks(text: str) -> tuple[str, ...]:
-        sections = re.split(r"(?m)(?=^#{1,6}\s)|\n\s*\n", text)
-        chunks = tuple(section.strip() for section in sections if section.strip())
+        heading_pattern = re.compile(r"(?m)^#{1,6}[ \t]+[^\n]+$")
+        headings = tuple(heading_pattern.finditer(text))
+        if not headings:
+            sections = re.split(r"\n[ \t]*\n", text)
+            chunks = tuple(section.strip() for section in sections if section.strip())
+        else:
+            collected: list[str] = []
+            preamble = text[: headings[0].start()].strip()
+            if preamble:
+                collected.extend(
+                    part.strip()
+                    for part in re.split(r"\n[ \t]*\n", preamble)
+                    if part.strip()
+                )
+            for index, match in enumerate(headings):
+                end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+                heading = match.group(0).strip()
+                body = text[match.end() : end].strip()
+                paragraphs = tuple(
+                    part.strip()
+                    for part in re.split(r"\n[ \t]*\n", body)
+                    if part.strip()
+                )
+                if not paragraphs:
+                    collected.append(heading)
+                    continue
+                collected.extend(f"{heading}\n\n{paragraph}" for paragraph in paragraphs)
+            chunks = tuple(collected)
         if not chunks:
             raise ValueError("source contains no indexable text")
         return chunks

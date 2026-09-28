@@ -81,6 +81,26 @@ def _task_plan_action() -> ActionEvent:
     )
 
 
+def _domain_action(operation: str, *, risk: SecurityRisk) -> ActionEvent:
+    return ActionEvent(
+        thought=[],
+        action=TcadDomainAction(
+            operation=operation,
+            payload={"query": "DEVSIM contact equation"},
+        ),
+        tool_name="tcad_domain",
+        tool_call_id=f"call-{operation}",
+        tool_call=MessageToolCall(
+            id=f"call-{operation}",
+            name="tcad_domain",
+            arguments="{}",
+            origin="completion",
+        ),
+        llm_response_id="response-domain",
+        security_risk=risk,
+    )
+
+
 def test_event_bridge_persists_normalized_tool_and_assistant_events(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -162,6 +182,53 @@ def test_event_bridge_skips_approval_for_a_granted_run_category(
     ]
     assert len(grant_events) == 1
     assert grant_events[0].payload["permission_category"] == "git_mutation"
+
+
+def test_scientific_web_research_is_visible_and_reuses_run_network_grant(
+    tmp_path: Path,
+) -> None:
+    store, events, conversations, conversation, run = _services(tmp_path)
+    first_bridge = AgentEventBridge(
+        conversation.id,
+        run.id,
+        store,
+        events,
+        conversations,
+        workspace=tmp_path,
+    )
+
+    first_bridge(_domain_action("search_web", risk=SecurityRisk.HIGH))
+
+    (approval,) = store.list_pending_approvals(conversation.id)
+    assert approval.permission_category.value == "network_access"
+    started = next(
+        event
+        for event in events.list_after(conversation.id, 0)
+        if event.kind == "tool_call_started"
+    )
+    assert started.payload["phase"] == "inspect"
+    assert started.payload["evidence_kind"] == "research"
+    assert started.payload["research_scope"] == "web"
+
+    store.resolve_approval_with_grant(approval.id, approval.revision)
+    granted_bridge = AgentEventBridge(
+        conversation.id,
+        run.id,
+        store,
+        events,
+        conversations,
+        workspace=tmp_path,
+        permission_grants={"network_access"},
+    )
+    granted_bridge(_domain_action("fetch_source", risk=SecurityRisk.HIGH))
+
+    assert store.list_pending_approvals(conversation.id) == ()
+    grant_events = [
+        event
+        for event in events.list_after(conversation.id, 0)
+        if event.kind == "permission_grant_used"
+    ]
+    assert grant_events[-1].payload["permission_category"] == "network_access"
 
 
 def test_on_stream_never_persists_private_model_reasoning(

@@ -53,7 +53,7 @@ def test_curated_corpus_passes_retrieval_evaluations(tmp_path: Path) -> None:
         assert required <= returned, question["id"]
         evaluated += 1
 
-    assert evaluated >= 3
+    assert evaluated >= 7
 
 
 def test_sentaurus_retrieval_stays_closed_without_licensed_corpus() -> None:

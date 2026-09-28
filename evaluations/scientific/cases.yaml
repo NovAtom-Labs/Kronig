@@ -1,0 +1,71 @@
+schema_version: "1.0"
+purpose: Exercise natural researcher prompts, evidence retrieval, generic TCAD composition, deterministic validation, provenance, and the Results Workbench
+cases:
+  - id: two-region-equilibrium
+    title: Asymmetric silicon equilibrium study
+    prompt_file: prompts/two-region-equilibrium.md
+    spec_file: ../../examples/al-pn-al-equilibrium-devsim.yaml
+    backend: devsim
+    study_kind: equilibrium
+    region_count: 2
+    web_research_required: false
+    required_local_source_ids:
+      - devsim-source-2.9.1
+      - novatom-curated-tcad-foundation-0.1
+    expected_fields:
+      - potential
+      - electric_field
+      - electron_density
+      - hole_density
+    required_validation_checks:
+      - all-points-converged
+      - terminal-current-conservation
+      - equilibrium-terminal-current
+      - requested-observables-present
+    minimum_graphable_fields: 4
+
+  - id: three-region-dc
+    title: Lightly doped interior voltage study
+    prompt_file: prompts/three-region-dc.md
+    spec_file: ../../examples/pin-diode.yaml
+    backend: devsim
+    study_kind: dc
+    region_count: 3
+    web_research_required: true
+    web_query: Current DEVSIM nonlinear solve command options and convergence controls
+    preferred_domains: [devsim.org, devsim.net]
+    required_local_source_ids:
+      - devsim-documentation-2.9.0
+    expected_fields:
+      - potential
+      - electric_field
+      - electron_density
+      - hole_density
+    required_validation_checks:
+      - expected-point-count
+      - all-points-converged
+      - terminal-current-conservation
+      - requested-observables-present
+    minimum_graphable_fields: 4
+
+  - id: four-region-equilibrium
+    title: Graded-contact silicon stack at equilibrium
+    prompt_file: prompts/four-region-equilibrium.md
+    spec_file: ../../examples/multiregion-equilibrium.yaml
+    backend: devsim
+    study_kind: equilibrium
+    region_count: 4
+    web_research_required: false
+    required_local_source_ids:
+      - novatom-curated-tcad-foundation-0.1
+    expected_fields:
+      - potential
+      - electric_field
+      - electron_density
+      - hole_density
+    required_validation_checks:
+      - all-points-converged
+      - terminal-current-conservation
+      - equilibrium-terminal-current
+      - requested-observables-present
+    minimum_graphable_fields: 4

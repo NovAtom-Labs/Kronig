@@ -3,8 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 from openhands.sdk import TextContent
+from pydantic import ValidationError
 
-from tcad_agent.control.models import ResearchRequest
+from tcad_agent.control.models import ClarificationQuestion, ResearchRequest
 from tcad_agent.model_gateway.base import AgentContextPacket, AgentProposal, ScriptedModelGateway
 from tcad_agent.model_gateway.openhands import (
     ModelConfigurationError,
@@ -31,13 +32,26 @@ class FakeLLM:
 
 
 def test_scripted_gateway_returns_typed_proposals_in_order() -> None:
-    first = AgentProposal(kind="clarification", questions=())
+    first = AgentProposal(
+        kind="clarification",
+        questions=(
+            ClarificationQuestion(
+                field="profiles.region.value",
+                prompt="What concentration should this region use?",
+            ),
+        ),
+    )
     second = AgentProposal(kind="refusal", message="unsupported")
     gateway = ScriptedModelGateway((first, second))
     request = ResearchRequest(prompt="simulate")
     context = AgentContextPacket()
     assert gateway.propose(request, context) == first
     assert gateway.propose(request, context) == second
+
+
+def test_clarification_proposal_requires_an_actionable_question() -> None:
+    with pytest.raises(ValidationError, match="clarification proposal requires"):
+        AgentProposal(kind="clarification", questions=())
 
 
 def test_openhands_gateway_parses_structured_proposal() -> None:
@@ -79,6 +93,9 @@ def test_openhands_gateway_sends_exact_experiment_schema() -> None:
     }
     assert schema["additionalProperties"] is False
     assert schema["$defs"]["QuantityValue"]["type"] == "string"
+    system_prompt = llm.messages[0][0].content[0].text
+    assert "Never invent scientifically meaningful inputs" in system_prompt
+    assert "return kind clarification" in system_prompt
 
 
 def test_openhands_gateway_repairs_schema_invalid_spec_once() -> None:

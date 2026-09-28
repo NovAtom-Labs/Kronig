@@ -99,6 +99,16 @@ jobs:
           git -C devsim/source checkout --detach FETCH_HEAD
           test "$(git -C devsim/source rev-parse HEAD)" = "43b41ca845184c47e22b72d144db7e7db8509377"
 
+      - name: Fetch pinned DEVSIM documentation
+        shell: bash
+        run: |
+          mkdir -p devsim/documentation
+          git -C devsim/documentation init
+          git -C devsim/documentation remote add origin https://github.com/devsim/devsim_documentation.git
+          git -C devsim/documentation fetch --depth 1 origin 8fbe81b5719307d654f37d630cf043dc6ae0512e
+          git -C devsim/documentation checkout --detach FETCH_HEAD
+          test "$(git -C devsim/documentation rev-parse HEAD)" = "8fbe81b5719307d654f37d630cf043dc6ae0512e"
+
       - name: Build reviewed knowledge index
         run: tcad-agent knowledge build --manifest knowledge-sources/manifests/sources.yaml --root . --index knowledge-sources/index/knowledge.sqlite3
 

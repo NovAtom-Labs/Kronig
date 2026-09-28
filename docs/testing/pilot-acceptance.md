@@ -23,6 +23,32 @@ OPENHANDS_SUPPRESS_BANNER=1 .venv/bin/pytest \
 
 Authentication failures must remain generic and must never print the credential.
 
+Run the scientific synthetic suite with:
+
+```bash
+.venv/bin/pytest -q \
+  tests/unit/evaluations/test_scientific_cases.py \
+  tests/integration/test_scientific_research_workbench.py
+```
+
+This suite executes real DEVSIM cases spanning equilibrium and DC studies, two through
+four generic regions, local and public evidence contracts, canonical fields, validation,
+provenance, and the Results Workbench reader.
+
+The live scientific prompt and full repository-agent evaluations incur Bedrock cost and
+must be requested explicitly:
+
+```bash
+set -a && source .env && set +a
+.venv/bin/pytest -q tests/e2e/test_live_scientific_prompts.py --run-live-bedrock
+.venv/bin/pytest -q \
+  tests/e2e/test_agentic_repl.py::test_live_bedrock_repository_agent_is_opt_in \
+  --run-live-bedrock
+```
+
+The full agent evaluation resolves surfaced approvals through the product API, then
+requires the repaired repository to pass its deterministic 100-point scientific grader.
+
 ## Manual local acceptance
 
 1. Start Agent Kronig from the operating-system application launcher.

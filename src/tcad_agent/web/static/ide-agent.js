@@ -46,6 +46,7 @@
       taskStatus: step.taskStatus || null,
       phase: phaseForStep(step),
       evidenceKind: step.evidenceKind || null,
+      researchScope: step.researchScope || null,
       affectedPaths: step.affectedPaths || [],
       artifactPaths: step.artifactPaths || [],
       provenance: step.provenance || null,
@@ -86,6 +87,15 @@
       } else if (step.toolName === "task_tracker" && tasks.length) {
         label = "Plan updated";
         detail = tasks.map((task) => task.title).filter(Boolean).join(" · ") || null;
+      } else if (step.evidenceKind === "research") {
+        if (step.researchScope === "web") {
+          label = step.arguments?.operation === "fetch_source"
+            ? "Reading a scientific source"
+            : "Searching scientific sources";
+        } else {
+          label = "Searching local TCAD references";
+        }
+        detail = null;
       }
       updates.push({
         id: step.id,

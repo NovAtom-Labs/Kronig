@@ -64,6 +64,7 @@ class KnowledgeIndex:
                     trust TEXT NOT NULL,
                     backend TEXT NOT NULL,
                     version TEXT NOT NULL,
+                    compatible_versions TEXT NOT NULL,
                     reviewed INTEGER NOT NULL,
                     content TEXT NOT NULL,
                     content_hash TEXT NOT NULL,
@@ -78,7 +79,7 @@ class KnowledgeIndex:
             )
             for passage, embedding in zip(passages, embeddings, strict=True):
                 connection.execute(
-                    """INSERT INTO passages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT INTO passages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         passage.id,
                         passage.source_id,
@@ -89,6 +90,7 @@ class KnowledgeIndex:
                         passage.trust,
                         passage.backend,
                         passage.version,
+                        json.dumps(passage.compatible_versions),
                         int(passage.reviewed),
                         passage.content,
                         passage.content_hash,
@@ -112,10 +114,17 @@ class KnowledgeIndex:
         active_filters = filters or {}
         clauses: list[str] = []
         parameters: list[str] = []
-        for field in ("backend", "version", "access"):
+        for field in ("backend", "access"):
             if field in active_filters:
                 clauses.append(f"p.{field} = ?")
                 parameters.append(active_filters[field])
+        if "version" in active_filters:
+            clauses.append(
+                "(p.version = ? OR EXISTS ("
+                "SELECT 1 FROM json_each(p.compatible_versions) "
+                "WHERE json_each.value = ?))"
+            )
+            parameters.extend((active_filters["version"], active_filters["version"]))
         where = " AND " + " AND ".join(clauses) if clauses else ""
         fts_query = " OR ".join(f'"{token}"' for token in tokens)
         with sqlite3.connect(self.path) as connection:
@@ -169,7 +178,29 @@ class KnowledgeIndex:
                     ),
                 )
             )
-        return tuple(sorted(hits, key=lambda hit: (-hit.score, hit.id))[:limit])
+        ranked = sorted(hits, key=lambda hit: (-hit.score, hit.id))
+        if limit == 1:
+            return tuple(ranked[:1])
+
+        selected: list[SearchHit] = []
+        selected_ids: set[str] = set()
+        selected_sources: set[str] = set()
+        for hit in ranked:
+            source_id = hit.citation.source_id
+            if source_id in selected_sources:
+                continue
+            selected.append(hit)
+            selected_ids.add(hit.id)
+            selected_sources.add(source_id)
+            if len(selected) == limit:
+                return tuple(selected)
+        for hit in ranked:
+            if hit.id in selected_ids:
+                continue
+            selected.append(hit)
+            if len(selected) == limit:
+                break
+        return tuple(selected)
 
     @staticmethod
     def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
@@ -181,4 +212,3 @@ class KnowledgeIndex:
         if denominator == 0:
             return 0.0
         return sum(a * b for a, b in zip(left, right, strict=True)) / denominator
-

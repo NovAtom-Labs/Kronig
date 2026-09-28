@@ -17,7 +17,7 @@ from tcad_agent.agent.runtime import OpenHandsRuntimeFactory
 from tcad_agent.agent.supervisor import AgentSupervisor
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
-from tcad_agent.ide.models import RunState
+from tcad_agent.ide.models import PermissionCategory, RunState, is_run_grantable
 from tcad_agent.ide.store import SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.web.app import create_app
@@ -301,9 +301,37 @@ def test_live_bedrock_repository_agent_is_opt_in(
     )
     web = TestClient(create_app(ide=services, agent_supervisor=supervisor))
 
-    _workspace, _conversation, started = _start_through_http(web, repository)
+    workspace, _conversation, started = _start_through_http(web, repository)
     run_id = UUID(str(started["id"]))
-    supervisor.join(run_id, timeout=300)
+
+    terminal_states = {
+        RunState.COMPLETED,
+        RunState.FAILED,
+        RunState.BLOCKED,
+        RunState.CANCELLED,
+    }
+    for _ in range(20):
+        supervisor.join(run_id, timeout=300)
+        state = services.store.get_run(run_id).state
+        if state in terminal_states:
+            break
+        assert state is RunState.WAITING_FOR_APPROVAL
+        approvals = web.get(
+            f"/api/workspaces/{workspace['id']}/session/approvals"
+        ).json()
+        assert approvals, "waiting run must expose its pending approval"
+        approval = approvals[0]
+        category = PermissionCategory(approval["permission_category"])
+        endpoint = (
+            "approve-category" if is_run_grantable(category) else "approve"
+        )
+        resolved = web.post(
+            f"/api/approvals/{approval['id']}/{endpoint}",
+            json={"expected_revision": approval["revision"]},
+        )
+        assert resolved.status_code == 200, resolved.text
+    else:
+        pytest.fail("live repository agent exceeded the approval/run bound")
 
     assert services.store.get_run(run_id).state is RunState.COMPLETED
     grade = subprocess.run(

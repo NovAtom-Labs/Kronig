@@ -26,7 +26,7 @@ profiles:
   - kind: constant
     region: p_plus
     species: acceptor
-    value: 1e18 cm^-3
+    value: 5e16 cm^-3
   - kind: constant
     region: p_region
     species: acceptor
@@ -38,7 +38,7 @@ profiles:
   - kind: constant
     region: n_plus
     species: donor
-    value: 1e18 cm^-3
+    value: 5e16 cm^-3
 contacts:
   - id: anode
     location: x_min
@@ -55,4 +55,3 @@ study:
 observables: [terminal_current, potential, electric_field, electron_density, hole_density]
 metadata:
   purpose: four-region composition example using the generic DEVSIM path
-

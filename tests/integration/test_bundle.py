@@ -105,6 +105,8 @@ def test_bundle_manifest_hashes_every_artifact_and_report_uses_structured_values
         assert hashlib.sha256(data).hexdigest() == item["sha256"]
     EventLedger(bundle.root / "events.jsonl").verify()
     report = (bundle.root / "report.md").read_text()
+    assert "TCAD Evidence Summary" in report
+    assert "Research report" not in report
     assert "1.000000e+00 A/m^2" in report
     assert "Evidence origin" in report
     assert "potential" in (bundle.root / "results" / "fields.csv").read_text()

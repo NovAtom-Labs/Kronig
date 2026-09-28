@@ -68,6 +68,7 @@
           taskStatus: null,
           phase: payload.phase || "unknown",
           evidenceKind: payload.evidence_kind || null,
+          researchScope: payload.research_scope || null,
           affectedPaths: payload.affected_paths || [],
           artifactPaths: payload.artifact_paths || [],
           provenance: payload.provenance || null,
@@ -102,6 +103,7 @@
           taskStatus: null,
           phase: payload.phase || "unknown",
           evidenceKind: payload.evidence_kind || null,
+          researchScope: payload.research_scope || null,
           affectedPaths: payload.affected_paths || [],
           artifactPaths: payload.artifact_paths || [],
           provenance: payload.provenance || null,
@@ -118,6 +120,7 @@
       step.affectedPaths = payload.affected_paths || step.affectedPaths;
       step.artifactPaths = payload.artifact_paths || step.artifactPaths;
       step.provenance = payload.provenance || step.provenance;
+      step.researchScope = payload.research_scope || step.researchScope;
       state.currentOperation = step.isError ? `${step.summary} failed` : step.summary;
     }
 

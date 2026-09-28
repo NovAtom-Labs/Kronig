@@ -136,7 +136,10 @@ def test_clarification_answers_and_retrieved_knowledge_reach_model_context(
     assert isinstance(manifest, dict)
     assert manifest["backend"] == "devsim"
     assert "potential" in manifest["observables"]
-    assert any("Building Experiment Specifications" in item for item in gateway.context.procedures)
+    assert any(
+        "Building Simulator-Neutral Experiments" in item
+        for item in gateway.context.procedures
+    )
 
 
 def test_execution_transport_failure_becomes_terminal_request_failure(

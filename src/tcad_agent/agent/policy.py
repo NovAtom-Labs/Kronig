@@ -243,7 +243,11 @@ def classify_action(workspace: Path, event: ActionEvent) -> SecurityRisk:
         return _terminal_risk(workspace, action)
     if isinstance(action, TaskTrackerAction):
         return SecurityRisk.LOW
-    if isinstance(action, (ThinkAction, FinishAction, TcadDomainAction)):
+    if isinstance(action, TcadDomainAction):
+        if action.operation in {"search_web", "fetch_source"}:
+            return SecurityRisk.HIGH
+        return SecurityRisk.LOW
+    if isinstance(action, (ThinkAction, FinishAction)):
         return SecurityRisk.LOW
     if isinstance(action, TaskAction):
         return SecurityRisk.MEDIUM
@@ -277,6 +281,11 @@ def permission_category(workspace: Path, event: ActionEvent) -> PermissionCatego
             return PermissionCategory.EXTERNAL_FILE_ACCESS
     if isinstance(action, TerminalAction):
         return _terminal_permission_category(workspace, action)
+    if isinstance(action, TcadDomainAction) and action.operation in {
+        "search_web",
+        "fetch_source",
+    }:
+        return PermissionCategory.NETWORK_ACCESS
     return PermissionCategory.UNRECOGNIZED_ACTION
 
 

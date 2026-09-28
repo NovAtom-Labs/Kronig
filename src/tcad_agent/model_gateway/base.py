@@ -33,7 +33,7 @@ class AgentProposal(StrictModel):
     @model_validator(mode="after")
     def require_kind_payload(self) -> "AgentProposal":
         if self.kind == "clarification" and not self.questions:
-            return self
+            raise ValueError("clarification proposal requires at least one question")
         if self.kind == "spec" and self.spec is None:
             raise ValueError("spec proposal requires a specification")
         if self.kind == "refusal" and not self.message:
