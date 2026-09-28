@@ -59,9 +59,11 @@ crashes, the next launch removes the stale runtime root before opening a workspa
 protected credentials, update configuration, repository files, and generated repository artifacts
 remain outside this lifecycle and persist normally.
 
-The authenticated root route serves only the Electron-owned renderer. The underlying typed request
-and simulator APIs remain available to the agent, CLI, and approved integrations. They are not a
-public application service.
+The authenticated root route serves only the Electron-owned renderer. The repository agent is the
+single product execution path. Its typed `tcad_domain` boundary prepares a deterministic
+`PreparedExperiment`, requires approval of the exact plan digest, and then invokes the shared
+`ExperimentEngine`. There is no parallel prompt-to-request service or supported public simulation
+API. The internal CLI is only a compatibility and test wrapper over the same engine.
 
 The IDE exposes repository-confined OpenHands file operations, search, bounded terminal execution,
 typed TCAD tools, and delegated subagents. Eligible UTF-8 text files can also be edited directly in
@@ -81,6 +83,15 @@ This gives researchers composability without a script per device. The existing P
 ### CapabilityManifest
 
 Each backend publishes dimensions, equations, models, materials, profiles, contacts, studies, observables, and resource limits. Capability decisions return `supported`, `needs_input`, `backend_unsupported`, or `platform_unsupported`, with exact issue paths. `execution_state` is separate from scientific capability so an unavailable license is never misreported as unsupported physics.
+
+### PreparedExperiment and ExperimentEngine
+
+`ExperimentEngine.prepare` validates `ExperimentSpec` against the selected capability manifest and
+returns a stable plan, capability digest, and plan digest without compiling or executing simulator
+syntax. `ExperimentEngine.execute` accepts only that prepared record and its exact approved digest.
+It owns deterministic compilation, bounded execution, canonical normalization, mandatory
+validation, event provenance, and atomic bundle writing. Output paths are selected by the product
+below the opened repository and cannot be supplied by model-generated input.
 
 ### Adapter
 

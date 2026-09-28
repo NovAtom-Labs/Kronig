@@ -4,23 +4,20 @@ import httpx
 import pytest
 import yaml
 
-from tcad_agent.control.models import RequestState
-from tcad_agent.control.service import ControlService
-from tcad_agent.control.store import SqliteRequestStore
+from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.evaluations.scientific_cases import (
     ScientificEvaluationSuite,
     score_scientific_case,
 )
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.ide.results import WorkspaceResultReader
 from tcad_agent.knowledge.models import WebEvidenceRecord
 from tcad_agent.knowledge.retrieve import KnowledgeIndex
 from tcad_agent.knowledge.web import ScientificWebResearch
-from tcad_agent.model_gateway.base import AgentProposal, ScriptedModelGateway
+from tcad_agent.runners.models import RunBudget
 
 ROOT = Path(__file__).parents[2]
-SUITE = ScientificEvaluationSuite.from_file(
-    ROOT / "evaluations" / "scientific" / "cases.yaml"
-)
+SUITE = ScientificEvaluationSuite.from_file(ROOT / "evaluations" / "scientific" / "cases.yaml")
 KNOWLEDGE_INDEX = ROOT / "knowledge-sources" / "index" / "knowledge.sqlite3"
 
 
@@ -84,25 +81,17 @@ def test_researcher_prompt_reaches_verified_interactive_result_contract(
     case = SUITE.require_case(case_id)
     prompt = SUITE.read_prompt(case_id)
     spec_payload = yaml.safe_load(SUITE.spec_path(case_id).read_text())
-    workspace = tmp_path / "workspace"
-    control = ControlService(
-        store=SqliteRequestStore(tmp_path / "requests.sqlite3"),
-        gateway=ScriptedModelGateway(
-            (AgentProposal(kind="spec", spec=spec_payload),)
-        ),
-        workspace=workspace,
-        knowledge_index=KNOWLEDGE_INDEX,
-        skills_root=ROOT / "skills",
+    engine = ExperimentEngine()
+    prepared = engine.prepare(ExperimentSpec.model_validate(spec_payload), case.backend)
+    completed = engine.execute(
+        prepared,
+        approved_plan_digest=prepared.plan_digest,
+        output_root=tmp_path / "runs",
+        budget=RunBudget(seconds=120),
     )
 
-    submitted = control.submit(prompt, backend=case.backend)
-    assert submitted.state is RequestState.USER_CONFIRMATION_REQUIRED
-    approved = control.approve(submitted.id, submitted.plan_digest or "")
-    completed = control.execute(approved.id)
-
-    assert completed.state is RequestState.COMPLETED
-    assert completed.bundle_path
-    bundle = Path(completed.bundle_path)
+    assert completed.state == "completed"
+    bundle = completed.root
     view = WorkspaceResultReader().read(
         bundle.parent,
         f"{bundle.name}/results/canonical.json",

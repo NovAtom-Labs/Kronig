@@ -11,9 +11,13 @@ DEVSIM has its own virtual environment so product dependencies and simulator dep
 
 If the simulator is not in the sibling `devsim` directory, set `TCAD_DEVSIM_PYTHON` to its absolute Python executable path. See [Installation and setup](../../INSTALLATION.md) for the Linux installation procedure.
 
-## Validate, compile, and run
+## Internal validation wrapper
 
 DEVSIM remains the complete local test backend while Sentaurus is being connected. Every ordinary code change must keep the DEVSIM end-to-end tests green.
+
+Researchers normally run DEVSIM through the native workspace agent. The commands below are an
+internal compatibility and diagnostic surface. The `run` command delegates to the same
+`ExperimentEngine` as the desktop agent and does not implement a second workflow.
 
 ```bash
 .venv/bin/tcad-agent validate examples/pn-junction.yaml

@@ -248,7 +248,7 @@ def test_responsive_styles_keep_agent_panel_available_as_a_drawer() -> None:
     source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
 
     assert source.count("{") == source.count("}")
-    assert ".toggle-agent-panel" in source
+    assert ".edge-reveal-right" in source
     assert ".agent-panel.is-open" in source
     assert "position: fixed" in source
     assert ".file-editor" in source
@@ -302,3 +302,120 @@ def test_company_lockup_stays_at_far_right_without_header_divider() -> None:
     assert "border-right" not in brand.group(1)
     assert header_actions is not None
     assert "grid-column: 3" in header_actions.group(1)
+
+
+def test_desktop_shell_keeps_the_center_canvas_dominant() -> None:
+    project_root = Path(__file__).parents[3]
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+
+    shell = re.search(r"(?m)^\.ide-shell\s*\{([^}]*)\}", source, re.DOTALL)
+    header = re.search(r"(?m)^\.ide-header\s*\{([^}]*)\}", source, re.DOTALL)
+    workspace_main = re.search(
+        r"(?m)^\.workspace-main\s*\{([^}]*)\}", source, re.DOTALL
+    )
+    resizer_marker = re.search(
+        r"(?m)^\.pane-resizer::after\s*\{([^}]*)\}", source, re.DOTALL
+    )
+
+    assert shell is not None
+    assert "--pane-gap: 6px" in shell.group(1)
+    assert "--pane-radius: 11px" in shell.group(1)
+    assert "grid-template-rows: 42px minmax(0, 1fr)" in shell.group(1)
+    assert header is not None
+    assert "border:" not in header.group(1)
+    assert "border-radius" not in header.group(1)
+    assert "grid-template-columns: auto minmax(0, 1fr) auto" in header.group(1)
+    assert workspace_main is not None
+    assert "margin: 4px 3px 6px" in workspace_main.group(1)
+    assert "border:" not in workspace_main.group(1)
+    assert "border-left" not in workspace_main.group(1)
+    assert "border-right" not in workspace_main.group(1)
+    assert "border-radius" not in workspace_main.group(1)
+    assert resizer_marker is not None
+    assert "top: 22%" in resizer_marker.group(1)
+    assert "bottom: 22%" in resizer_marker.group(1)
+    assert "border-radius: 999px" in resizer_marker.group(1)
+    assert ".ide-shell.is-explorer-collapsed" in source
+    assert ".ide-shell.is-agent-collapsed" in source
+    assert ".ide-shell.is-explorer-collapsed .explorer-resizer" in source
+    assert ".ide-shell.is-agent-collapsed .agent-resizer" in source
+
+
+def test_internal_workbench_hierarchy_is_minimal_and_sidebars_are_secondary() -> None:
+    project_root = Path(__file__).parents[3]
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+
+    def rule(selector: str) -> str:
+        match = re.search(
+            rf"(?m)^{re.escape(selector)}\s*\{{([^}}]*)\}}", source, re.DOTALL
+        )
+        assert match is not None, selector
+        return match.group(1)
+
+    tabs = rule(".agent-tabs")
+    composer = rule(".message-form")
+    message = rule(".message")
+    file_header = rule(".file-viewer-header")
+    workspace_facts = rule(".workspace-facts")
+    result_section = rule(".result-section")
+
+    sidebars = rule(".workspace-browser, .agent-panel")
+
+    assert "border: 0" in sidebars
+    assert "border-radius: var(--pane-radius)" in sidebars
+    assert "background: var(--surface)" in sidebars
+    assert "margin: 5px 3px 6px 6px" in source
+    assert "margin: 5px 6px 6px 3px" in source
+    assert "margin: 5px 7px 0" in tabs
+    assert "border-bottom" not in tabs
+    assert "border-radius: 8px" in tabs
+    assert "margin: 8px" in composer
+    assert "border-top" not in composer
+    assert "border-radius: 10px" in composer
+    assert "border-bottom" not in message
+    assert "margin:" not in file_header
+    assert "border-bottom" not in file_header
+    assert "background: transparent" in file_header
+    assert "display: grid" in workspace_facts
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in workspace_facts
+    assert "border-top" not in workspace_facts
+    assert ".workspace-facts > div" in source
+    assert "background: transparent" in source
+    assert "border-radius: 9px" in result_section
+    assert source.count("top: 42px") >= 3
+    assert "width: min(360px, calc(100vw - 16px))" in source
+    assert "width: min(390px, calc(100vw - 16px))" in source
+    assert ".ide-shell.is-explorer-collapsed .edge-reveal-left" in source
+    assert ".ide-shell.is-agent-collapsed .edge-reveal-right" in source
+
+
+def test_composer_and_panel_reveal_controls_are_integrated_and_minimal() -> None:
+    project_root = Path(__file__).parents[3]
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+    template = (project_root / "src/tcad_agent/web/templates/ide.html").read_text()
+
+    assert 'class="edge-reveal edge-reveal-left"' in template
+    assert 'class="edge-reveal edge-reveal-right"' in template
+    assert '<span aria-hidden="true">&#8250;</span>' in template
+    assert '<span aria-hidden="true">&#8249;</span>' in template
+    assert re.search(
+        r"\.edge-reveal\s*\{[^}]*top:\s*50%;[^}]*opacity:\s*0",
+        source,
+        re.DOTALL,
+    )
+    assert ".edge-reveal:hover" in source
+    assert ".edge-reveal:focus-visible" in source
+    assert ".ide-shell.is-explorer-open .edge-reveal-left" in source
+    assert ".ide-shell.is-agent-open .edge-reveal-right" in source
+    assert re.search(
+        r"\.message-form\s*\{[^}]*border-radius:\s*10px;[^}]*background:\s*#0d1116",
+        source,
+        re.DOTALL,
+    )
+    assert ".message-form:focus-within" in source
+    assert re.search(
+        r"\.message-form textarea\s*\{[^}]*border:\s*0;[^}]*background:\s*transparent",
+        source,
+        re.DOTALL,
+    )
+    assert ".message-form > label" in source

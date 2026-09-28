@@ -78,8 +78,8 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
     if isinstance(action, TcadDomainAction):
         phases = {
             "validate_spec": "validate",
-            "compile_experiment": "edit",
-            "run_experiment": "execute",
+            "prepare_experiment": "validate",
+            "execute_experiment": "execute",
             "validate_result": "validate",
             "search_knowledge": "inspect",
             "search_web": "inspect",
@@ -89,8 +89,14 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
         metadata: dict[str, JsonValue] = {
             "phase": phases.get(action.operation, "unknown")
         }
-        if action.operation in {"validate_spec", "validate_result"}:
+        if action.operation in {
+            "validate_spec",
+            "prepare_experiment",
+            "validate_result",
+        }:
             metadata["evidence_kind"] = "validation"
+        elif action.operation == "execute_experiment":
+            metadata["evidence_kind"] = "simulation"
         elif action.operation in {"search_knowledge", "search_web", "fetch_source"}:
             metadata["evidence_kind"] = "research"
             metadata["research_scope"] = (

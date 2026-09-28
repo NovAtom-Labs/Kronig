@@ -1,99 +1,51 @@
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import pytest
 import yaml
 
 from tcad_agent.adapters.sentaurus.compiler import SentaurusAdapter
-from tcad_agent.control.models import ClarificationAnswer, RequestState, ResearchRequest
-from tcad_agent.control.service import ControlService
-from tcad_agent.control.store import SqliteRequestStore
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.events.ledger import EventLedger
-from tcad_agent.model_gateway.base import AgentContextPacket, AgentProposal, ScriptedModelGateway
-from tcad_agent.model_gateway.openhands import (
-    ModelConfigurationError,
-    OpenHandsBedrockGateway,
-)
+from tcad_agent.experiments.errors import ExperimentExecutionError
+from tcad_agent.experiments.service import ExperimentEngine
+from tcad_agent.runners.models import RunBudget
 
 
-def test_researcher_acceptance_runs_devsim_and_compiles_same_spec_for_sentaurus(
+def test_same_simulator_neutral_contract_runs_devsim_and_compiles_sentaurus(
     tmp_path: Path,
 ) -> None:
-    prompt = Path("examples/prompts/al-pn-al-equilibrium.md").read_text()
-    approximation = yaml.safe_load(
-        Path("examples/al-pn-al-equilibrium-devsim.yaml").read_text()
+    spec = ExperimentSpec.model_validate(
+        yaml.safe_load(Path("examples/al-pn-al-equilibrium-devsim.yaml").read_text())
     )
-    control = ControlService(
-        store=SqliteRequestStore(tmp_path / "requests.sqlite3"),
-        gateway=ScriptedModelGateway(
-            (AgentProposal(kind="spec", spec=approximation),)
-        ),
-        workspace=tmp_path / "workspace",
+    engine = ExperimentEngine()
+    prepared = engine.prepare(spec, "devsim")
+    completed = engine.execute(
+        prepared,
+        approved_plan_digest=prepared.plan_digest,
+        output_root=tmp_path / "runs",
+        budget=RunBudget(seconds=120),
     )
 
-    submitted = control.submit(prompt, backend="devsim")
-    assert submitted.state is RequestState.NEEDS_CLARIFICATION
-    assert {question.field for question in submitted.questions} >= {
-        "geometry.p_region_thickness",
-        "geometry.n_region_thickness",
-        "contacts.treatment",
-    }
-    planned = control.answer(
-        submitted.id,
-        (
-            ClarificationAnswer(field="geometry.p_region_thickness", value="1 um"),
-            ClarificationAnswer(field="geometry.n_region_thickness", value="1 um"),
-            ClarificationAnswer(
-                field="contacts.treatment",
-                value="explicit DEVSIM ohmic approximation for local testing",
-            ),
-        ),
-    )
-    assert planned.state is RequestState.USER_CONFIRMATION_REQUIRED
-    assert planned.plan_digest
-    assert planned.spec == ExperimentSpec.model_validate(approximation).normalized()
-
-    approved = control.approve(planned.id, planned.plan_digest)
-    assert approved.state is RequestState.COMPILED
-    before_sentaurus_check = control.get(planned.id)
-    planned_spec = ExperimentSpec.model_validate(planned.spec)
-    sentaurus_job = SentaurusAdapter.from_defaults().compile(
-        planned_spec, tmp_path / "sentaurus-compile"
-    )
-    after_sentaurus_check = control.get(planned.id)
-    assert sentaurus_job.backend == "sentaurus"
-    assert (tmp_path / "sentaurus-compile" / "sdevice.cmd").is_file()
-    assert after_sentaurus_check.state is before_sentaurus_check.state
-    assert after_sentaurus_check.revision == before_sentaurus_check.revision
-    assert planned_spec.name == "al-pn-al-equilibrium-devsim-approximation"
-
-    completed = control.execute(planned.id)
-    assert completed.state is RequestState.COMPLETED
-    assert completed.bundle_path is not None
-    bundle = Path(completed.bundle_path)
-    manifest = json.loads((bundle / "manifest.json").read_text())
+    manifest = json.loads((completed.root / "manifest.json").read_text())
     assert manifest["backend"] == "devsim"
     assert manifest["state"] == "completed"
     for name, record in manifest["artifacts"].items():
-        assert hashlib.sha256((bundle / name).read_bytes()).hexdigest() == record["sha256"]
-    events = EventLedger(bundle / "events.jsonl").verify()
+        assert hashlib.sha256((completed.root / name).read_bytes()).hexdigest() == record["sha256"]
+    events = EventLedger(completed.root / "events.jsonl").verify()
     assert events[-1].kind == "completed"
-    assert (bundle / "report.md").is_file()
-    assert (bundle / "results" / "canonical.json").is_file()
-    assert (bundle / "results" / "fields.csv").is_file()
-    assert (bundle / "results" / "field-plots.svg").is_file()
-    validation = json.loads((bundle / "validation" / "report.json").read_text())
-    checks = {check["id"]: check for check in validation["checks"]}
-    assert validation["overall"] == "passed"
-    assert checks["requested-observables-present"]["status"] == "passed"
-    assert checks["equilibrium-terminal-current"]["status"] == "passed"
-    assert checks["built-in-potential-reference"]["status"] == "passed"
+    assert (completed.root / "results" / "canonical.json").is_file()
+    assert (completed.root / "validation" / "report.json").is_file()
+
+    sentaurus_job = SentaurusAdapter.from_defaults().compile(spec, tmp_path / "sentaurus-compile")
+    assert sentaurus_job.backend == "sentaurus"
+    assert (tmp_path / "sentaurus-compile" / "sdevice.cmd").is_file()
 
 
-def test_full_sentaurus_example_compiles_without_a_licensed_machine(tmp_path: Path) -> None:
+def test_full_sentaurus_example_compiles_without_a_licensed_machine(
+    tmp_path: Path,
+) -> None:
     spec = ExperimentSpec.model_validate(
         yaml.safe_load(Path("examples/al-pn-al-equilibrium.yaml").read_text())
     )
@@ -105,51 +57,19 @@ def test_full_sentaurus_example_compiles_without_a_licensed_machine(tmp_path: Pa
     assert "Recombination( SRH Auger )" in deck
 
 
-def test_sentaurus_web_lifecycle_compiles_then_stops_as_unconfigured(
+def test_unconfigured_sentaurus_execution_is_a_bounded_engine_failure(
     tmp_path: Path,
 ) -> None:
-    prompt = Path("examples/prompts/al-pn-al-equilibrium.md").read_text()
-    payload = yaml.safe_load(Path("examples/al-pn-al-equilibrium.yaml").read_text())
-    control = ControlService(
-        store=SqliteRequestStore(tmp_path / "requests.sqlite3"),
-        gateway=ScriptedModelGateway((AgentProposal(kind="spec", spec=payload),)),
-        workspace=tmp_path / "workspace",
+    spec = ExperimentSpec.model_validate(
+        yaml.safe_load(Path("examples/al-pn-al-equilibrium.yaml").read_text())
     )
-    submitted = control.submit(prompt, backend="sentaurus")
-    planned = control.answer(
-        submitted.id,
-        (
-            ClarificationAnswer(field="geometry.p_region_thickness", value="1 um"),
-            ClarificationAnswer(field="geometry.n_region_thickness", value="1 um"),
-            ClarificationAnswer(
-                field="contacts.treatment", value="metal_work_function"
-            ),
-        ),
-    )
-    approved = control.approve(planned.id, planned.plan_digest or "")
-    assert approved.state is RequestState.COMPILED
-    stopped = control.execute(planned.id)
-    assert stopped.state is RequestState.FAILED
-    assert stopped.error_code == "backend_unconfigured"
+    engine = ExperimentEngine()
+    prepared = engine.prepare(spec, "sentaurus")
 
-
-@pytest.mark.live_bedrock
-def test_live_bedrock_smoke_is_opt_in_and_never_prints_key(
-    pytestconfig: pytest.Config,
-) -> None:
-    if not pytestconfig.getoption("--run-live-bedrock"):
-        pytest.skip("pass --run-live-bedrock to call the configured Bedrock model")
-    token = os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")
-    if not token:
-        pytest.skip("AWS_BEARER_TOKEN_BEDROCK is not configured")
-    gateway = OpenHandsBedrockGateway.from_environment()
-    try:
-        proposal = gateway.propose(
-            ResearchRequest(prompt="Return a structured refusal for this smoke test."),
-            AgentContextPacket(),
+    with pytest.raises(ExperimentExecutionError, match="Sentaurus runner requires"):
+        engine.execute(
+            prepared,
+            approved_plan_digest=prepared.plan_digest,
+            output_root=tmp_path / "runs",
+            budget=RunBudget(seconds=120),
         )
-    except ModelConfigurationError as exc:
-        assert token not in str(exc)
-        assert "authentication or configuration failed" in str(exc)
-    else:
-        assert proposal.kind in {"clarification", "spec", "refusal"}

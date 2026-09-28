@@ -160,6 +160,7 @@ class ApprovalDecision(StrEnum):
 
 
 class PermissionCategory(StrEnum):
+    SIMULATION_EXECUTION = "simulation_execution"
     EXTERNAL_FILE_ACCESS = "external_file_access"
     SENSITIVE_FILE_ACCESS = "sensitive_file_access"
     PACKAGE_INSTALLATION = "package_installation"

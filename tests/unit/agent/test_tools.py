@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,8 @@ from tcad_agent.agent.tools import (
     TcadDomainTool,
     build_tools,
 )
+from tcad_agent.bundles.models import ExperimentBundle
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.knowledge.models import Passage, WebEvidenceRecord, WebSearchResult
 from tcad_agent.knowledge.retrieve import KnowledgeIndex
 
@@ -20,28 +23,85 @@ def valid_spec_payload() -> dict:
     return yaml.safe_load((ROOT / "examples" / "pn-junction.yaml").read_text())
 
 
-def test_run_tool_requires_validated_plan(tmp_path: Path) -> None:
+def test_prepare_experiment_returns_typed_plan(tmp_path: Path) -> None:
     tools = build_tools(tmp_path)
-    response = tools.run_experiment({"spec_path": "spec.yaml", "backend": "devsim"})
-    assert response.status == "refused"
-    assert response.code == "approval_required"
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
 
-
-def test_sentaurus_compiles_without_configured_remote(tmp_path: Path) -> None:
-    response = build_tools(tmp_path).compile_experiment(
-        valid_spec_payload(), backend="sentaurus"
-    )
     assert response.status == "ok"
-    assert response.code == "compiled"
-    assert response.data["job"]["backend"] == "sentaurus"
+    assert response.code == "experiment_prepared"
+    prepared = response.data["prepared"]
+    assert prepared["backend"] == "devsim"
+    assert len(prepared["plan_digest"]) == 64
+    assert prepared["spec"]["schema_version"] == "1.0"
+
+
+def test_invalid_dimensional_input_returns_json_serializable_tool_error(
+    tmp_path: Path,
+) -> None:
+    payload = valid_spec_payload()
+    payload["regions"][0]["x0"] = 0.0
+
+    response = build_tools(tmp_path).prepare_experiment(payload, backend="devsim")
+
+    assert response.status == "refused"
+    assert response.code == "invalid_spec"
+    encoded = response.model_dump_json()
+    assert json.loads(encoded)["data"]["errors"]
+
+
+def test_sentaurus_prepares_without_configured_remote(tmp_path: Path) -> None:
+    response = build_tools(tmp_path).prepare_experiment(valid_spec_payload(), backend="sentaurus")
+    assert response.status == "ok"
+    assert response.code == "experiment_prepared"
+    assert response.data["prepared"]["backend"] == "sentaurus"
+
+
+def test_execute_experiment_fixes_output_below_workspace(tmp_path: Path) -> None:
+    class RecordingEngine:
+        def __init__(self) -> None:
+            self.delegate = ExperimentEngine()
+            self.output_root: Path | None = None
+
+        def prepare(self, spec, backend, *, warnings=()):
+            return self.delegate.prepare(spec, backend, warnings=warnings)
+
+        def execute(
+            self,
+            prepared,
+            *,
+            approved_plan_digest,
+            output_root,
+            budget,
+            run_id=None,
+        ):
+            del approved_plan_digest, budget, run_id
+            self.output_root = output_root
+            root = output_root / "run-recorded"
+            return ExperimentBundle(run_id="run-recorded", state="completed", root=root)
+
+    engine = RecordingEngine()
+    tools = DomainTools(tmp_path, experiment_engine=engine)
+    prepared = tools.prepare_experiment(valid_spec_payload(), backend="devsim").data["prepared"]
+
+    response = tools.execute_experiment(
+        {
+            "prepared": prepared,
+            "plan_digest": prepared["plan_digest"],
+            "timeout_seconds": 30,
+            "output_root": "/tmp/model-controlled-output",
+        }
+    )
+
+    assert response.status == "ok"
+    assert response.code == "experiment_executed"
+    assert engine.output_root == tmp_path.resolve() / "runs"
+    assert response.data["bundle"]["root"] == str(tmp_path.resolve() / "runs/run-recorded")
 
 
 def test_tcad_executor_returns_llm_visible_refusal_for_missing_payload(
     tmp_path: Path,
 ) -> None:
-    observation = TcadDomainExecutor(tmp_path)(
-        TcadDomainAction(operation="validate_spec")
-    )
+    observation = TcadDomainExecutor(tmp_path)(TcadDomainAction(operation="validate_spec"))
 
     assert observation.status == "refused"
     assert observation.code == "invalid_spec"
@@ -126,9 +186,7 @@ def test_tcad_tools_expose_structured_web_search_and_source_fetch(
 ) -> None:
     tools = DomainTools(tmp_path, web_research=StubWebResearch())
 
-    searched = tools.search_web(
-        "DEVSIM contact equation", ("devsim.org",), limit=3
-    )
+    searched = tools.search_web("DEVSIM contact equation", ("devsim.org",), limit=3)
     fetched = tools.fetch_source(
         "https://devsim.org/docs",
         query="DEVSIM solve command",

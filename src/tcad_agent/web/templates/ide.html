@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
     <title>Agent Kronig workspace · NovAtom Labs</title>
-    <link rel="stylesheet" href="/static/theme.css?v=20260925-1">
-    <link rel="stylesheet" href="/static/ide.css?v=20260926-1">
+    <link rel="stylesheet" href="/static/theme.css?v=20260928-1">
+    <link rel="stylesheet" href="/static/ide.css?v=20260928-4">
   </head>
   <body>
     <div class="ide-shell">
@@ -22,8 +22,6 @@
           <span id="workspace-context-state"></span>
         </div>
         <div class="header-actions">
-          <button id="toggle-explorer-panel" class="toggle-explorer-panel" type="button" aria-controls="workspace-browser" aria-expanded="false">Repository</button>
-          <button id="toggle-agent-panel" class="toggle-agent-panel" type="button" aria-controls="agent-panel" aria-expanded="false">Agent</button>
           <button id="desktop-settings" class="desktop-settings" type="button" hidden>Settings</button>
           <span class="company-lockup" aria-label="NovAtom Labs">
             <img class="company-atom" src="/static/novatom-atom-mark.svg" alt="" aria-hidden="true">
@@ -35,10 +33,13 @@
         </div>
       </header>
 
+      <button id="toggle-explorer-panel" class="edge-reveal edge-reveal-left" type="button" aria-label="Show repository panel" aria-controls="workspace-browser" aria-expanded="false"><span aria-hidden="true">&#8250;</span></button>
+      <button id="toggle-agent-panel" class="edge-reveal edge-reveal-right" type="button" aria-label="Show agent panel" aria-controls="agent-panel" aria-expanded="false"><span aria-hidden="true">&#8249;</span></button>
+
       <aside id="workspace-browser" class="workspace-browser" aria-label="Repository">
         <div class="panel-title">
           <span>REPOSITORY</span>
-          <span class="panel-title-actions"><span id="git-state">NOT OPEN</span><button id="close-workspace-browser" type="button" aria-label="Close repository drawer">Close</button></span>
+          <span class="panel-title-actions"><span id="git-state">NOT OPEN</span><button id="close-workspace-browser" type="button" aria-label="Collapse repository panel" title="Collapse repository">&#8249;</button></span>
         </div>
         <form id="workspace-form" class="workspace-form">
           <label for="workspace-path">Repository folder</label>
@@ -116,7 +117,7 @@
             </div>
             <div class="agent-heading-actions">
               <button id="refresh-session" type="button" disabled>Refresh</button>
-              <button id="close-agent-panel" type="button" aria-label="Close agent panel">Close</button>
+              <button id="close-agent-panel" type="button" aria-label="Collapse agent panel" title="Collapse agent">&#8250;</button>
             </div>
           </div>
           <div id="run-controls" class="run-controls" hidden aria-label="Agent run controls">
@@ -216,11 +217,11 @@
     <script src="/static/file-viewer.js?v=20260925-2" defer></script>
     <script src="/static/ide-markdown.js?v=20260925-2" defer></script>
     <script src="/static/ide-events.js?v=20260925-5" defer></script>
-    <script src="/static/ide-layout.js?v=20260925-4" defer></script>
+    <script src="/static/ide-layout.js?v=20260928-2" defer></script>
     <script src="/static/ide-agent.js?v=20260925-6" defer></script>
     <script src="/static/ide-changes.js?v=20260925-4" defer></script>
     <script src="/static/desktop-bridge.js?v=20260925-1" defer></script>
     <script src="/static/results-workbench.js?v=20260927-1" defer></script>
-    <script src="/static/ide.js?v=20260927-1" defer></script>
+    <script src="/static/ide.js?v=20260928-2" defer></script>
   </body>
 </html>

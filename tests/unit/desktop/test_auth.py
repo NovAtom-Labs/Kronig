@@ -71,8 +71,8 @@ def test_desktop_shutdown_handshake_closes_mutating_api(
     assert prepared.status_code == 200
     assert prepared.json() == {"ready": True}
     blocked = client.post(
-        "/api/requests",
-        json={"prompt": "Create a new simulation", "backend": "devsim"},
+        "/api/workspaces",
+        json={"path": str(tmp_path)},
     )
     assert blocked.status_code == 409
     assert blocked.json()["code"] == "desktop_shutdown_committed"

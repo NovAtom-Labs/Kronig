@@ -244,7 +244,11 @@ def classify_action(workspace: Path, event: ActionEvent) -> SecurityRisk:
     if isinstance(action, TaskTrackerAction):
         return SecurityRisk.LOW
     if isinstance(action, TcadDomainAction):
-        if action.operation in {"search_web", "fetch_source"}:
+        if action.operation in {
+            "execute_experiment",
+            "search_web",
+            "fetch_source",
+        }:
             return SecurityRisk.HIGH
         return SecurityRisk.LOW
     if isinstance(action, (ThinkAction, FinishAction)):
@@ -286,10 +290,15 @@ def permission_category(workspace: Path, event: ActionEvent) -> PermissionCatego
         "fetch_source",
     }:
         return PermissionCategory.NETWORK_ACCESS
+    if isinstance(action, TcadDomainAction) and action.operation == "execute_experiment":
+        return PermissionCategory.SIMULATION_EXECUTION
     return PermissionCategory.UNRECOGNIZED_ACTION
 
 
 _APPROVAL_EXPLANATIONS = {
+    PermissionCategory.SIMULATION_EXECUTION: (
+        "Agent Kronig wants to execute the approved simulation on the selected backend."
+    ),
     PermissionCategory.EXTERNAL_FILE_ACCESS: (
         "Agent Kronig wants to access a file outside the opened project."
     ),

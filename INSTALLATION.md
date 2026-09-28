@@ -156,7 +156,7 @@ On Windows PowerShell:
 .\scripts\run_desktop_dev.ps1
 ```
 
-Both wrappers use the same Python launcher. It loads the ignored `.env` when present without evaluating shell commands, starts the platform-native Electron binary, and lets Electron supervise the authenticated private backend. It never opens or prints a browser URL. Agent chat, activity, approvals, and OpenHands runtime state live in a process-scoped session directory and are deleted when the application exits. Settings, protected credentials, request records, repository files, compiled outputs, and result bundles persist. Close Agent Kronig before copying persistent application data for backup.
+Both wrappers use the same Python launcher. It loads the ignored `.env` when present without evaluating shell commands, starts the platform-native Electron binary, and lets Electron supervise the authenticated private backend. It never opens or prints a browser URL. Agent chat, activity, approvals, and OpenHands runtime state live in a process-scoped session directory and are deleted when the application exits. Settings, protected credentials, repository files, compiled outputs, and result bundles persist. Close Agent Kronig before copying persistent application data for backup.
 
 ## 8. Verify the repository agent
 

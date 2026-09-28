@@ -8,6 +8,7 @@ const workspaceContextName = document.querySelector("#workspace-context-name");
 const workspaceContextState = document.querySelector("#workspace-context-state");
 const gitState = document.querySelector("#git-state");
 const repositoryTree = document.querySelector("#repository-tree");
+const ideShell = document.querySelector(".ide-shell");
 const agentPanel = document.querySelector("#agent-panel");
 const toggleAgentPanel = document.querySelector("#toggle-agent-panel");
 const closeAgentPanel = document.querySelector("#close-agent-panel");
@@ -1486,7 +1487,6 @@ function connectEvents(sessionKey) {
 async function bindSession(session, workspaceId, routeToken) {
   activeSession = session;
   sessionState.textContent = "Current repository";
-  setAgentPanelOpen(true);
   await refreshMessages(session.id, {forceScroll: true});
   if (!navigationGuard.isCurrent(routeToken) || activeSession?.id !== session.id) return;
   const run = await api(sessionEndpoint(workspaceId, "/runs/active"));
@@ -1519,9 +1519,23 @@ function clearSession() {
   eventSource = null;
 }
 
+function applyAgentPanelAction(action) {
+  const next = AgentKronigLayout.resolvePanelAction({
+    mode: ideShell.dataset.layoutMode || "desktop",
+    collapsed: ideShell.classList.contains("is-agent-collapsed"),
+    open: agentPanel.classList.contains("is-open"),
+  }, action);
+  ideShell.classList.toggle("is-agent-collapsed", next.collapsed);
+  ideShell.classList.toggle("is-agent-open", next.open);
+  agentPanel.classList.toggle("is-open", next.open);
+  toggleAgentPanel.setAttribute(
+    "aria-expanded",
+    String(next.open || !next.collapsed),
+  );
+}
+
 function setAgentPanelOpen(open) {
-  agentPanel.classList.toggle("is-open", open);
-  toggleAgentPanel.setAttribute("aria-expanded", String(open));
+  applyAgentPanelAction(open ? "open" : "close");
 }
 
 async function restoreRoute() {
@@ -1737,9 +1751,9 @@ agentTabs.forEach((button) => {
   });
 });
 toggleAgentPanel.addEventListener("click", () => {
-  setAgentPanelOpen(!agentPanel.classList.contains("is-open"));
+  applyAgentPanelAction("toggle");
 });
-closeAgentPanel.addEventListener("click", () => setAgentPanelOpen(false));
+closeAgentPanel.addEventListener("click", () => applyAgentPanelAction("close"));
 fileViewerPreview.addEventListener("click", () => renderFileContent("preview"));
 fileViewerSource.addEventListener("click", () => renderFileContent("source"));
 fileViewerEdit.addEventListener("click", () => void beginFileEdit());

@@ -91,6 +91,15 @@
     }
   }
 
+  function resolvePanelAction(state, action) {
+    if (state.mode === "desktop") {
+      if (action === "toggle") return {collapsed: !state.collapsed, open: false};
+      return {collapsed: action === "close", open: false};
+    }
+    if (action === "toggle") return {collapsed: false, open: !state.open};
+    return {collapsed: false, open: action === "open"};
+  }
+
   function createController(options) {
     const shell = options.shell;
     const explorerHandle = options.explorerHandle;
@@ -196,21 +205,32 @@
     const workspaceId = windowRef.location.pathname.match(/\/workspaces\/([0-9a-f-]{36})/i)?.[1]
       || "default";
 
-    function setExplorerOpen(open) {
-      explorer?.classList.toggle("is-open", open);
-      toggleExplorer?.setAttribute("aria-expanded", String(open));
+    function applyExplorerAction(action) {
+      const next = resolvePanelAction({
+        mode: shell.dataset.layoutMode || "desktop",
+        collapsed: shell.classList.contains("is-explorer-collapsed"),
+        open: explorer?.classList.contains("is-open") || false,
+      }, action);
+      shell.classList.toggle("is-explorer-collapsed", next.collapsed);
+      shell.classList.toggle("is-explorer-open", next.open);
+      explorer?.classList.toggle("is-open", next.open);
+      toggleExplorer?.setAttribute(
+        "aria-expanded",
+        String(next.open || !next.collapsed),
+      );
     }
 
     toggleExplorer?.addEventListener("click", () => {
-      const open = !explorer.classList.contains("is-open");
-      setExplorerOpen(open);
-      if (open) {
+      applyExplorerAction("toggle");
+      if (explorer?.classList.contains("is-open")) {
         agent?.classList.remove("is-open");
         toggleAgent?.setAttribute("aria-expanded", "false");
       }
     });
-    closeExplorer?.addEventListener("click", () => setExplorerOpen(false));
-    toggleAgent?.addEventListener("click", () => setExplorerOpen(false));
+    closeExplorer?.addEventListener("click", () => applyExplorerAction("close"));
+    toggleAgent?.addEventListener("click", () => {
+      if (shell.dataset.layoutMode !== "desktop") applyExplorerAction("close");
+    });
 
     return createController({
       shell,
@@ -219,7 +239,16 @@
       workspaceId,
       windowRef,
       onModeChange(mode) {
-        if (mode === "desktop") setExplorerOpen(false);
+        explorer?.classList.remove("is-open");
+        agent?.classList.remove("is-open");
+        shell.classList.remove("is-explorer-open");
+        shell.classList.remove("is-agent-open");
+        if (mode !== "desktop") {
+          shell.classList.remove("is-explorer-collapsed");
+          shell.classList.remove("is-agent-collapsed");
+        }
+        toggleExplorer?.setAttribute("aria-expanded", String(mode === "desktop"));
+        toggleAgent?.setAttribute("aria-expanded", String(mode === "desktop"));
       },
     });
   }
@@ -231,6 +260,7 @@
     createController,
     mount,
     parseStoredLayout,
+    resolvePanelAction,
     resetSide,
     resizeByKey,
   };

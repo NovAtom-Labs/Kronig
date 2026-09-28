@@ -334,6 +334,18 @@ def test_structured_phase_metadata_uses_typed_command_semantics() -> None:
     assert fixing == {"phase": "execute"}
 
 
+def test_experiment_tool_metadata_distinguishes_preparation_and_execution() -> None:
+    prepared = structured_action_metadata(
+        _domain_action("prepare_experiment", risk=SecurityRisk.LOW)
+    )
+    executed = structured_action_metadata(
+        _domain_action("execute_experiment", risk=SecurityRisk.HIGH)
+    )
+
+    assert prepared == {"phase": "validate", "evidence_kind": "validation"}
+    assert executed == {"phase": "execute", "evidence_kind": "simulation"}
+
+
 def test_windows_python_validation_is_structured_as_validation() -> None:
     metadata = structured_action_metadata(
         _terminal_action(

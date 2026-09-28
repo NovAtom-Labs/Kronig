@@ -63,6 +63,38 @@ assertDeepEqual(
   {explorer: 240, agent: 400},
   "valid persisted widths are restored",
 );
+assertDeepEqual(
+  layout.resolvePanelAction(
+    {mode: "desktop", collapsed: false, open: false},
+    "close",
+  ),
+  {collapsed: true, open: false},
+  "closing a desktop sidebar retracts it",
+);
+assertDeepEqual(
+  layout.resolvePanelAction(
+    {mode: "desktop", collapsed: true, open: false},
+    "toggle",
+  ),
+  {collapsed: false, open: false},
+  "toggling a retracted desktop sidebar restores it",
+);
+assertDeepEqual(
+  layout.resolvePanelAction(
+    {mode: "narrow", collapsed: false, open: false},
+    "toggle",
+  ),
+  {collapsed: false, open: true},
+  "narrow sidebars continue to use drawers",
+);
+assertDeepEqual(
+  layout.resolvePanelAction(
+    {mode: "tablet", collapsed: false, open: true},
+    "close",
+  ),
+  {collapsed: false, open: false},
+  "closing a responsive drawer hides it",
+);
 
 function fakeElement(rect = {left: 0, right: 1200, width: 1200}) {
   const listeners = {};

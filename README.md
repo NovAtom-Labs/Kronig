@@ -158,6 +158,7 @@ The stable product boundary is the experiment and evidence workflow. DEVSIM and 
 | --- | --- |
 | `domain` | `ExperimentSpec`, units, geometry, profiles, contacts, physics, studies, and requested observables |
 | `capabilities` | Exact backend support, resource limits, refusal reasons, and execution availability |
+| `experiments` | Stable preparation digests and the single compile, run, normalize, validate, and bundle sequence |
 | `knowledge` | Authorized ingestion, retrieval, review metadata, and citations |
 | `adapters` | Deterministic simulator input generation and native result normalization |
 | `runners` | Bounded local execution and signed licensed-host submission |
@@ -232,14 +233,13 @@ Results Workbench fields:
   tests/integration/test_scientific_research_workbench.py
 ```
 
-Live Bedrock behavior tests are intentionally opt-in because they incur API cost:
+Live Bedrock behavior tests are intentionally opt-in because they incur API cost. The unified suite
+checks a real DEVSIM run, unsupported-physics refusal, and an ordinary repository edit through the
+same desktop agent runtime:
 
 ```bash
 set -a && source .env && set +a
-.venv/bin/pytest -q tests/e2e/test_live_scientific_prompts.py --run-live-bedrock
-.venv/bin/pytest -q \
-  tests/e2e/test_agentic_repl.py::test_live_bedrock_repository_agent_is_opt_in \
-  --run-live-bedrock
+.venv/bin/pytest -q tests/e2e/test_live_unified_backend.py --run-live-bedrock
 ```
 
 ## Project documents

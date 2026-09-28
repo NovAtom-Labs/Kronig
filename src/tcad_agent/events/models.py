@@ -1,4 +1,4 @@
-"""Typed event schema shared by the control service and bundle writer."""
+"""Typed event schema used by deterministic experiment evidence bundles."""
 
 from datetime import datetime
 from enum import StrEnum

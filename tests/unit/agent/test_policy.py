@@ -19,6 +19,7 @@ from tcad_agent.agent.policy import (
     classify_action,
 )
 from tcad_agent.agent.tools import TcadDomainAction
+from tcad_agent.ide.models import PermissionCategory, is_run_grantable
 
 
 @pytest.fixture
@@ -272,6 +273,28 @@ def test_builtin_and_tcad_actions_are_low_risk(
 
     assert classify_action(workspace, event) is SecurityRisk.LOW
     assert action_summary(event) == summary
+
+
+def test_simulator_execution_requires_plain_language_run_scoped_approval(
+    workspace: Path,
+) -> None:
+    event = action_event(
+        "tcad_domain",
+        TcadDomainAction(
+            operation="execute_experiment",
+            payload={"approved_plan_digest": "a" * 64},
+        ),
+    )
+
+    category = policy_module.permission_category(workspace, event)
+
+    assert classify_action(workspace, event) is SecurityRisk.HIGH
+    assert category is PermissionCategory.SIMULATION_EXECUTION
+    assert is_run_grantable(category)
+    explanation = policy_module.approval_explanation(workspace, event, category)
+    assert explanation == (
+        "Agent Kronig wants to execute the approved simulation on the selected backend."
+    )
 
 
 def test_unknown_action_fails_closed(workspace: Path) -> None:

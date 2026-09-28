@@ -13,11 +13,11 @@ git diff --check
 
 The ordinary suite must complete with the licensed Sentaurus test clearly skipped when the remote machine is absent. A skip is not proof that Phase 4 has passed on Sentaurus.
 
-The opt-in Bedrock smoke test is:
+The opt-in Bedrock acceptance suite is:
 
 ```bash
 OPENHANDS_SUPPRESS_BANNER=1 .venv/bin/pytest \
-  tests/e2e/test_pilot_acceptance.py \
+  tests/e2e/test_live_unified_backend.py \
   --run-live-bedrock -m live_bedrock -q
 ```
 
@@ -40,7 +40,7 @@ must be requested explicitly:
 
 ```bash
 set -a && source .env && set +a
-.venv/bin/pytest -q tests/e2e/test_live_scientific_prompts.py --run-live-bedrock
+.venv/bin/pytest -q tests/e2e/test_live_unified_backend.py --run-live-bedrock
 .venv/bin/pytest -q \
   tests/e2e/test_agentic_repl.py::test_live_bedrock_repository_agent_is_opt_in \
   --run-live-bedrock
@@ -53,18 +53,18 @@ requires the repaired repository to pass its deterministic 100-point scientific 
 
 1. Start Agent Kronig from the operating-system application launcher.
 2. Confirm the native workspace opens without launching a browser.
-3. Paste `examples/prompts/al-pn-al-equilibrium.md` and select DEVSIM.
-4. Confirm the app asks for p-region thickness, n-region thickness, and contact treatment instead of inventing them.
-5. Enter `1 um`, `1 um`, and choose the explicit DEVSIM ohmic approximation for local testing.
-6. Confirm the plan shows 300 K, both `1e17 cm^-3` dopings, equilibrium, both zero-bias contacts, and every limitation of the approximation.
-7. Confirm the plan uses only the current DEVSIM manifest subset. Requested Sentaurus-only physics must not be claimed as locally executed.
-8. Approve the exact digest and run it.
-9. Click Run again and confirm no duplicate job or bundle is created.
-10. Confirm the final state is completed only if deterministic validation passed.
-11. Download and inspect `report.md`, `results/canonical.json`, `validation/report.json`, `events.jsonl`, and `manifest.json`.
+3. Open an empty repository and enter a complete natural-language DEVSIM research request.
+4. Confirm the agent uses `prepare_experiment` and receives a simulator-neutral plan with a stable digest.
+5. Confirm preparation and validation do not ask for approval.
+6. Confirm `execute_experiment` opens one plain-language simulation approval and no arbitrary output path is shown.
+7. Approve the simulation category for that run and let the agent continue.
+8. Confirm the plan uses only the current DEVSIM manifest subset. Sentaurus-only physics must be refused rather than silently approximated.
+9. Confirm the final state is completed only if deterministic validation passed.
+10. Open `runs/<run-id>/results/canonical.json` and confirm the Results Workbench shows fields, metrics, validation, and provenance.
+11. Inspect `report.md`, `validation/report.json`, `events.jsonl`, and `manifest.json` in the same immutable bundle.
 12. Recompute at least one artifact SHA-256 and confirm it matches the manifest.
-13. Confirm no `.env` value appears in HTML, logs, events, reports, native results, or the manifest.
-14. Validate and compile `examples/al-pn-al-equilibrium.yaml` for Sentaurus. Confirm the generated deck contains explicit 4.10 eV work-function contacts, Fermi statistics, SRH, Auger, and band-gap narrowing.
+13. Confirm no `.env` value appears in UI events, reports, native results, or the manifest.
+14. Compile `examples/al-pn-al-equilibrium.yaml` for Sentaurus and confirm its deterministic deck contains the reviewed work-function and physics mappings.
 15. Confirm real Sentaurus execution remains unavailable until the licensed checklist passes.
 
 ## Licensed-machine acceptance

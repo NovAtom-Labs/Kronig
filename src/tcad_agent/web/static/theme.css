@@ -55,8 +55,8 @@
   --green: #72a88d;
   --amber: #bda36d;
   --red: #c67c80;
-  --radius-small: 3px;
-  --radius: 5px;
+  --radius-small: 5px;
+  --radius: 9px;
   background: var(--background);
   color: var(--text);
 }

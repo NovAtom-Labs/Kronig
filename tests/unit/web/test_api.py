@@ -1,12 +1,10 @@
+import inspect
 from html.parser import HTMLParser
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from tcad_agent.control.service import ControlService
-from tcad_agent.control.store import SqliteRequestStore
-from tcad_agent.model_gateway.base import ScriptedModelGateway
 from tcad_agent.web.app import create_app
 
 
@@ -17,9 +15,7 @@ class ButtonTextParser(HTMLParser):
         self.elements: dict[str, str] = {}
         self._current_button: str | None = None
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
         if attributes.get("id"):
             self.elements[attributes["id"]] = tag
@@ -38,12 +34,8 @@ class ButtonTextParser(HTMLParser):
 
 
 def client(tmp_path: Path) -> TestClient:
-    control = ControlService(
-        store=SqliteRequestStore(tmp_path / "requests.sqlite3"),
-        gateway=ScriptedModelGateway(()),
-        workspace=tmp_path / "workspace",
-    )
-    return TestClient(create_app(control))
+    del tmp_path
+    return TestClient(create_app())
 
 
 def test_root_and_health_are_local_researcher_entrypoints(tmp_path: Path) -> None:
@@ -97,9 +89,7 @@ def test_root_serves_workspace_ide_shell(tmp_path: Path) -> None:
 
 
 def test_conversation_page_route_is_removed(tmp_path: Path) -> None:
-    response = client(tmp_path).get(
-        f"/workspaces/{uuid4()}/conversations/{uuid4()}"
-    )
+    response = client(tmp_path).get(f"/workspaces/{uuid4()}/conversations/{uuid4()}")
 
     assert response.status_code == 404
 
@@ -112,8 +102,7 @@ def test_workspace_header_separates_product_and_company_branding(tmp_path: Path)
     kronig_name = '<span class="product-kronig" aria-hidden="true">Kronig</span>'
     company = '<span class="company-lockup" aria-label="NovAtom Labs">'
     atom = (
-        '<img class="company-atom" '
-        'src="/static/novatom-atom-mark.svg" alt="" aria-hidden="true">'
+        '<img class="company-atom" src="/static/novatom-atom-mark.svg" alt="" aria-hidden="true">'
     )
     assert product_wordmark in page
     assert agent_name in page
@@ -160,76 +149,30 @@ def test_file_viewer_uses_one_compact_toolbar(tmp_path: Path) -> None:
     assert 'class="file-viewer-utilities"' in page
     assert 'id="file-viewer-meta" class="file-viewer-meta" hidden' in page
     assert 'id="file-viewer-kind"' not in page
-    assert page.index('id="file-viewer-edit"') < page.index(
-        'id="file-viewer-refresh"'
-    )
-    assert page.index('id="file-viewer-download"') < page.index(
-        'id="file-viewer-close"'
-    )
+    assert page.index('id="file-viewer-edit"') < page.index('id="file-viewer-refresh"')
+    assert page.index('id="file-viewer-download"') < page.index('id="file-viewer-close"')
 
 
-def test_legacy_guided_pages_redirect_to_repository_workspace(tmp_path: Path) -> None:
+def test_obsolete_guided_workflow_routes_are_absent(tmp_path: Path) -> None:
     web = client(tmp_path)
     simulation = web.get("/simulate", follow_redirects=False)
-    request_stage = web.get(
-        f"/requests/{uuid4()}/results", follow_redirects=False
-    )
+    request_stage = web.get(f"/requests/{uuid4()}/results", follow_redirects=False)
+    request_api = web.post("/api/requests", json={"prompt": "simulate", "backend": "devsim"})
 
-    assert simulation.status_code == 307
-    assert simulation.headers["location"] == "/"
-    assert request_stage.status_code == 307
-    assert request_stage.headers["location"] == "/"
+    assert simulation.status_code == 404
+    assert request_stage.status_code == 404
+    assert request_api.status_code == 404
+
+
+def test_application_has_no_obsolete_control_dependency() -> None:
+    assert "control" not in inspect.signature(create_app).parameters
 
 
 def test_workspace_uses_scientific_theme(tmp_path: Path) -> None:
     web = client(tmp_path)
     workspace_page = web.get("/")
-    theme = web.get("/static/theme.css?v=20260925-1")
+    theme = web.get("/static/theme.css?v=20260928-1")
 
-    assert 'href="/static/theme.css?v=20260925-1"' in workspace_page.text
+    assert 'href="/static/theme.css?v=20260928-1"' in workspace_page.text
     assert theme.status_code == 200
     assert theme.headers["content-type"].startswith("text/css")
-
-
-def test_workflow_runtime_uses_operational_copy(tmp_path: Path) -> None:
-    script = client(tmp_path).get("/static/app.js?v=20260924-4")
-
-    assert script.status_code == 200
-    assert "Simulation workflow" in script.text
-    assert "From research intent to <em>validated</em> device evidence." not in script.text
-
-
-def test_create_request_enters_clarification(tmp_path: Path) -> None:
-    prompt = Path("examples/prompts/al-pn-al-equilibrium.md").read_text()
-    response = client(tmp_path).post(
-        "/api/requests", json={"prompt": prompt, "backend": "sentaurus"}
-    )
-    assert response.status_code == 201
-    assert response.json()["state"] == "needs_clarification"
-    assert {question["field"] for question in response.json()["questions"]} >= {
-        "geometry.p_region_thickness",
-        "geometry.n_region_thickness",
-        "contacts.treatment",
-    }
-
-
-def test_invalid_request_identifier_is_rejected(tmp_path: Path) -> None:
-    response = client(tmp_path).get("/api/requests/not-a-uuid")
-    assert response.status_code == 422
-
-
-def test_unexpected_errors_do_not_echo_secrets() -> None:
-    secret = "ABSK-never-return-this"
-
-    class ExplodingControl:
-        def submit(self, prompt: str, *, backend: str):
-            raise RuntimeError(f"provider rejected {secret}")
-
-    web = TestClient(create_app(ExplodingControl()), raise_server_exceptions=False)
-    response = web.post("/api/requests", json={"prompt": "simulate", "backend": "devsim"})
-    assert response.status_code == 500
-    assert secret not in response.text
-    assert response.json() == {
-        "code": "internal_error",
-        "message": "The request failed without exposing provider or credential details.",
-    }

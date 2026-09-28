@@ -1,10 +1,72 @@
 import json
+from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
+import tcad_agent.cli as cli_module
+from tcad_agent.bundles.models import ExperimentBundle
 from tcad_agent.cli import app
 
 runner = CliRunner()
+
+
+def test_cli_run_delegates_to_shared_experiment_engine(tmp_path, monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class RecordingEngine:
+        def prepare(self, spec, backend):
+            calls["prepared"] = (spec, backend)
+            return SimpleNamespace(plan_digest="a" * 64)
+
+        def execute(
+            self,
+            prepared,
+            *,
+            approved_plan_digest,
+            output_root,
+            budget,
+            run_id=None,
+        ):
+            calls["executed"] = {
+                "prepared": prepared,
+                "approved_plan_digest": approved_plan_digest,
+                "output_root": output_root,
+                "budget": budget,
+                "run_id": run_id,
+            }
+            return ExperimentBundle(
+                run_id="run-cli-test",
+                state="completed",
+                root=output_root / "run-cli-test",
+            )
+
+    monkeypatch.setattr(cli_module, "ExperimentEngine", RecordingEngine, raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "examples/pn-junction.yaml",
+            "--backend",
+            "devsim",
+            "--approve",
+            "--output",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["prepared"][1] == "devsim"
+    assert calls["executed"]["approved_plan_digest"] == "a" * 64
+    assert calls["executed"]["output_root"] == tmp_path
+    assert str(tmp_path / "run-cli-test") in result.output
+
+
+def test_cli_run_still_requires_explicit_approval() -> None:
+    result = runner.invoke(app, ["run", "examples/pn-junction.yaml"])
+
+    assert result.exit_code == 2
+    assert "execution requires --approve" in result.output
 
 
 def test_cli_does_not_expose_standalone_browser_mode() -> None:

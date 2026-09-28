@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Annotated
-from uuid import uuid4
 
 import typer
 import yaml
@@ -13,19 +12,18 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from tcad_agent.adapters.registry import BackendAdapterUnavailable, get_backend
-from tcad_agent.bundles.models import BundleInputs
-from tcad_agent.bundles.writer import BundleWriter
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
 from tcad_agent.capabilities.service import CapabilityService
-from tcad_agent.domain.models import DCStudy, ExperimentSpec
-from tcad_agent.events.ledger import EventLedger
-from tcad_agent.events.models import RunEventKind
+from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.experiments.errors import (
+    ExperimentCapabilityError,
+    ExperimentExecutionError,
+)
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.knowledge.ingest import KnowledgeIngestor
 from tcad_agent.knowledge.models import SourceManifest
 from tcad_agent.knowledge.retrieve import KnowledgeIndex
 from tcad_agent.runners.models import RunBudget
-from tcad_agent.runners.remote import BackendUnconfiguredError, RemoteProtocolError
-from tcad_agent.validation.engine import ValidationEngine
 
 load_dotenv()
 
@@ -101,57 +99,18 @@ def run_command(
         typer.echo("execution requires --approve", err=True)
         raise typer.Exit(2)
     spec = _load_spec(spec_path)
-    _require_backend(spec, backend)
-    run_id = f"run-{uuid4().hex[:12]}"
-    work = output / ".work" / run_id
+    engine = ExperimentEngine()
     try:
-        binding = get_backend(backend)
-    except BackendAdapterUnavailable as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(2) from exc
-    adapter = binding.adapter
-    job = adapter.compile(spec, work)
-    ledger = EventLedger(work / "events.jsonl")
-    ledger.append(RunEventKind.REQUESTED, {"run_id": run_id})
-    ledger.append(RunEventKind.COMPILED, {"backend": backend})
-    ledger.append(RunEventKind.STARTED, {"timeout_seconds": timeout_seconds})
-    try:
-        native = binding.runner.run(job, RunBudget(seconds=timeout_seconds))
-    except (BackendUnconfiguredError, RemoteProtocolError, OSError) as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(2) from exc
-    result = adapter.normalize(native)
-    expected_points = 1
-    if isinstance(spec.study, DCStudy):
-        expected_points = round(
-            (spec.study.stop.to("V") - spec.study.start.to("V"))
-            / spec.study.step.to("V")
-        ) + 1
-    validation = ValidationEngine().validate(
-        result,
-        expected_bias_points=expected_points,
-        spec=spec,
-    )
-    terminal_event = (
-        RunEventKind.COMPLETED
-        if native.status == "completed" and validation.overall == "passed"
-        else RunEventKind.FAILED
-    )
-    ledger.append(
-        terminal_event,
-        {"execution_status": native.status, "validation_status": validation.overall},
-    )
-    bundle = BundleWriter(output).write(
-        BundleInputs(
-            run_id=run_id,
-            spec=spec,
-            job=job,
-            native=native,
-            result=result,
-            validation=validation,
-            events_path=ledger.path,
+        prepared = engine.prepare(spec, backend)
+        bundle = engine.execute(
+            prepared,
+            approved_plan_digest=prepared.plan_digest,
+            output_root=output,
+            budget=RunBudget(seconds=timeout_seconds),
         )
-    )
+    except (ExperimentCapabilityError, ExperimentExecutionError, ValueError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
     typer.echo(str(bundle.root))
     if bundle.state != "completed":
         raise typer.Exit(1)

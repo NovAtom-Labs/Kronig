@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from openhands.sdk.llm import Message, MessageToolCall, TextContent
 from openhands.sdk.testing import TestLLM
@@ -15,9 +16,12 @@ from openhands.sdk.testing import TestLLM
 from scripts.create_repl_test_repo import create_repository
 from tcad_agent.agent.runtime import OpenHandsRuntimeFactory
 from tcad_agent.agent.supervisor import AgentSupervisor
+from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
 from tcad_agent.ide.models import PermissionCategory, RunState, is_run_grantable
+from tcad_agent.ide.results import WorkspaceResultReader
 from tcad_agent.ide.store import SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.web.app import create_app
@@ -32,9 +36,7 @@ ACCEPTANCE_PROMPT = (
 )
 
 
-def _tool_call(
-    identifier: str, name: str, arguments: dict[str, object]
-) -> Message:
+def _tool_call(identifier: str, name: str, arguments: dict[str, object]) -> Message:
     return Message(
         role="assistant",
         content=[TextContent(text="")],
@@ -91,11 +93,8 @@ def _scripted_responses(repository: Path) -> list[Message | Exception]:
             {
                 "command": "str_replace",
                 "path": str(report),
-                "old_str": (
-                    "    del input_sha256\n"
-                    "    return \"\\n\".join("
-                ),
-                "new_str": "    return \"\\n\".join(",
+                "old_str": ('    del input_sha256\n    return "\\n".join('),
+                "new_str": '    return "\\n".join(',
             },
         ),
         _tool_call(
@@ -104,12 +103,9 @@ def _scripted_responses(repository: Path) -> list[Message | Exception]:
             {
                 "command": "str_replace",
                 "path": str(report),
-                "old_str": (
-                    '            f"Model: {summary[\'model_version\']}",\n'
-                    '            "",'
-                ),
+                "old_str": ('            f"Model: {summary[\'model_version\']}",\n            "",'),
                 "new_str": (
-                    '            f"Model: {summary[\'model_version\']}",\n'
+                    "            f\"Model: {summary['model_version']}\",\n"
                     '            f"Input SHA-256: {input_sha256}",\n'
                     '            "",'
                 ),
@@ -118,9 +114,7 @@ def _scripted_responses(repository: Path) -> list[Message | Exception]:
         _tool_call(
             "run-checks",
             "terminal",
-            {
-                "command": "python scripts/check.py"
-            },
+            {"command": "python scripts/check.py"},
         ),
         _tool_call(
             "delegate-review",
@@ -196,7 +190,8 @@ def _start_through_http(
 
 
 def test_repository_agent_repairs_validates_and_delegates_end_to_end(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv(
         "PATH",
@@ -266,21 +261,114 @@ def test_repository_agent_repairs_validates_and_delegates_end_to_end(
     assert all(row["diff"] and not row["uncertain"] for row in changes["files"])
     assert changes["run_id"] == str(run_id)
     started_actions = {
-        str(event.payload["action_id"])
-        for event in activity
-        if event.kind == "tool_call_started"
+        str(event.payload["action_id"]) for event in activity if event.kind == "tool_call_started"
     }
-    completed_tools = [
-        event for event in activity if event.kind == "tool_call_completed"
-    ]
-    assert started_actions == {
-        str(event.payload["action_id"]) for event in completed_tools
-    }
+    completed_tools = [event for event in activity if event.kind == "tool_call_completed"]
+    assert started_actions == {str(event.payload["action_id"]) for event in completed_tools}
     assert len(started_actions) == len(completed_tools)
     assert any("Ran 5 tests" in str(event.payload) for event in completed_tools), [
         event.payload for event in completed_tools
     ]
     assert any(event.payload.get("task_id") for event in completed_tools)
+    assert llm.remaining_responses == 0
+
+
+def test_repository_agent_prepares_executes_and_opens_canonical_tcad_result(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "empty-tcad-research"
+    repository.mkdir()
+    spec_payload = yaml.safe_load((PROJECT_ROOT / "examples/pn-junction.yaml").read_text())
+    spec = ExperimentSpec.model_validate(spec_payload)
+    prepared = ExperimentEngine().prepare(spec, "devsim")
+    result_path = repository / "runs/run-agent-acceptance/results/canonical.json"
+    llm = TestLLM.from_messages(
+        [
+            _tool_call(
+                "prepare-experiment",
+                "tcad_domain",
+                {
+                    "operation": "prepare_experiment",
+                    "payload": spec_payload,
+                    "backend": "devsim",
+                },
+            ),
+            _tool_call(
+                "execute-experiment",
+                "tcad_domain",
+                {
+                    "operation": "execute_experiment",
+                    "payload": {
+                        "prepared": prepared.model_dump(mode="json"),
+                        "approved_plan_digest": prepared.plan_digest,
+                        "timeout_seconds": 120,
+                        "run_id": "run-agent-acceptance",
+                    },
+                },
+            ),
+            _tool_call(
+                "inspect-canonical-result",
+                "file_editor",
+                {"command": "view", "path": str(result_path)},
+            ),
+            Message(
+                role="assistant",
+                content=[
+                    TextContent(
+                        text=(
+                            "The approved DEVSIM experiment completed and its canonical "
+                            "result passed deterministic validation."
+                        )
+                    )
+                ],
+            ),
+        ]
+    )
+    services = _services(tmp_path)
+    supervisor = AgentSupervisor(
+        services,
+        OpenHandsRuntimeFactory(services.runtime_root, llm=llm),
+    )
+    web = TestClient(create_app(ide=services, agent_supervisor=supervisor))
+    workspace = web.post("/api/workspaces", json={"path": str(repository)}).json()
+    session_url = f"/api/workspaces/{workspace['id']}/session"
+    conversation = web.post(session_url).json()
+    message = web.post(
+        f"{session_url}/messages",
+        json={
+            "content": (
+                "Run a small equilibrium silicon junction study with DEVSIM, validate "
+                "the result, and inspect the canonical scientific evidence."
+            )
+        },
+    ).json()
+    started = web.post(f"{session_url}/runs", json={"message_id": message["id"]}).json()
+    run_id = UUID(str(started["id"]))
+
+    supervisor.join(run_id, timeout=30)
+    waiting = services.store.get_run(run_id)
+    assert waiting.state is RunState.WAITING_FOR_APPROVAL
+    approvals = web.get(f"{session_url}/approvals").json()
+    assert len(approvals) == 1
+    approval = approvals[0]
+    assert approval["permission_category"] == "simulation_execution"
+    resolved = web.post(
+        f"/api/approvals/{approval['id']}/approve-category",
+        json={"expected_revision": approval["revision"]},
+    )
+    assert resolved.status_code == 200, resolved.text
+    supervisor.join(run_id, timeout=60)
+
+    assert services.store.get_run(run_id).state is RunState.COMPLETED
+    view = WorkspaceResultReader().read(
+        repository, "runs/run-agent-acceptance/results/canonical.json"
+    )
+    assert view.result.backend == "devsim"
+    assert view.validation.overall == "passed"
+    messages = web.get(f"{session_url}/messages").json()
+    assert messages[-1]["role"] == "assistant"
+    assert "passed deterministic validation" in messages[-1]["content"]
+    assert UUID(str(conversation["id"])) == services.sessions.current().id
     assert llm.remaining_responses == 0
 
 
@@ -316,15 +404,11 @@ def test_live_bedrock_repository_agent_is_opt_in(
         if state in terminal_states:
             break
         assert state is RunState.WAITING_FOR_APPROVAL
-        approvals = web.get(
-            f"/api/workspaces/{workspace['id']}/session/approvals"
-        ).json()
+        approvals = web.get(f"/api/workspaces/{workspace['id']}/session/approvals").json()
         assert approvals, "waiting run must expose its pending approval"
         approval = approvals[0]
         category = PermissionCategory(approval["permission_category"])
-        endpoint = (
-            "approve-category" if is_run_grantable(category) else "approve"
-        )
+        endpoint = "approve-category" if is_run_grantable(category) else "approve"
         resolved = web.post(
             f"/api/approvals/{approval['id']}/{endpoint}",
             json={"expected_revision": approval["revision"]},

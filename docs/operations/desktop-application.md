@@ -38,7 +38,7 @@ The packaged DEVSIM runner is fixed and reviewed. It accepts a compiler-produced
 
 ## Local data and session lifecycle
 
-Agent Kronig keeps settings, protected credentials, update configuration, request records, and startup logs in the normal per-user application-data directory:
+Agent Kronig keeps settings, protected credentials, update configuration, and startup logs in the normal per-user application-data directory:
 
 | System | Default application-data location |
 | --- | --- |
@@ -106,6 +106,6 @@ If the application does not start:
 2. Start it again and use Retry if the recovery window appears.
 3. Inspect the sanitized startup log shown in that window.
 4. Confirm that security software has not quarantined a signed sidecar.
-5. Preserve the application-data directory before attempting repair if settings, protected credentials, or request records are needed.
+5. Preserve the application-data directory before attempting repair if settings or protected credentials are needed.
 
 Uninstall the application through the operating system package manager or by removing the application bundle. Uninstallation does not delete a selected repository or artifacts stored inside it. It also does not automatically delete persistent per-user settings and credentials. Agent chat and activity cannot be restored across launches or reinstallations because they are intentionally ephemeral. Remove the application-data directory separately only when its persistent contents are no longer needed and a backup has been taken.

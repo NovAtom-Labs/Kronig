@@ -6,9 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 import tcad_agent.desktop.server as desktop_server
-from tcad_agent.control.models import RequestState, ResearchRequest
-from tcad_agent.control.service import ControlService
-from tcad_agent.control.store import SqliteRequestStore
 from tcad_agent.desktop.auth import DesktopAuth
 from tcad_agent.desktop.config import DesktopLaunchConfig
 from tcad_agent.desktop.server import (
@@ -22,7 +19,6 @@ from tcad_agent.ide.events import EventFeed
 from tcad_agent.ide.models import AgentRunRecord, ApprovalDecision, RunState
 from tcad_agent.ide.store import IDEStoreError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
-from tcad_agent.model_gateway.base import ScriptedModelGateway
 from tcad_agent.web.app import create_app
 from tcad_agent.web.ide_routes import IDEServices
 
@@ -280,28 +276,6 @@ def test_desktop_shutdown_allows_persisted_approval_wait(tmp_path: Path) -> None
     assert response.json() == {"ready": True}
 
 
-def test_desktop_status_includes_active_simulation_request(tmp_path: Path) -> None:
-    store = SqliteRequestStore(tmp_path / "requests.sqlite3")
-    record = store.create(ResearchRequest(prompt="Run the reviewed experiment"))
-    for state in (
-        RequestState.SPEC_DRAFTED,
-        RequestState.SPEC_VALIDATED,
-        RequestState.USER_CONFIRMATION_REQUIRED,
-        RequestState.COMPILED,
-        RequestState.RUNNING,
-    ):
-        record = store.transition(record.id, record.revision, state, {})
-    control = ControlService(
-        store=store,
-        gateway=ScriptedModelGateway(()),
-        workspace=tmp_path / "workspace",
-    )
-
-    response = TestClient(create_app(control=control)).get("/api/desktop/status")
-
-    assert response.json() == {"active": True}
-
-
 def test_desktop_shutdown_cancels_active_workspace_session(tmp_path: Path) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     events = EventFeed(store)
@@ -439,33 +413,3 @@ def test_desktop_shutdown_refuses_to_delete_session_while_runtime_stops(
     }
     assert services.sessions.current() == session
     assert store.get_conversation(session.id).id == session.id
-
-
-def test_desktop_shutdown_still_refuses_active_simulation_request(
-    tmp_path: Path,
-) -> None:
-    request_store = SqliteRequestStore(tmp_path / "requests.sqlite3")
-    record = request_store.create(ResearchRequest(prompt="Run the reviewed experiment"))
-    for state in (
-        RequestState.SPEC_DRAFTED,
-        RequestState.SPEC_VALIDATED,
-        RequestState.USER_CONFIRMATION_REQUIRED,
-        RequestState.COMPILED,
-        RequestState.RUNNING,
-    ):
-        record = request_store.transition(record.id, record.revision, state, {})
-    control = ControlService(
-        store=request_store,
-        gateway=ScriptedModelGateway(()),
-        workspace=tmp_path / "workspace",
-    )
-    token = "desktop-token-" + "s" * 32
-    response = TestClient(
-        create_app(control=control, desktop_auth=DesktopAuth(token))
-    ).post(
-        "/api/desktop/prepare-shutdown",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 409
-    assert response.json()["code"] == "desktop_work_active"
