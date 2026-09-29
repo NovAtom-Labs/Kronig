@@ -27,6 +27,4 @@ This gate is closed for the reviewed one-dimensional Boltzmann thermionic-emissi
 
 ## Spatial temperature profiles
 
-The reviewed runtime uses a scalar lattice temperature to construct material parameters, carrier statistics, recombination, mobility, contacts, and initialization consistently. A position-dependent prescribed temperature would require those quantities to become compatible node and edge models. Solving temperature would additionally require thermal transport, which is explicitly outside this expansion.
-
-Spatial temperature profiles remain a research gate. Scalar temperature and isolated temperature studies remain supported and benchmarked.
+This gate is closed for prescribed positive silicon temperature profiles inside the reviewed one-dimensional Boltzmann DC envelope. Local equations, compatibility refusals, provenance, and benchmarks are recorded in `devsim-spatial-temperature.md`. Heat-flow solution and the listed unbenchmarked combinations remain explicit exclusions.

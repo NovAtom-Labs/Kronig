@@ -173,6 +173,7 @@ class PhysicsPayload(_PayloadModel):
         ...,
     ] = ()
     temperature_k: float = Field(gt=0)
+    temperature_profiles: tuple[dict[str, object], ...] = ()
     parameter_set_id: str = Field(
         default="novatom.silicon.baseline.2026-09-29.v1",
         min_length=1,

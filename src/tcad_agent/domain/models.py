@@ -12,6 +12,7 @@ from tcad_agent.domain.profiles import (
     Profile1D,
     ProfileSpecies,
     TabulatedProfile,
+    TemperatureProfile1D,
 )
 from tcad_agent.domain.studies import DCStudy, EquilibriumStudy, Study1D
 from tcad_agent.domain.units import QuantityValue
@@ -107,6 +108,7 @@ class Observable(StrEnum):
     SURFACE_RECOMBINATION_RATE = "surface_recombination_rate"
     INTERFACE_TRAP_OCCUPANCY = "interface_trap_occupancy"
     FIXED_CHARGE_DENSITY = "fixed_charge_density"
+    LATTICE_TEMPERATURE = "lattice_temperature"
 
 
 class MeshAnchor1D(StrictModel):
@@ -335,6 +337,7 @@ class PhysicsSelection(StrictModel):
     temperature: QuantityValue = Field(
         default_factory=lambda: QuantityValue.model_validate("300 K")
     )
+    temperature_profiles: tuple[TemperatureProfile1D, ...] = ()
 
     @field_validator("temperature")
     @classmethod
@@ -372,6 +375,9 @@ class PhysicsSelection(StrictModel):
         )
         if any(value is not None for value in lifetime_values) and "srh" not in self.models:
             raise ValueError("carrier lifetimes require the srh model")
+        profile_regions = [profile.region for profile in self.temperature_profiles]
+        if len(profile_regions) != len(set(profile_regions)):
+            raise ValueError("temperature profiles must have unique regions")
         return self
 
 
@@ -427,6 +433,14 @@ class ExperimentSpec(StrictModel):
         if unknown_regions:
             raise ValueError(f"profiles reference unknown regions: {sorted(unknown_regions)}")
         regions_by_id = {region.id: region for region in self.regions}
+        unknown_temperature_regions = {
+            profile.region for profile in self.physics.temperature_profiles
+        } - set(region_ids)
+        if unknown_temperature_regions:
+            raise ValueError(
+                "temperature profiles reference unknown regions: "
+                f"{sorted(unknown_temperature_regions)}"
+            )
         for profile in self.profiles:
             region = regions_by_id[profile.region]
             coordinates: tuple[QuantityValue, ...] = ()

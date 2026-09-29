@@ -160,3 +160,59 @@ Profile1D = Annotated[
     | PiecewiseConstantProfile,
     Field(discriminator="kind"),
 ]
+
+
+def _temperature(value: QuantityValue) -> QuantityValue:
+    value.require("K", "temperature")
+    if value.to("K") <= 0:
+        raise ValueError("temperature must be positive")
+    return value
+
+
+class ConstantTemperatureProfile(_DomainModel):
+    kind: Literal["constant"]
+    region: str
+    value: QuantityValue
+
+    _validate_value = field_validator("value")(_temperature)
+
+
+class LinearTemperatureProfile(_DomainModel):
+    kind: Literal["linear"]
+    region: str
+    start_value: QuantityValue
+    end_value: QuantityValue
+
+    _validate_values = field_validator("start_value", "end_value")(_temperature)
+
+
+class TabulatedTemperatureProfile(_DomainModel):
+    kind: Literal["tabulated"]
+    region: str
+    positions: tuple[QuantityValue, ...] = Field(min_length=2, max_length=10000)
+    values: tuple[QuantityValue, ...] = Field(min_length=2, max_length=10000)
+    interpolation: Literal["linear"] = "linear"
+
+    _validate_positions = field_validator("positions")(
+        lambda values: tuple(_length(value) for value in values)
+    )
+    _validate_values = field_validator("values")(
+        lambda values: tuple(_temperature(value) for value in values)
+    )
+
+    @model_validator(mode="after")
+    def validate_points(self) -> Self:
+        if len(self.positions) != len(self.values):
+            raise ValueError("temperature positions and values must have equal length")
+        coordinates = [position.to("m") for position in self.positions]
+        if any(right <= left for left, right in pairwise(coordinates)):
+            raise ValueError("temperature positions must be strictly increasing")
+        return self
+
+
+TemperatureProfile1D = Annotated[
+    ConstantTemperatureProfile
+    | LinearTemperatureProfile
+    | TabulatedTemperatureProfile,
+    Field(discriminator="kind"),
+]

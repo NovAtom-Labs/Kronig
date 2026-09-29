@@ -284,6 +284,27 @@ def _sum_expressions(expressions: list[str]) -> str:
     return "+".join(f"({expression})" for expression in expressions) or "0"
 
 
+def _temperature_expression(profile: dict[str, Any], region: dict[str, Any]) -> str:
+    if profile["kind"] == "constant":
+        return f"{float(profile['value_k']):.17e}"
+    if profile["kind"] == "linear":
+        width = float(region["x1_cm"]) - float(region["x0_cm"])
+        delta = float(profile["end_k"]) - float(profile["start_k"])
+        return (
+            f"{float(profile['start_k']):.17e}+"
+            f"((x-{float(region['x0_cm']):.17e})/{width:.17e})*{delta:.17e}"
+        )
+    positions = profile["positions_cm"]
+    values = profile["values_k"]
+    expression = f"{float(values[-1]):.17e}"
+    for index in range(len(positions) - 2, -1, -1):
+        x0, x1 = float(positions[index]), float(positions[index + 1])
+        y0, y1 = float(values[index]), float(values[index + 1])
+        segment = f"{y0:.17e}+(x-{x0:.17e})*{((y1-y0)/(x1-x0)):.17e}"
+        expression = f"ifelse(x < {x1:.17e}, {segment}, {expression})"
+    return expression
+
+
 def _contact_region(payload: dict[str, Any], location: str) -> dict[str, Any]:
     return cast(dict[str, Any], payload["regions"][0 if location == "x_min" else -1])
 
@@ -663,6 +684,10 @@ def main() -> int:
 
     temperature = payload["physics"]["temperature_k"]
     selected_models = set(payload["physics"]["models"])
+    temperature_profiles = {
+        profile["region"]: profile
+        for profile in payload["physics"].get("temperature_profiles", [])
+    }
     fermi_statistics = "fermi" in selected_models
     if fermi_statistics:
         set_parameter(device=device, name="FermiBlend", value=0.0)
@@ -739,6 +764,42 @@ def main() -> int:
                 ("vsat_h", 1.0e7),
             ):
                 set_parameter(device=device, region=name, name=parameter, value=value)
+            temperature_profile = temperature_profiles.get(name)
+            if temperature_profile is not None:
+                local_temperature = _temperature_expression(
+                    temperature_profile, region
+                )
+                CreateNodeModel(
+                    device, name, "LatticeTemperature", local_temperature
+                )
+                local_band_gap = (
+                    "1.17-4.73e-4*LatticeTemperature^2/"
+                    "(LatticeTemperature+636)"
+                )
+                local_nc = (
+                    f"{float(payload['physics']['effective_density_conduction_cm3']):.17e}*"
+                    "pow(LatticeTemperature/300, 1.5)"
+                )
+                local_nv = (
+                    f"{float(payload['physics']['effective_density_valence_cm3']):.17e}*"
+                    "pow(LatticeTemperature/300, 1.5)"
+                )
+                for local_name, expression in (
+                    ("V_t", "8.617333262145e-5*LatticeTemperature"),
+                    ("BandGap", local_band_gap),
+                    ("EffectiveDensityConduction", local_nc),
+                    ("EffectiveDensityValence", local_nv),
+                    (
+                        "n_i",
+                        "pow(EffectiveDensityConduction*EffectiveDensityValence,0.5)*"
+                        "exp(-BandGap/(2*V_t))",
+                    ),
+                    ("n1", "n_i"),
+                    ("p1", "n_i"),
+                    ("mu_n", "400*pow(LatticeTemperature/300, -2.42)"),
+                    ("mu_p", "200*pow(LatticeTemperature/300, -2.20)"),
+                ):
+                    CreateNodeModel(device, name, local_name, expression)
             donors = [
                 _profile_expression(profile, region)
                 for profile in by_region[name]
@@ -1379,6 +1440,33 @@ def main() -> int:
             )
             electron_mobility_model = "mu_n"
             hole_mobility_model = "mu_p"
+            thermal_voltage_edge_model = "V_t"
+            if name in temperature_profiles:
+                for local_model in ("V_t", "mu_n", "mu_p"):
+                    edge_from_node_model(
+                        device=device, region=name, node_model=local_model
+                    )
+                CreateEdgeModel(
+                    device,
+                    name,
+                    "LocalThermalVoltage",
+                    "0.5*(V_t@n0+V_t@n1)",
+                )
+                CreateEdgeModel(
+                    device,
+                    name,
+                    "LocalElectronMobility",
+                    "0.5*(mu_n@n0+mu_n@n1)",
+                )
+                CreateEdgeModel(
+                    device,
+                    name,
+                    "LocalHoleMobility",
+                    "0.5*(mu_p@n0+mu_p@n1)",
+                )
+                thermal_voltage_edge_model = "LocalThermalVoltage"
+                electron_mobility_model = "LocalElectronMobility"
+                hole_mobility_model = "LocalHoleMobility"
             if "klaassen_mobility" in selected_models:
                 Set_Mobility_Parameters(device, name)
                 Klaassen_Mobility(device, name)
@@ -1415,6 +1503,49 @@ def main() -> int:
                 electron_mobility_model,
                 hole_mobility_model,
             )
+            if name in temperature_profiles:
+                local_vdiff = (
+                    "(Potential@n0-Potential@n1)/LocalThermalVoltage"
+                )
+                CreateEdgeModel(device, name, "vdiff", local_vdiff)
+                CreateEdgeModelDerivatives(
+                    device, name, "vdiff", local_vdiff, "Potential"
+                )
+                local_bernoulli = "B(vdiff)"
+                CreateEdgeModel(device, name, "Bern01", local_bernoulli)
+                CreateEdgeModelDerivatives(
+                    device, name, "Bern01", local_bernoulli, "Potential"
+                )
+                local_electron_current = (
+                    "ElectronCharge*LocalElectronMobility*EdgeInverseLength*"
+                    "LocalThermalVoltage*kahan3(Electrons@n1*Bern01,"
+                    "Electrons@n1*vdiff,-Electrons@n0*Bern01)"
+                )
+                local_hole_current = (
+                    "-ElectronCharge*LocalHoleMobility*EdgeInverseLength*"
+                    "LocalThermalVoltage*kahan3(Holes@n1*Bern01,"
+                    "-Holes@n0*Bern01,-Holes@n0*vdiff)"
+                )
+                CreateEdgeModel(
+                    device, name, "ElectronCurrent", local_electron_current
+                )
+                for variable in ("Potential", "Electrons", "Holes"):
+                    CreateEdgeModelDerivatives(
+                        device,
+                        name,
+                        "ElectronCurrent",
+                        local_electron_current,
+                        variable,
+                    )
+                CreateEdgeModel(device, name, "HoleCurrent", local_hole_current)
+                for variable in ("Potential", "Electrons", "Holes"):
+                    CreateEdgeModelDerivatives(
+                        device,
+                        name,
+                        "HoleCurrent",
+                        local_hole_current,
+                        variable,
+                    )
             surface_volume_models: list[str] = []
             for interface_name, left, right in interface_names:
                 record = next(
@@ -1737,7 +1868,7 @@ def main() -> int:
                     "0.5*(Electrons@n0+Electrons@n1)*ElectricField"
                 )
                 electron_diffusion = (
-                    f"ElectronCharge*{electron_mobility_model}*V_t*"
+                    f"ElectronCharge*{electron_mobility_model}*{thermal_voltage_edge_model}*"
                     "(Electrons@n1-Electrons@n0)*EdgeInverseLength"
                 )
                 hole_drift = (
@@ -1745,7 +1876,7 @@ def main() -> int:
                     "0.5*(Holes@n0+Holes@n1)*ElectricField"
                 )
                 hole_diffusion = (
-                    f"-ElectronCharge*{hole_mobility_model}*V_t*"
+                    f"-ElectronCharge*{hole_mobility_model}*{thermal_voltage_edge_model}*"
                     "(Holes@n1-Holes@n0)*EdgeInverseLength"
                 )
                 for model_name, model_expression in (
@@ -2000,6 +2131,21 @@ def main() -> int:
                         )
                     ),
                     "C/cm^3",
+                    "node",
+                )
+            if "lattice_temperature" in requested and name in temperature_profiles:
+                _append_field(
+                    fields,
+                    "lattice_temperature",
+                    node_positions,
+                    list(
+                        get_node_model_values(
+                            device=device,
+                            region=name,
+                            name="LatticeTemperature",
+                        )
+                    ),
+                    "K",
                     "node",
                 )
             if region["material"] != "silicon":

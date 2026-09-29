@@ -22,12 +22,15 @@ from tcad_agent.domain.errors import CapabilityError
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.domain.profiles import (
     ConstantProfile,
+    ConstantTemperatureProfile,
     ErrorFunctionProfile,
     FixedChargeProfile,
     GaussianProfile,
     LinearProfile,
+    LinearTemperatureProfile,
     PiecewiseConstantProfile,
     TabulatedProfile,
+    TabulatedTemperatureProfile,
 )
 from tcad_agent.domain.studies import (
     ACStudy,
@@ -293,7 +296,38 @@ class DevsimAdapter:
                 ),
                 "version": "novatom.surface-physics.2026-09-29.v1",
             }
+        if spec.physics.temperature_profiles:
+            parameter_sources["prescribed_spatial_temperature"] = {
+                "source": (
+                    "Agent Kronig reviewed local-temperature silicon "
+                    "drift-diffusion formulation"
+                ),
+                "version": "novatom.spatial-temperature.2026-09-29.v1",
+            }
         mesh_anchors = self._mesh_anchor_payloads(spec, regions)
+        temperature_profiles: list[dict[str, object]] = []
+        for temperature_profile in spec.physics.temperature_profiles:
+            compiled: dict[str, object] = {
+                "kind": temperature_profile.kind,
+                "region": temperature_profile.region,
+            }
+            if isinstance(temperature_profile, LinearTemperatureProfile):
+                compiled.update(
+                    start_k=temperature_profile.start_value.to("K"),
+                    end_k=temperature_profile.end_value.to("K"),
+                )
+            elif isinstance(temperature_profile, TabulatedTemperatureProfile):
+                compiled.update(
+                    positions_cm=tuple(
+                        value.to("cm") for value in temperature_profile.positions
+                    ),
+                    values_k=tuple(
+                        value.to("K") for value in temperature_profile.values
+                    ),
+                )
+            elif isinstance(temperature_profile, ConstantTemperatureProfile):
+                compiled["value_k"] = temperature_profile.value.to("K")
+            temperature_profiles.append(compiled)
         return DevsimPayload.model_validate(
             {
                 "schema_version": "2.0",
@@ -307,6 +341,7 @@ class DevsimAdapter:
                     "equations": [str(value) for value in spec.physics.equations],
                     "models": list(spec.physics.models),
                     "temperature_k": spec.physics.temperature.to("K"),
+                    "temperature_profiles": temperature_profiles,
                     "parameter_set_id": SILICON_PARAMETER_SET_ID,
                     "parameter_sources": parameter_sources,
                     **material_parameters,

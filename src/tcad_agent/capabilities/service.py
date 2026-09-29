@@ -8,10 +8,12 @@ from tcad_agent.capabilities.models import (
 )
 from tcad_agent.domain.models import DCStudy, ExperimentSpec
 from tcad_agent.domain.studies import (
+    ACStudy,
     DCPointsStudy,
     FrequencyStudy,
     ParameterStudy,
     TemperatureStudy,
+    TransientStudy,
 )
 from tcad_agent.physics.parameters import REGISTERED_PARAMETERS
 from tcad_agent.physics.registry import PhysicsRegistry
@@ -123,6 +125,64 @@ class CapabilityService:
                     supported=("electron_continuity", "hole_continuity"),
                 )
             )
+        if spec.physics.temperature_profiles:
+            incompatible_models = {
+                "fermi",
+                "klaassen_mobility",
+                "high_field_saturation",
+            }.intersection(spec.physics.models)
+            silicon_schottky = any(
+                str(contact.kind) == "metal_work_function"
+                and spec.regions[
+                    0 if str(contact.location) == "x_min" else -1
+                ].material
+                == "silicon"
+                for contact in spec.contacts
+            )
+            dynamic_study = isinstance(
+                spec.study, (ACStudy, FrequencyStudy, TransientStudy, TemperatureStudy)
+            )
+            if incompatible_models or silicon_schottky or dynamic_study:
+                requested = sorted(incompatible_models)
+                if silicon_schottky:
+                    requested.append("schottky")
+                if dynamic_study:
+                    requested.append(spec.study.kind)
+                issues.append(
+                    CapabilityIssue(
+                        path="physics.temperature_profiles",
+                        code="incompatible_temperature_profile",
+                        message=(
+                            "prescribed spatial temperature is not benchmarked for "
+                            "the selected models or study"
+                        ),
+                        requested=",".join(requested),
+                        supported=(
+                            "boltzmann",
+                            "constant_mobility",
+                            "equilibrium",
+                            "dc",
+                            "dc_points",
+                        ),
+                    )
+                )
+            regions_by_id = {region.id: region for region in spec.regions}
+            for index, temperature_profile in enumerate(
+                spec.physics.temperature_profiles
+            ):
+                if regions_by_id[temperature_profile.region].material != "silicon":
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"physics.temperature_profiles[{index}]",
+                            code="incompatible_temperature_material",
+                            message=(
+                                "prescribed spatial temperature is currently "
+                                "benchmarked for silicon regions"
+                            ),
+                            requested=regions_by_id[temperature_profile.region].material,
+                            supported=("silicon",),
+                        )
+                    )
         self._check_many(
             issues,
             "regions.material",

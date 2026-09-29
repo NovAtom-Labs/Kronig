@@ -54,6 +54,7 @@ observables:
   - surface_recombination_rate
   - interface_trap_occupancy
   - fixed_charge_density
+  - lattice_temperature
 limits:
   max_bias_points: 10000
   max_regions: 32
