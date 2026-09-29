@@ -9,6 +9,7 @@ from openhands.sdk import LLM, Message, TextContent
 from pydantic import ValidationError
 
 from tcad_agent.agent.runtime import llm_from_environment
+from tcad_agent.capabilities.descriptors import CapabilityCatalogView
 from tcad_agent.prompting.models import (
     ClarificationAnswer,
     EvidenceExcerpt,
@@ -79,6 +80,7 @@ class OpenHandsPreparationModel:
         answers: Sequence[ClarificationAnswer],
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
+        capabilities: CapabilityCatalogView | None = None,
     ) -> PreparationDecision:
         payload = {
             "original_researcher_message": original_prompt,
@@ -87,6 +89,9 @@ class OpenHandsPreparationModel:
             ],
             "workspace_context": workspace.model_dump(mode="json"),
             "local_evidence": [item.model_dump(mode="json") for item in evidence],
+            "capability_catalog": (
+                capabilities.model_dump(mode="json") if capabilities is not None else None
+            ),
             "decision_schema": PreparationDecision.model_json_schema(),
         }
         messages = [
@@ -240,6 +245,9 @@ class OpenHandsPreparationModel:
             "researcher's objective and do not invent geometry, materials, dopants, "
             "concentrations, contacts, applied conditions, study bounds, fixed parameters, "
             "or deliverables. If one of those is essential and absent, return clarification. "
+            "Use the capability catalog as the authoritative bounded backend scope. "
+            "Ask about missing required researcher-owned inputs. Do not ask for expert "
+            "or platform-owned inputs when reviewed evidence or defaults authorize them. "
             "Ask only questions that materially affect correctness or feasibility, normally "
             "three to five and never more than seven. Each question must state what decision "
             "it controls. Do not ask questions when the request is already executable. "
@@ -274,6 +282,7 @@ class EnvironmentPreparationModel:
         answers: Sequence[ClarificationAnswer],
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
+        capabilities: CapabilityCatalogView | None = None,
     ) -> PreparationDecision:
         if self._resolved is None:
             try:
@@ -287,4 +296,5 @@ class EnvironmentPreparationModel:
             answers=answers,
             workspace=workspace,
             evidence=evidence,
+            capabilities=capabilities,
         )

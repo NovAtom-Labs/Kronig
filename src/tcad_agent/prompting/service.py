@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
+from tcad_agent.capabilities.descriptors import CapabilityCatalog, CapabilityCatalogView
 from tcad_agent.domain.models import StrictModel
 from tcad_agent.prompting.compiler import PromptCompiler
 from tcad_agent.prompting.context import LocalEvidenceCollector, WorkspaceContextCollector
@@ -27,6 +28,7 @@ class PreparationModel(Protocol):
         answers: Sequence[ClarificationAnswer],
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
+        capabilities: CapabilityCatalogView | None = None,
     ) -> PreparationDecision: ...
 
 
@@ -51,8 +53,9 @@ class ScriptedPreparationModel:
         answers: Sequence[ClarificationAnswer],
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
+        capabilities: CapabilityCatalogView | None = None,
     ) -> PreparationDecision:
-        del original_prompt, answers, workspace, evidence
+        del original_prompt, answers, workspace, evidence, capabilities
         if self._index >= len(self._decisions):
             raise RuntimeError("scripted preparation model has no remaining decision")
         decision = self._decisions[self._index]
@@ -69,12 +72,14 @@ class PromptPreparationService:
         evidence_collector: LocalEvidenceCollector,
         compiler: PromptCompiler,
         capability_hashes: Mapping[str, str],
+        capability_catalog: CapabilityCatalog | None = None,
     ) -> None:
         self.model = model
         self.workspace_collector = workspace_collector
         self.evidence_collector = evidence_collector
         self.compiler = compiler
         self.capability_hashes = dict(capability_hashes)
+        self.capability_catalog = capability_catalog
 
     def prepare(
         self,
@@ -92,6 +97,11 @@ class PromptPreparationService:
             answers=answers,
             workspace=workspace,
             evidence=evidence,
+            capabilities=(
+                self.capability_catalog.public_view()
+                if self.capability_catalog is not None
+                else None
+            ),
         )
         compiled = None
         if decision.status == "ready":
@@ -114,6 +124,8 @@ class PromptPreparationService:
 def build_default_prompt_preparation(project_root: Path) -> PromptPreparationService:
     """Compose production preprocessing from the same environment model settings."""
 
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
     from tcad_agent.knowledge.retrieve import KnowledgeIndex
     from tcad_agent.prompting.context import capability_hashes
     from tcad_agent.prompting.gateway import EnvironmentPreparationModel
@@ -129,4 +141,7 @@ def build_default_prompt_preparation(project_root: Path) -> PromptPreparationSer
         evidence_collector=LocalEvidenceCollector(KnowledgeIndex(index_path)),
         compiler=PromptCompiler(),
         capability_hashes=capability_hashes(project_root / "src" / "tcad_agent"),
+        capability_catalog=CapabilityCatalog.from_manifest(
+            CapabilityManifest.from_backend("devsim")
+        ),
     )
