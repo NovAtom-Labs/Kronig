@@ -90,4 +90,3 @@ def test_evidence_excerpt_is_hash_and_version_bearing() -> None:
     )
 
     assert excerpt.content_hash == "a" * 64
-

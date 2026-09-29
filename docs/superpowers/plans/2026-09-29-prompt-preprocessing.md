@@ -109,4 +109,3 @@ For at least one workflow, let OpenHands create the experiment files, run DEVSIM
 ## Task 10: Full verification and documentation
 
 Update architecture, README, installation, operations, and pilot acceptance documentation. Run Ruff, strict mypy, the complete Python suite, desktop Node tests, focused live Bedrock evaluations, and `git diff --check`. Perform a final repository scan for device-name branching, credentials, proprietary Sentaurus material, obsolete raw-prompt runtime calls, and duplicated preprocessing paths.
-

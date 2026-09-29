@@ -106,4 +106,3 @@ Activity shows concise phase events such as `Understanding request`, `Checking l
 - No test or production branch depends on a diode, MOS capacitor, MOSFET, or other named device.
 - Local evidence limits, origin rules, hashes, and question limits are enforced by deterministic tests.
 - A real configured Bedrock model completes an intake, clarification, compilation, OpenHands execution, DEVSIM run, canonical result creation, and Results Workbench read.
-

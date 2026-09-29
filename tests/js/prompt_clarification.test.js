@@ -35,4 +35,3 @@
   }
   assert(rejected, "blank required answer should be rejected");
 })();
-

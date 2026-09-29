@@ -34,4 +34,3 @@
 
   globalThis.AgentKronigClarification = {submission, view};
 })();
-

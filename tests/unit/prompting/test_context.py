@@ -69,4 +69,3 @@ def test_local_evidence_enforces_passage_and_character_budgets() -> None:
     assert len(evidence) == 3
     assert sum(len(item.content) for item in evidence) <= 700
     assert len({item.id for item in evidence}) == len(evidence)
-

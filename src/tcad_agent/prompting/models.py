@@ -162,4 +162,3 @@ class PromptPreparationRecord(StrictModel):
     revision: int = Field(ge=0)
     created_at: datetime
     updated_at: datetime
-

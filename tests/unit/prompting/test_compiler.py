@@ -147,4 +147,3 @@ def test_compiler_rejects_unknown_evidence_references() -> None:
             evidence=evidence(),
             capability_hashes={},
         )
-
