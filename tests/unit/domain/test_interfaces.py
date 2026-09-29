@@ -61,3 +61,38 @@ def test_every_material_boundary_requires_an_interface_record() -> None:
 
     with pytest.raises(ValidationError, match="interface record"):
         ExperimentSpec.model_validate(payload)
+
+
+def test_interface_accepts_unit_checked_surface_srh_and_acceptor_trap() -> None:
+    payload = stack()
+    payload["interfaces"][0].update(
+        {
+            "surface_electron_velocity": "1e4 cm/s",
+            "surface_hole_velocity": "2e4 cm/s",
+            "trap_density": "5e11 cm^-2",
+            "trap_energy": "0.15 eV",
+            "trap_type": "acceptor",
+        }
+    )
+
+    interface = ExperimentSpec.model_validate(payload).interfaces[0]
+
+    assert interface.surface_electron_velocity.to("cm/s") == pytest.approx(1e4)
+    assert interface.trap_density.to("cm^-2") == pytest.approx(5e11)
+    assert interface.trap_type == "acceptor"
+
+
+def test_surface_srh_requires_both_capture_velocities() -> None:
+    payload = stack()
+    payload["interfaces"][0]["surface_electron_velocity"] = "1e4 cm/s"
+
+    with pytest.raises(ValidationError, match="both electron and hole"):
+        ExperimentSpec.model_validate(payload)
+
+
+def test_interface_trap_requires_complete_single_level_definition() -> None:
+    payload = stack()
+    payload["interfaces"][0]["trap_density"] = "5e11 cm^-2"
+
+    with pytest.raises(ValidationError, match="trap density, energy, and type"):
+        ExperimentSpec.model_validate(payload)

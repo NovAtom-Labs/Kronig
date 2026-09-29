@@ -19,13 +19,7 @@ Primary sources:
 
 ## Surface recombination and interface traps
 
-The upstream test helpers demonstrate a low-level interface flux construction, but the pinned package does not provide a reviewed, parameterized semiconductor-dielectric surface-SRH model or an interface-trap occupancy model for this product contract. A complete implementation must define trap energy or distribution, capture parameters, charge-state convention, interface orientation, current signs, derivatives, units, and nonzero-bias benchmarks.
-
-These features remain research gates. Fixed interface charge remains supported because its displacement jump is independently benchmarked.
-
-Primary source:
-
-- https://github.com/devsim/devsim/blob/43b41ca845184c47e22b72d144db7e7db8509377/testing/test_common.py
+This gate is closed for explicit surface SRH and a single-level acceptor or donor trap in the reviewed one-dimensional envelope. Equations, charge convention, required researcher inputs, canonical outputs, and benchmark coverage are recorded in `devsim-surface-physics.md`. Trap distributions, tunneling, and frequency dispersion remain explicit exclusions.
 
 ## Direct metal-semiconductor Schottky transport
 

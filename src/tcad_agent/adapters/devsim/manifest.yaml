@@ -7,7 +7,7 @@ equations: [poisson, electron_continuity, hole_continuity]
 models: [boltzmann, fermi, constant_mobility, klaassen_mobility, high_field_saturation, srh, auger, slotboom_bgn]
 materials: [silicon, silicon_dioxide, generic_dielectric]
 profiles: [constant, fixed_charge, piecewise_constant, linear, gaussian, error_function, tabulated]
-interfaces: [continuity, fixed_charge]
+interfaces: [continuity, fixed_charge, surface_srh, interface_trap]
 contacts: [ohmic, ideal_gate, metal_work_function, insulating]
 studies: [equilibrium, dc, dc_points, ac, frequency, transient, temperature, parameter]
 observables:
@@ -46,6 +46,8 @@ observables:
   - terminal_electron_current
   - terminal_hole_current
   - interface_charge_density
+  - surface_recombination_rate
+  - interface_trap_occupancy
   - fixed_charge_density
 limits:
   max_bias_points: 10000

@@ -1179,7 +1179,8 @@ def main() -> int:
         CreateSiliconOxideInterface(device, interface)
 
     def apply_fixed_interface_charge(*, coupled_transport: bool) -> None:
-        for interface, left, _right in interface_names:
+        extra_by_region: dict[str, list[str]] = {}
+        for interface, left, right in interface_names:
             record = next(
                 (
                     item
@@ -1190,23 +1191,29 @@ def main() -> int:
             )
             if record is None:
                 continue
-            sheet_density = record.get("fixed_charge_cm2")
-            if sheet_density in {None, 0.0}:
-                continue
             region = left["id"]
             boundary = left["x1_cm"]
             tolerance = max(left["mesh_spacing_cm"] * 1e-6, 1e-20)
             interface_mask = (
                 f"ifelse(abs(x-{boundary:.17g}) < {tolerance:.17g}, 1, 0)"
             )
-            CreateNodeModel(device, region, "FixedInterfaceMask", interface_mask)
-            fixed_charge = (
-                f"ElectronCharge*{float(sheet_density):.17e}/NodeVolume*"
-                "FixedInterfaceMask"
-            )
-            CreateNodeModel(
-                device, region, "FixedInterfaceChargeVolume", fixed_charge
-            )
+            mask_name = f"InterfaceMask_{interface}"
+            CreateNodeModel(device, region, mask_name, interface_mask)
+            sheet_density = record.get("fixed_charge_cm2")
+            if sheet_density not in {None, 0.0}:
+                fixed_name = f"FixedInterfaceChargeVolume_{interface}"
+                fixed_charge = (
+                    f"ElectronCharge*{float(sheet_density):.17e}/NodeVolume*"
+                    f"{mask_name}"
+                )
+                CreateNodeModel(device, region, fixed_name, fixed_charge)
+                extra_by_region.setdefault(region, []).append(fixed_name)
+            trap_name = f"InterfaceTrapChargeVolume_{interface}"
+            if coupled_transport and record.get("trap_density_cm2") is not None:
+                silicon = left if left["material"] == "silicon" else right
+                extra_by_region.setdefault(silicon["id"], []).append(trap_name)
+        for region, extra_models in extra_by_region.items():
+            left = next(item for item in regions if item["id"] == region)
             base: str | None
             if left["material"] == "silicon":
                 base = (
@@ -1225,9 +1232,9 @@ def main() -> int:
                 )
                 update = "default"
             combined = (
-                f"{base}+FixedInterfaceChargeVolume"
+                "+".join((base, *extra_models))
                 if base is not None
-                else "FixedInterfaceChargeVolume"
+                else "+".join(extra_models)
             )
             CreateNodeModel(device, region, "PotentialChargeWithInterface", combined)
             CreateNodeModelDerivative(
@@ -1236,6 +1243,7 @@ def main() -> int:
                 "PotentialChargeWithInterface",
                 combined,
                 "Potential",
+                *(("Electrons", "Holes") if coupled_transport else ()),
             )
             equation(
                 device=device,
@@ -1407,6 +1415,135 @@ def main() -> int:
                 electron_mobility_model,
                 hole_mobility_model,
             )
+            surface_volume_models: list[str] = []
+            for interface_name, left, right in interface_names:
+                record = next(
+                    (
+                        item
+                        for item in payload["interfaces"]
+                        if item["id"] == interface_name
+                    ),
+                    None,
+                )
+                if record is None:
+                    continue
+                if record.get("surface_electron_velocity_cm_s") is None and record.get(
+                    "trap_density_cm2"
+                ) is None:
+                    continue
+                silicon = left if left["material"] == "silicon" else right
+                if silicon["id"] != name:
+                    continue
+                boundary = (
+                    silicon["x1_cm"]
+                    if silicon is left
+                    else silicon["x0_cm"]
+                )
+                tolerance = max(float(silicon["mesh_spacing_cm"]) * 1e-6, 1e-20)
+                mask_name = f"SurfaceMask_{interface_name}"
+                CreateNodeModel(
+                    device,
+                    name,
+                    mask_name,
+                    f"ifelse(abs(x-{float(boundary):.17g}) < {tolerance:.17g}, 1, 0)",
+                )
+                trap_energy = float(record.get("trap_energy_ev") or 0.0)
+                electron_capture = float(
+                    record.get("surface_electron_velocity_cm_s") or 1.0
+                )
+                hole_capture = float(
+                    record.get("surface_hole_velocity_cm_s") or 1.0
+                )
+                electron_trap_density = (
+                    f"EffectiveIntrinsicDensity*exp({trap_energy:.17e}/V_t)"
+                )
+                hole_trap_density = (
+                    f"EffectiveIntrinsicDensity*exp(-{trap_energy:.17e}/V_t)"
+                )
+                denominator = (
+                    f"(Electrons+({electron_trap_density}))/{hole_capture:.17e}+"
+                    f"(Holes+({hole_trap_density}))/{electron_capture:.17e}"
+                )
+                sheet_name = f"SurfaceRecombinationSheet_{interface_name}"
+                sheet_expression = (
+                    "(Electrons*Holes-EffectiveIntrinsicDensity^2)/"
+                    f"({denominator})"
+                )
+                CreateNodeModel(device, name, sheet_name, sheet_expression)
+                CreateNodeModelDerivative(
+                    device,
+                    name,
+                    sheet_name,
+                    sheet_expression,
+                    "Electrons",
+                    "Holes",
+                )
+                volume_name = f"SurfaceRecombinationVolume_{interface_name}"
+                volume_expression = f"{sheet_name}*{mask_name}/NodeVolume"
+                CreateNodeModel(device, name, volume_name, volume_expression)
+                CreateNodeModelDerivative(
+                    device,
+                    name,
+                    volume_name,
+                    volume_expression,
+                    "Electrons",
+                    "Holes",
+                )
+                if record.get("surface_electron_velocity_cm_s") is not None:
+                    surface_volume_models.append(volume_name)
+                if record.get("trap_density_cm2") is not None:
+                    occupancy_name = f"InterfaceTrapOccupancy_{interface_name}"
+                    occupancy = (
+                        f"({electron_capture:.17e}*Electrons+"
+                        f"{hole_capture:.17e}*({hole_trap_density}))/"
+                        f"({electron_capture:.17e}*(Electrons+({electron_trap_density}))+"
+                        f"{hole_capture:.17e}*(Holes+({hole_trap_density})))"
+                    )
+                    CreateNodeModel(device, name, occupancy_name, occupancy)
+                    CreateNodeModelDerivative(
+                        device,
+                        name,
+                        occupancy_name,
+                        occupancy,
+                        "Electrons",
+                        "Holes",
+                    )
+                    sheet_charge_name = f"InterfaceTrapChargeSheet_{interface_name}"
+                    density = float(record["trap_density_cm2"])
+                    charge_state = (
+                        f"-{occupancy_name}"
+                        if record["trap_type"] == "acceptor"
+                        else f"(1-{occupancy_name})"
+                    )
+                    sheet_charge = (
+                        f"ElectronCharge*{density:.17e}*{charge_state}"
+                    )
+                    CreateNodeModel(
+                        device, name, sheet_charge_name, sheet_charge
+                    )
+                    CreateNodeModelDerivative(
+                        device,
+                        name,
+                        sheet_charge_name,
+                        sheet_charge,
+                        "Electrons",
+                        "Holes",
+                    )
+                    trap_volume_name = f"InterfaceTrapChargeVolume_{interface_name}"
+                    trap_volume = (
+                        f"{sheet_charge_name}*{mask_name}/NodeVolume"
+                    )
+                    CreateNodeModel(
+                        device, name, trap_volume_name, trap_volume
+                    )
+                    CreateNodeModelDerivative(
+                        device,
+                        name,
+                        trap_volume_name,
+                        trap_volume,
+                        "Electrons",
+                        "Holes",
+                    )
             if name in regions_with_fixed_bulk:
                 potential_charge_with_bulk = "PotentialNodeCharge+FixedBulkCharge"
                 CreateNodeModel(
@@ -1443,7 +1580,9 @@ def main() -> int:
             CreateNodeModelDerivative(
                 device, name, "UAuger", auger_expression, "Electrons", "Holes"
             )
-            total_recombination = "USRH+UAuger"
+            total_recombination = "+".join(
+                ("USRH", "UAuger", *surface_volume_models)
+            )
             CreateNodeModel(
                 device, name, "TotalRecombination", total_recombination
             )
@@ -1558,32 +1697,34 @@ def main() -> int:
                     "Holes@n0/EffectiveDensityValence))"
                 )
                 hole_energy_n1 = hole_energy_n0.replace("@n0", "@n1")
-                electron_current = (
+                electron_current_expression = (
                     f"ElectronCharge*{electron_mobility_model}*"
                     "0.5*(Electrons@n0+Electrons@n1)*EdgeInverseLength*"
                     f"(({electron_energy_n1})-({electron_energy_n0}))"
                 )
-                hole_current = (
+                hole_current_expression = (
                     f"ElectronCharge*{hole_mobility_model}*"
                     "0.5*(Holes@n0+Holes@n1)*EdgeInverseLength*"
                     f"(({hole_energy_n1})-({hole_energy_n0}))"
                 )
-                CreateEdgeModel(device, name, "ElectronCurrent", electron_current)
+                CreateEdgeModel(
+                    device, name, "ElectronCurrent", electron_current_expression
+                )
                 for variable in ("Potential", "Electrons", "Holes"):
                     CreateEdgeModelDerivatives(
                         device,
                         name,
                         "ElectronCurrent",
-                        electron_current,
+                        electron_current_expression,
                         variable,
                     )
-                CreateEdgeModel(device, name, "HoleCurrent", hole_current)
+                CreateEdgeModel(device, name, "HoleCurrent", hole_current_expression)
                 for variable in ("Potential", "Electrons", "Holes"):
                     CreateEdgeModelDerivatives(
                         device,
                         name,
                         "HoleCurrent",
-                        hole_current,
+                        hole_current_expression,
                         variable,
                     )
         for contact in payload["contacts"]:
@@ -1677,7 +1818,9 @@ def main() -> int:
                     * temperature**2
                     / (elementary_charge * valence_density)
                 )
-                endpoint = "n0" if contact["location"] == "x_min" else "n1"
+                contact_endpoint = (
+                    "n0" if contact["location"] == "x_min" else "n1"
+                )
                 for variable, equation_name, target, velocity, current_model in (
                     (
                         "Electrons",
@@ -1697,13 +1840,13 @@ def main() -> int:
                     flux_name = f"{backend_contact}_{variable.lower()}_thermionic"
                     flux = (
                         f"ElectronCharge*{velocity:.17e}*"
-                        f"({variable}@{endpoint}-{target:.17e})"
+                        f"({variable}@{contact_endpoint}-{target:.17e})"
                     )
                     CreateEdgeModel(device, region_name, flux_name, flux)
                     CreateEdgeModelDerivatives(
                         device, region_name, flux_name, flux, variable
                     )
-                    options: dict[str, Any] = {
+                    schottky_options: dict[str, Any] = {
                         "device": device,
                         "contact": backend_contact,
                         "name": equation_name,
@@ -1711,8 +1854,10 @@ def main() -> int:
                         "edge_current_model": current_model,
                     }
                     if is_circuit_study and contact["id"] == study["contact"]:
-                        options["circuit_node"] = GetContactBiasName(backend_contact)
-                    contact_equation(**options)
+                        schottky_options["circuit_node"] = GetContactBiasName(
+                            backend_contact
+                        )
+                    contact_equation(**schottky_options)
         for interface, left, right in interface_names:
             if left["material"] == right["material"] == "silicon":
                 for variable, equation_name in (
@@ -1983,12 +2128,12 @@ def main() -> int:
                             centering,
                         )
                 if "total_current_density" in requested:
-                    electron_current = list(
+                    electron_current_values = list(
                         get_edge_model_values(
                             device=device, region=name, name="ElectronCurrent"
                         )
                     )
-                    hole_current = list(
+                    hole_current_values = list(
                         get_edge_model_values(
                             device=device, region=name, name="HoleCurrent"
                         )
@@ -2000,7 +2145,9 @@ def main() -> int:
                         [
                             electron + hole
                             for electron, hole in zip(
-                                electron_current, hole_current, strict=True
+                                electron_current_values,
+                                hole_current_values,
+                                strict=True,
                             )
                         ],
                         "A/cm^2",
@@ -2383,7 +2530,7 @@ def main() -> int:
     fields = extract_fields()
     field_sweeps: dict[str, dict[str, Any]] = {}
     for name, field in fields.items():
-        values: list[float] = []
+        sweep_values: list[float] = []
         validity: list[bool] = []
         for sample in field_samples:
             sampled_field = sample["fields"].get(name)
@@ -2393,11 +2540,11 @@ def main() -> int:
                 or len(sampled_field["values"]) != len(field["values"])
             ):
                 raise ValueError(f"field topology changed during study: {name}")
-            values.extend(sampled_field["values"])
+            sweep_values.extend(sampled_field["values"])
             validity.extend([bool(sample["valid"])] * len(sampled_field["values"]))
         field_sweeps[name] = {
             "positions_cm": field["positions_cm"],
-            "values": values,
+            "values": sweep_values,
             "validity": validity,
             "unit": field["unit"],
             "centering": field["centering"],
@@ -2425,6 +2572,48 @@ def main() -> int:
                 "centering": field["centering"],
             }
 
+    interface_charge_densities: dict[str, float] = {}
+    interface_surface_rates: dict[str, float] = {}
+    interface_trap_occupancies: dict[str, float] = {}
+    for interface, left, right in interface_names:
+        record = next(
+            (
+                item
+                for item in payload["interfaces"]
+                if item["id"] == interface
+            ),
+            None,
+        )
+        if record is None:
+            continue
+        charge = 1.602176634e-19 * float(record.get("fixed_charge_cm2") or 0.0)
+        silicon = left if left["material"] == "silicon" else right
+        interface_endpoint = -1 if silicon is left else 0
+        if record.get("trap_density_cm2") is not None:
+            charge += float(
+                get_node_model_values(
+                    device=device,
+                    region=silicon["id"],
+                    name=f"InterfaceTrapChargeSheet_{interface}",
+                )[interface_endpoint]
+            )
+            interface_trap_occupancies[interface] = float(
+                get_node_model_values(
+                    device=device,
+                    region=silicon["id"],
+                    name=f"InterfaceTrapOccupancy_{interface}",
+                )[interface_endpoint]
+            )
+        if record.get("surface_electron_velocity_cm_s") is not None:
+            interface_surface_rates[interface] = float(
+                get_node_model_values(
+                    device=device,
+                    region=silicon["id"],
+                    name=f"SurfaceRecombinationSheet_{interface}",
+                )[interface_endpoint]
+            )
+        interface_charge_densities[interface] = charge
+
     result = {
         "schema_version": "2.0",
         "simulator_version": devsim.__version__,
@@ -2439,11 +2628,9 @@ def main() -> int:
             for contact in payload["contacts"]
             if contact["kind"] != "insulating" and contact.get("area_m2") is not None
         },
-        "interface_charge_densities_c_per_cm2": {
-            interface["id"]: 1.602176634e-19
-            * float(interface.get("fixed_charge_cm2") or 0.0)
-            for interface in payload["interfaces"]
-        },
+        "interface_charge_densities_c_per_cm2": interface_charge_densities,
+        "interface_surface_recombination_cm2_s": interface_surface_rates,
+        "interface_trap_occupancies": interface_trap_occupancies,
         "requested_observables": payload["observables"],
         "sign_convention": payload["sign_convention"],
         "parameter_set_id": payload["physics"]["parameter_set_id"],

@@ -36,6 +36,11 @@ class InterfacePayload(_PayloadModel):
     right_region: str
     fixed_charge_cm2: float | None = None
     mesh_spacing_cm: float | None = Field(default=None, gt=0)
+    surface_electron_velocity_cm_s: float | None = Field(default=None, gt=0)
+    surface_hole_velocity_cm_s: float | None = Field(default=None, gt=0)
+    trap_density_cm2: float | None = Field(default=None, gt=0)
+    trap_energy_ev: float | None = None
+    trap_type: Literal["acceptor", "donor"] | None = None
 
 
 class MeshAnchorPayload(_PayloadModel):

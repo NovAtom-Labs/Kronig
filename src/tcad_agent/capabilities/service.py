@@ -153,10 +153,26 @@ class CapabilityService:
                         )
                     )
         requested_interfaces = tuple(
-            "fixed_charge"
-            if interface.fixed_charge_density is not None
-            else "continuity"
+            capability
             for interface in spec.interfaces
+            for capability in (
+                "continuity",
+                *(
+                    ("fixed_charge",)
+                    if interface.fixed_charge_density is not None
+                    else ()
+                ),
+                *(
+                    ("surface_srh",)
+                    if interface.surface_electron_velocity is not None
+                    else ()
+                ),
+                *(
+                    ("interface_trap",)
+                    if interface.trap_density is not None
+                    else ()
+                ),
+            )
         )
         self._check_many(
             issues,
@@ -164,6 +180,57 @@ class CapabilityService:
             requested_interfaces,
             manifest.interfaces,
         )
+        if manifest.backend == "devsim":
+            region_material = {region.id: region.material for region in spec.regions}
+            for index, interface in enumerate(spec.interfaces):
+                if (
+                    interface.surface_electron_velocity is None
+                    and interface.trap_density is None
+                ):
+                    continue
+                materials = {
+                    region_material[interface.left_region],
+                    region_material[interface.right_region],
+                }
+                reviewed_pairs = (
+                    materials == {"silicon"}
+                    or (
+                        "silicon" in materials
+                        and bool(
+                            materials.intersection(
+                                {"silicon_dioxide", "generic_dielectric"}
+                            )
+                        )
+                    )
+                )
+                if not reviewed_pairs:
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"interfaces[{index}]",
+                            code="incompatible_interface_materials",
+                            message=(
+                                "surface physics requires one silicon side and one "
+                                "reviewed dielectric side"
+                            ),
+                            requested=":".join(sorted(materials)),
+                            supported=(
+                                "silicon:silicon",
+                                "silicon:silicon_dioxide",
+                                "generic_dielectric:silicon",
+                            ),
+                        )
+                    )
+                equations = {str(value) for value in spec.physics.equations}
+                if not {"electron_continuity", "hole_continuity"}.issubset(equations):
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"interfaces[{index}]",
+                            code="missing_interface_dependency",
+                            message="surface physics requires coupled carrier transport",
+                            requested=interface.id,
+                            supported=("electron_continuity", "hole_continuity"),
+                        )
+                    )
         self._check_many(
             issues,
             "contacts",

@@ -127,6 +127,27 @@ class DevsimAdapter:
                     if interface.mesh_spacing is not None
                     else None
                 ),
+                "surface_electron_velocity_cm_s": (
+                    interface.surface_electron_velocity.to("cm/s")
+                    if interface.surface_electron_velocity is not None
+                    else None
+                ),
+                "surface_hole_velocity_cm_s": (
+                    interface.surface_hole_velocity.to("cm/s")
+                    if interface.surface_hole_velocity is not None
+                    else None
+                ),
+                "trap_density_cm2": (
+                    interface.trap_density.to("cm^-2")
+                    if interface.trap_density is not None
+                    else None
+                ),
+                "trap_energy_ev": (
+                    interface.trap_energy.to("eV")
+                    if interface.trap_energy is not None
+                    else None
+                ),
+                "trap_type": interface.trap_type,
             }
             for interface in spec.interfaces
         ]
@@ -259,6 +280,18 @@ class DevsimAdapter:
                     "metal-work-function barrier"
                 ),
                 "version": "novatom.schottky-thermionic.2026-09-29.v1",
+            }
+        if any(
+            interface.surface_electron_velocity is not None
+            or interface.trap_density is not None
+            for interface in spec.interfaces
+        ):
+            parameter_sources["surface_physics"] = {
+                "source": (
+                    "Agent Kronig reviewed surface-SRH and single-level "
+                    "interface-trap equations"
+                ),
+                "version": "novatom.surface-physics.2026-09-29.v1",
             }
         mesh_anchors = self._mesh_anchor_payloads(spec, regions)
         return DevsimPayload.model_validate(
@@ -591,7 +624,67 @@ class DevsimAdapter:
                 shape=(len(interface_ids),),
                 centering=DatasetCentering.INTERFACE,
                 values=tuple(interface_charges[name] for name in interface_ids),
-                source="configured:interfaces.fixed_charge_density",
+                source="native:configured-fixed-plus-interface-trap-charge",
+                metadata={
+                    "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
+                },
+            )
+        interface_surface_rates = {
+            str(name): float(value) * 1e4
+            for name, value in data.get(
+                "interface_surface_recombination_cm2_s", {}
+            ).items()
+        }
+        if (
+            "surface_recombination_rate" in data.get("requested_observables", ())
+            and interface_surface_rates
+        ):
+            interface_ids = tuple(interface_surface_rates)
+            axes["surface_interface_index"] = ScientificAxis(
+                id="surface_interface_index",
+                kind=AxisKind.INDEX,
+                label="Surface interface index",
+                unit="1",
+                values=tuple(float(index) for index in range(len(interface_ids))),
+            )
+            datasets["surface_recombination_rate"] = Dataset(
+                id="surface_recombination_rate",
+                label="Surface recombination rate",
+                unit="m^-2/s",
+                axes=("surface_interface_index",),
+                shape=(len(interface_ids),),
+                centering=DatasetCentering.INTERFACE,
+                values=tuple(interface_surface_rates[name] for name in interface_ids),
+                source="native:SurfaceRecombinationSheet",
+                metadata={
+                    "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
+                },
+            )
+        trap_occupancies = {
+            str(name): float(value)
+            for name, value in data.get("interface_trap_occupancies", {}).items()
+        }
+        if (
+            "interface_trap_occupancy" in data.get("requested_observables", ())
+            and trap_occupancies
+        ):
+            interface_ids = tuple(trap_occupancies)
+            axes["trap_interface_index"] = ScientificAxis(
+                id="trap_interface_index",
+                kind=AxisKind.INDEX,
+                label="Trap interface index",
+                unit="1",
+                values=tuple(float(index) for index in range(len(interface_ids))),
+            )
+            datasets["interface_trap_occupancy"] = Dataset(
+                id="interface_trap_occupancy",
+                label="Interface trap occupancy",
+                unit="1",
+                axes=("trap_interface_index",),
+                shape=(len(interface_ids),),
+                centering=DatasetCentering.INTERFACE,
+                values=tuple(trap_occupancies[name] for name in interface_ids),
+                source="native:InterfaceTrapOccupancy",
                 metadata={
                     "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
                 },

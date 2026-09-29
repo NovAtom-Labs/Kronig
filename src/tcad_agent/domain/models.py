@@ -99,6 +99,8 @@ class Observable(StrEnum):
     TERMINAL_ELECTRON_CURRENT = "terminal_electron_current"
     TERMINAL_HOLE_CURRENT = "terminal_hole_current"
     INTERFACE_CHARGE_DENSITY = "interface_charge_density"
+    SURFACE_RECOMBINATION_RATE = "surface_recombination_rate"
+    INTERFACE_TRAP_OCCUPANCY = "interface_trap_occupancy"
     FIXED_CHARGE_DENSITY = "fixed_charge_density"
 
 
