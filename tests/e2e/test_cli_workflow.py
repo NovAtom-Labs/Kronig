@@ -4,8 +4,10 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 import tcad_agent.cli as cli_module
+import tcad_agent.conformance.bundles as conformance_bundles
 from tcad_agent.bundles.models import ExperimentBundle
 from tcad_agent.cli import app
+from tcad_agent.results.models import CanonicalResult, FieldSeries
 
 runner = CliRunner()
 
@@ -198,6 +200,144 @@ def test_cli_compiles_sentaurus_deck_without_licensed_runner(tmp_path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert (output / "sdevice.cmd").is_file()
+
+
+def test_cli_compares_verified_backend_bundles_with_reviewed_case_rules(
+    tmp_path, valid_spec, monkeypatch
+) -> None:
+    devsim_result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        fields={
+            "potential": FieldSeries(
+                positions_m=(0.0, 1.0e-6), values=(0.0, 0.7), unit="V"
+            )
+        },
+    )
+    sentaurus_result = devsim_result.model_copy(
+        update={"backend": "sentaurus", "simulator_version": "licensed-test"}
+    )
+    bundles = iter(
+        (
+            SimpleNamespace(
+                experiment=valid_spec,
+                result=devsim_result,
+                manifest=SimpleNamespace(
+                    run_id="devsim-run",
+                    simulator_version="2.9.1",
+                    compiler_version="0.2.0",
+                    input_digest="a" * 64,
+                    runtime_digest="b" * 64,
+                ),
+            ),
+            SimpleNamespace(
+                experiment=valid_spec,
+                result=sentaurus_result,
+                manifest=SimpleNamespace(
+                    run_id="sentaurus-run",
+                    simulator_version="licensed-test",
+                    compiler_version="0.2.0",
+                    input_digest="c" * 64,
+                    runtime_digest="d" * 64,
+                ),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        conformance_bundles.BundleReader,
+        "read",
+        lambda self, path: next(bundles),
+        raising=False,
+    )
+    rules = tmp_path / "rules.yaml"
+    rules.write_text(
+        """cases:
+  - id: verified-case
+    compare:
+      - metric: built_in_potential
+        field: potential
+        relative_tolerance: 0.01
+        absolute_tolerance: 0.001
+"""
+    )
+    output = tmp_path / "report.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "conformance",
+            "compare",
+            str(tmp_path / "devsim"),
+            str(tmp_path / "sentaurus"),
+            "--rules",
+            str(rules),
+            "--case",
+            "verified-case",
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(output.read_text())
+    assert payload["overall"] == "passed"
+    assert payload["inputs"]["devsim"]["run_id"] == "devsim-run"
+    assert payload["inputs"]["sentaurus"]["run_id"] == "sentaurus-run"
+
+
+def test_cli_refuses_conformance_for_different_experiment_contracts(
+    tmp_path, valid_spec, monkeypatch
+) -> None:
+    result = CanonicalResult(backend="devsim", status="completed")
+    changed_spec = valid_spec.model_copy(update={"name": "different experiment"})
+    bundles = iter(
+        (
+            SimpleNamespace(
+                experiment=valid_spec,
+                result=result,
+                manifest=SimpleNamespace(
+                    run_id="left",
+                    simulator_version="2.9.1",
+                    compiler_version="0.2.0",
+                    input_digest="a" * 64,
+                    runtime_digest="b" * 64,
+                ),
+            ),
+            SimpleNamespace(
+                experiment=changed_spec,
+                result=result.model_copy(update={"backend": "sentaurus"}),
+                manifest=SimpleNamespace(
+                    run_id="right",
+                    simulator_version="licensed-test",
+                    compiler_version="0.2.0",
+                    input_digest="c" * 64,
+                    runtime_digest="d" * 64,
+                ),
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        conformance_bundles.BundleReader,
+        "read",
+        lambda self, path: next(bundles),
+        raising=False,
+    )
+
+    response = runner.invoke(
+        app,
+        [
+            "conformance",
+            "compare",
+            str(tmp_path / "devsim"),
+            str(tmp_path / "sentaurus"),
+            "--case",
+            "al-pn-al-equilibrium",
+        ],
+    )
+
+    assert response.exit_code == 2
+    assert "same ExperimentSpec" in response.output
 
 
 def test_cli_reports_unconfigured_sentaurus_runner_without_traceback(tmp_path) -> None:

@@ -58,7 +58,7 @@ The reviewed one-dimensional adapter currently exposes constant mobility, DEVSIM
 
 The parameter set identifier, every overridden parameter value, its source label, and its version are copied into the compiled payload and canonical result metadata. These baselines are reproducible simulation parameters, not a claim of universal process calibration. Researchers must supply a reviewed calibrated set when predictive process-specific accuracy is required.
 
-Surface mobility and surface recombination require explicit interface-normal fields or velocities and independent benchmarks. They remain disabled instead of being approximated by bulk models.
+Surface SRH is available when the researcher supplies both capture velocities at a silicon-adjacent interface; a single charged donor or acceptor trap level is also reviewed. Those equations, units, charge convention, and benchmark limits are recorded in `devsim-surface-physics.md`. Distributed traps, tunneling, frequency dispersion, and Philips surface mobility remain disabled instead of being approximated by bulk models.
 
 ## Source basis
 

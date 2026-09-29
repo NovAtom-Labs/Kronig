@@ -1,9 +1,10 @@
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from tcad_agent.domain.profiles import Profile1D
+from tcad_agent.domain.profiles import Profile1D, TemperatureProfile1D
 
 PROFILE = TypeAdapter(Profile1D)
+TEMPERATURE_PROFILE = TypeAdapter(TemperatureProfile1D)
 
 
 @pytest.mark.parametrize(
@@ -114,5 +115,31 @@ def test_piecewise_profile_requires_one_value_per_interval() -> None:
                 "species": "donor",
                 "boundaries": ["0 um", "0.4 um", "1 um"],
                 "values": ["1e15 cm^-3"],
+            }
+        )
+
+
+def test_piecewise_temperature_profile_is_typed_and_unit_checked() -> None:
+    profile = TEMPERATURE_PROFILE.validate_python(
+        {
+            "kind": "piecewise_constant",
+            "region": "bulk",
+            "boundaries": ["0 um", "0.4 um", "1 um"],
+            "values": ["280 K", "340 K"],
+        }
+    )
+
+    assert profile.kind == "piecewise_constant"
+    assert tuple(value.to("K") for value in profile.values) == (280.0, 340.0)
+
+
+def test_piecewise_temperature_requires_one_value_per_interval() -> None:
+    with pytest.raises(ValidationError, match="one value per interval"):
+        TEMPERATURE_PROFILE.validate_python(
+            {
+                "kind": "piecewise_constant",
+                "region": "bulk",
+                "boundaries": ["0 um", "0.4 um", "1 um"],
+                "values": ["300 K"],
             }
         )

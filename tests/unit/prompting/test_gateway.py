@@ -74,6 +74,50 @@ def test_gateway_parses_a_generic_clarification_decision() -> None:
     assert decision.questions[0].field_path == "contacts.behavior"
 
 
+def test_gateway_derives_missing_clarification_paths_from_typed_questions() -> None:
+    response = json.dumps(
+        {
+            "status": "clarification",
+            "summary": "Two researcher-owned conditions are missing.",
+            "questions": [
+                {
+                    "id": "temperature",
+                    "field_path": "physics.temperature",
+                    "prompt": "What scalar reference temperature should be used?",
+                    "reason": "The simulation contract requires this value.",
+                    "required": True,
+                },
+                {
+                    "id": "fixed_contact",
+                    "field_path": "contacts.right.voltage",
+                    "prompt": "What fixed voltage should be applied on the right?",
+                    "reason": "It defines the applied bias.",
+                    "required": True,
+                },
+            ],
+            "intent": None,
+            "unresolved_critical": [],
+            "warnings": [],
+            "runtime_research_needed": False,
+            "runtime_research_reason": None,
+        }
+    )
+    llm = ScriptedLLM([response])
+
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Simulate the stated spatial-temperature study.",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+
+    assert decision.unresolved_critical == (
+        "physics.temperature",
+        "contacts.right.voltage",
+    )
+    assert len(llm.messages) == 1
+
+
 def test_gateway_repairs_one_invalid_structured_response() -> None:
     valid = {
         "status": "ready",

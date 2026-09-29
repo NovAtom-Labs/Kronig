@@ -29,7 +29,7 @@ Search results are evidence for adapter development, not permission to copy arbi
 
 ## Reviewed boundary
 
-The adapter is not a general DEVSIM frontend. It supports only the versioned capability manifest and deterministic allowlisted runtime. Direct semiconductor Schottky transport, Fermi-Dirac drift diffusion, surface mobility, interface traps, transient pulses, arbitrary PDEs, arbitrary material values, and arbitrary generated DEVSIM source are refused. A new feature must enter through the portable contract, registry, normalizer, validator, and a passing reference benchmark.
+The adapter is not a general DEVSIM frontend. It supports only the versioned capability manifest and deterministic allowlisted runtime. The reviewed boundary includes coupled one-dimensional Fermi transport with ohmic initialization, Boltzmann thermionic Schottky contacts, surface SRH, a single charged trap level, transient pulses, prescribed silicon temperature profiles, and Boltzmann current-component diagnostics. Each has narrower compatibility rules recorded in its dedicated curated note. Philips surface mobility, Fermi Schottky injection, distributed traps, tunneling, self-heating, arbitrary PDEs, arbitrary material values, and arbitrary generated DEVSIM source are refused. A new feature must enter through the portable contract, registry, normalizer, validator, and a passing reference benchmark.
 
 ## Source basis
 

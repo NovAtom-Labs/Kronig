@@ -29,6 +29,7 @@ from tcad_agent.domain.profiles import (
     LinearProfile,
     LinearTemperatureProfile,
     PiecewiseConstantProfile,
+    PiecewiseConstantTemperatureProfile,
     TabulatedProfile,
     TabulatedTemperatureProfile,
 )
@@ -316,6 +317,17 @@ class DevsimAdapter:
                     start_k=temperature_profile.start_value.to("K"),
                     end_k=temperature_profile.end_value.to("K"),
                 )
+            elif isinstance(
+                temperature_profile, PiecewiseConstantTemperatureProfile
+            ):
+                compiled.update(
+                    boundaries_cm=tuple(
+                        value.to("cm") for value in temperature_profile.boundaries
+                    ),
+                    values_k=tuple(
+                        value.to("K") for value in temperature_profile.values
+                    ),
+                )
             elif isinstance(temperature_profile, TabulatedTemperatureProfile):
                 compiled.update(
                     positions_cm=tuple(
@@ -430,6 +442,34 @@ class DevsimAdapter:
                         position,
                         bounded_spacing(region, min(neighbors) / 4.0),
                         "profile:tabulated:sample",
+                    )
+        for temperature_profile in spec.physics.temperature_profiles:
+            region = compiled_regions[temperature_profile.region]
+            if isinstance(
+                temperature_profile, PiecewiseConstantTemperatureProfile
+            ):
+                for boundary in temperature_profile.boundaries[1:-1]:
+                    add(
+                        boundary.to("cm"),
+                        bounded_spacing(
+                            region, cast(float, region["mesh_spacing_cm"])
+                        ),
+                        "temperature:piecewise_constant:boundary",
+                    )
+            elif isinstance(temperature_profile, TabulatedTemperatureProfile):
+                coordinates = tuple(
+                    value.to("cm") for value in temperature_profile.positions
+                )
+                for index, position in enumerate(coordinates):
+                    neighbors = []
+                    if index:
+                        neighbors.append(position - coordinates[index - 1])
+                    if index + 1 < len(coordinates):
+                        neighbors.append(coordinates[index + 1] - position)
+                    add(
+                        position,
+                        bounded_spacing(region, min(neighbors) / 4.0),
+                        "temperature:tabulated:sample",
                     )
         return [anchors[position] for position in sorted(anchors)]
 

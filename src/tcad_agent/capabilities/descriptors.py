@@ -229,8 +229,14 @@ class CapabilityCatalog(StrictModel):
                         category=category,
                         summary=f"{manifest.backend} supports {category} {value}",
                         maturity=CapabilityMaturity.REVIEWED,
-                        evidence_refs=(
-                            f"adapter-manifest:{manifest.backend}:{manifest.adapter_version}",
+                        evidence_refs=_legacy_evidence_refs(
+                            manifest.backend,
+                            manifest.adapter_version,
+                            category,
+                            str(value),
+                        ),
+                        conflicts=_legacy_conflicts(
+                            manifest.backend, category, str(value)
                         ),
                         required_inputs=inputs,
                         optional_inputs=optional_inputs,
@@ -274,6 +280,61 @@ class CapabilityCatalog(StrictModel):
                         ),
                     )
                 )
+        if manifest.backend == "devsim":
+            descriptors.append(
+                CapabilityDescriptor(
+                    id="profile.prescribed_temperature",
+                    category="profile",
+                    summary=(
+                        "DEVSIM supports positive constant, linear, piecewise-constant, "
+                        "and linearly interpolated tabulated lattice-temperature profiles "
+                        "on one-dimensional silicon for equilibrium and DC transport. "
+                        "This is prescribed temperature, not heat flow or self-heating."
+                    ),
+                    maturity=CapabilityMaturity.REVIEWED,
+                    evidence_refs=(
+                        f"adapter-manifest:{manifest.backend}:{manifest.adapter_version}",
+                        "knowledge-sources/curated/devsim-spatial-temperature.md",
+                    ),
+                    requires=("model.boltzmann", "model.constant_mobility"),
+                    conflicts=(
+                        "model.fermi",
+                        "model.klaassen_mobility",
+                        "model.high_field_saturation",
+                        "contact.metal_work_function",
+                        "study.ac",
+                        "study.frequency",
+                        "study.transient",
+                        "study.temperature",
+                    ),
+                    required_inputs=(
+                        CapabilityInputDescriptor(
+                            path="physics.temperature_profiles",
+                            description=(
+                                "Region assignment and every prescribed spatial "
+                                "temperature value and coordinate"
+                            ),
+                            authority=InputAuthority.RESEARCHER,
+                            required=True,
+                            unit="K and m",
+                        ),
+                    ),
+                    produces=("lattice_temperature",),
+                    supported_materials=("silicon",),
+                    supported_studies=("equilibrium", "dc", "dc_points"),
+                    available_observables=("lattice_temperature",),
+                    required_validators=(
+                        "canonical-datasets-structural",
+                        "operating-points-converged",
+                    ),
+                    parameter_sources=(
+                        "novatom.spatial-temperature.2026-09-29.v1",
+                    ),
+                    execution_limits=dict(manifest.limits),
+                    backend_compatibility={"devsim": "2.9.1"},
+                    sentaurus_mapping="pending-reviewed-mapping",
+                )
+            )
         return cls(
             backend=manifest.backend,
             adapter_version=manifest.adapter_version,
@@ -281,6 +342,30 @@ class CapabilityCatalog(StrictModel):
             descriptors=tuple(descriptors),
             limits=manifest.limits,
         )
+
+
+def _legacy_conflicts(
+    backend: str, category: CapabilityCategory, value: str
+) -> tuple[str, ...]:
+    if backend != "devsim":
+        return ()
+    conflicts: dict[tuple[CapabilityCategory, str], tuple[str, ...]] = {
+        ("model", "fermi"): (
+            "contact.metal_work_function",
+            "profile.prescribed_temperature",
+        ),
+        ("model", "klaassen_mobility"): ("profile.prescribed_temperature",),
+        ("model", "high_field_saturation"): ("profile.prescribed_temperature",),
+        ("contact", "metal_work_function"): (
+            "model.fermi",
+            "profile.prescribed_temperature",
+        ),
+        ("study", "ac"): ("profile.prescribed_temperature",),
+        ("study", "frequency"): ("profile.prescribed_temperature",),
+        ("study", "transient"): ("profile.prescribed_temperature",),
+        ("study", "temperature"): ("profile.prescribed_temperature",),
+    }
+    return conflicts.get((category, value), ())
 
 
 def _legacy_required_inputs(
@@ -370,6 +455,31 @@ def _legacy_required_inputs(
                 ),
             )
         return inputs
+    if category == "interface":
+        interface_inputs: dict[str, tuple[CapabilityInputDescriptor, ...]] = {
+            "surface_srh": (
+                _researcher_input(
+                    "interfaces.surface_electron_velocity",
+                    "Electron surface capture velocity",
+                    unit="m/s",
+                ),
+                _researcher_input(
+                    "interfaces.surface_hole_velocity",
+                    "Hole surface capture velocity",
+                    unit="m/s",
+                ),
+            ),
+            "interface_trap": (
+                _researcher_input(
+                    "interfaces.trap_density", "Interface trap sheet density", unit="m^-2"
+                ),
+                _researcher_input(
+                    "interfaces.trap_energy", "Trap energy relative to intrinsic level", unit="eV"
+                ),
+                _researcher_input("interfaces.trap_type", "Donor or acceptor trap type"),
+            ),
+        }
+        return interface_inputs.get(value, ())
     if category in {"equation", "model"}:
         return (
             CapabilityInputDescriptor(
@@ -385,6 +495,23 @@ def _legacy_required_inputs(
 def _legacy_optional_inputs(
     category: CapabilityCategory, value: str
 ) -> tuple[CapabilityInputDescriptor, ...]:
+    if category == "contact" and value == "metal_work_function":
+        return (
+            CapabilityInputDescriptor(
+                path="contacts.electron_richardson_constant",
+                description="Optional electron thermionic Richardson constant",
+                authority=InputAuthority.RESEARCHER,
+                required=False,
+                unit="A/cm^2/K^2",
+            ),
+            CapabilityInputDescriptor(
+                path="contacts.hole_richardson_constant",
+                description="Optional hole thermionic Richardson constant",
+                authority=InputAuthority.RESEARCHER,
+                required=False,
+                unit="A/cm^2/K^2",
+            ),
+        )
     if category != "study" or value != "transient":
         return ()
     pulse_hint = "Ask only when the researcher selects a pulse waveform."
@@ -450,6 +577,36 @@ def _researcher_input(
         required=True,
         unit=unit,
     )
+
+
+def _legacy_evidence_refs(
+    backend: str,
+    adapter_version: str,
+    category: CapabilityCategory,
+    value: str,
+) -> tuple[str, ...]:
+    base = (f"adapter-manifest:{backend}:{adapter_version}",)
+    if backend != "devsim":
+        return base
+    curated = {
+        ("model", "fermi"): "knowledge-sources/curated/devsim-fermi-transport.md",
+        ("contact", "metal_work_function"): (
+            "knowledge-sources/curated/devsim-schottky-transport.md"
+        ),
+        ("interface", "surface_srh"): (
+            "knowledge-sources/curated/devsim-surface-physics.md"
+        ),
+        ("interface", "interface_trap"): (
+            "knowledge-sources/curated/devsim-surface-physics.md"
+        ),
+        ("observable", "current_decomposition_residual"): (
+            "knowledge-sources/curated/devsim-current-decomposition.md"
+        ),
+        ("observable", "lattice_temperature"): (
+            "knowledge-sources/curated/devsim-spatial-temperature.md"
+        ),
+    }.get((category, value))
+    return base if curated is None else (*base, curated)
 
 
 def _legacy_outputs(category: CapabilityCategory, value: str) -> tuple[str, ...]:

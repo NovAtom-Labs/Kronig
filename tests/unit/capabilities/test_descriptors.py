@@ -182,3 +182,53 @@ def test_transient_capability_exposes_conditional_pulse_inputs() -> None:
         if item.path.startswith("study.pulse")
         or item.path in {"study.rise_time", "study.fall_time"}
     )
+
+
+def test_advanced_boundaries_expose_researcher_inputs_and_evidence() -> None:
+    catalog = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend("devsim"))
+    by_id = {item.id: item for item in catalog.descriptors}
+
+    schottky = by_id["contact.metal_work_function"]
+    assert {item.path for item in schottky.required_inputs} >= {
+        "contacts.work_function"
+    }
+    assert {item.path for item in schottky.optional_inputs} >= {
+        "contacts.electron_richardson_constant",
+        "contacts.hole_richardson_constant",
+    }
+    surface = by_id["interface.surface_srh"]
+    assert {item.path for item in surface.required_inputs} >= {
+        "interfaces.surface_electron_velocity",
+        "interfaces.surface_hole_velocity",
+    }
+    trap = by_id["interface.interface_trap"]
+    assert {item.path for item in trap.required_inputs} >= {
+        "interfaces.trap_density",
+        "interfaces.trap_energy",
+        "interfaces.trap_type",
+    }
+    assert "knowledge-sources/curated/devsim-fermi-transport.md" in by_id[
+        "model.fermi"
+    ].evidence_refs
+
+
+def test_advanced_capability_catalog_exposes_cross_capability_constraints() -> None:
+    catalog = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend("devsim"))
+    by_id = {item.id: item for item in catalog.descriptors}
+
+    assert "contact.metal_work_function" in by_id["model.fermi"].conflicts
+    assert "model.fermi" in by_id["contact.metal_work_function"].conflicts
+
+    temperature = by_id["profile.prescribed_temperature"]
+    assert temperature.supported_materials == ("silicon",)
+    assert temperature.supported_studies == ("equilibrium", "dc", "dc_points")
+    assert set(temperature.conflicts) >= {
+        "model.fermi",
+        "model.klaassen_mobility",
+        "model.high_field_saturation",
+        "contact.metal_work_function",
+    }
+    assert {item.path for item in temperature.required_inputs} == {
+        "physics.temperature_profiles"
+    }
+    assert "lattice_temperature" in temperature.produces

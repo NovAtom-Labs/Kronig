@@ -45,10 +45,10 @@
 - Consumes: silicon density of states, band energies, native `Fermi`, `InvFermi`, and `dFermidx`, mobility fields, contact doping, solver controls.
 - Produces: Fermi charge initialization, carrier continuity, statistics-specific ohmic contacts, quasi-Fermi energies, and model provenance.
 
-- [ ] Replace the visible-gate test with failing nondegenerate-limit, degenerate-neutrality, equilibrium-zero-current, and biased-conservation tests.
-- [ ] Implement a reviewed quasi-Fermi-gradient finite-volume current with analytical derivatives and Fermi-neutral ohmic boundary targets.
-- [ ] Enable `model.fermi` only for compatible silicon drift diffusion and reject simultaneous Boltzmann selection.
-- [ ] Run the real DEVSIM benchmarks and record the exact discretization and pinned sources.
+- [x] Replace the visible-gate test with failing nondegenerate-limit, degenerate-neutrality, equilibrium-zero-current, and biased-conservation tests.
+- [x] Implement a reviewed quasi-Fermi-gradient finite-volume current with analytical derivatives and Fermi-neutral ohmic boundary targets.
+- [x] Enable `model.fermi` only for compatible silicon drift diffusion and reject simultaneous Boltzmann selection.
+- [x] Run the real DEVSIM benchmarks and record the exact discretization and pinned sources.
 
 ### Task 2: Direct Schottky carrier boundaries
 
@@ -65,10 +65,10 @@
 - Consumes: contact work function, silicon affinity and gap, temperature, Richardson coefficients, sign convention, and adjacent semiconductor state.
 - Produces: work-function electrostatics plus electron and hole thermionic flux boundaries that remain distinct from ohmic contacts.
 
-- [ ] Write failing tests for required parameters, zero-current equilibrium, barrier height ordering, forward/reverse polarity, temperature response, and terminal conservation.
-- [ ] Add unit-checked thermionic parameters and compiled provenance.
-- [ ] Implement work-function potential and Robin carrier-flux boundary equations with derivatives and circuit-current integration.
-- [ ] Enable direct silicon metal-work-function contacts only for benchmarked model combinations.
+- [x] Write failing tests for required parameters, zero-current equilibrium, barrier height ordering, forward/reverse polarity, temperature response, and terminal conservation.
+- [x] Add unit-checked thermionic parameters and compiled provenance.
+- [x] Implement work-function potential and Robin carrier-flux boundary equations with derivatives and circuit-current integration.
+- [x] Enable direct silicon metal-work-function contacts only for benchmarked model combinations.
 
 ### Task 3: Interface SRH recombination and interface traps
 
@@ -85,10 +85,10 @@
 - Consumes: explicit surface velocities, trap density, trap energy, trap type, silicon-side orientation, local carriers, and local thermal voltage.
 - Produces: surface SRH flux, trap occupancy, interface charge, continuity coupling, and canonical interface observables.
 
-- [ ] Write failing contract, material-compatibility, zero-rate, nonzero-bias, charge-sign, conservation, and refinement tests.
-- [ ] Add typed surface-recombination and single-level interface-trap contracts with unit validation.
-- [ ] Implement silicon-side interface models with complete carrier and electrostatic derivatives.
-- [ ] Expose surface rate, occupancy, and total interface charge through canonical datasets and validators.
+- [x] Write failing contract, material-compatibility, zero-rate, nonzero-bias, charge-sign, conservation, and refinement tests.
+- [x] Add typed surface-recombination and single-level interface-trap contracts with unit validation.
+- [x] Implement silicon-side interface models with complete carrier and electrostatic derivatives.
+- [x] Expose surface rate, occupancy, and total interface charge through canonical datasets and validators.
 
 ### Task 4: Prescribed spatial temperature
 
@@ -105,10 +105,10 @@
 - Consumes: explicit positive Kelvin profiles and model compatibility metadata.
 - Produces: local thermal voltage, gap, density of states, intrinsic density, mobility, recombination, statistics, and contact values without solving heat flow.
 
-- [ ] Write failing validation and constant-profile equivalence tests.
-- [ ] Add typed constant, linear, piecewise, and tabulated prescribed-temperature profiles.
-- [ ] Replace constant-temperature assumptions in every enabled compatible equation with registered node and edge temperature models.
-- [ ] Reject AC, transient, Schottky, or other combinations until their local-temperature boundary terms pass independent benchmarks.
+- [x] Write failing validation and constant-profile equivalence tests.
+- [x] Add typed constant, linear, piecewise, and tabulated prescribed-temperature profiles.
+- [x] Replace constant-temperature assumptions in every enabled compatible equation with registered node and edge temperature models.
+- [x] Reject AC, transient, Schottky, or other combinations until their local-temperature boundary terms pass independent benchmarks.
 
 ### Task 5: Drift and diffusion current decomposition
 
@@ -123,9 +123,9 @@
 - Consumes: solved potential, carriers, mobility, local thermal voltage, and exact edge geometry.
 - Produces: explicitly labeled continuum finite-volume drift and diffusion reconstructions plus a reconciliation residual, never a claim that the split is native Scharfetter-Gummel state.
 
-- [ ] Write failing uniform-density, zero-field, polarity, and reconstruction-residual tests.
-- [ ] Implement edge-centered electron and hole drift and diffusion reconstructions with explicit metadata.
-- [ ] Add canonical observables and a deterministic reconciliation validator.
+- [x] Write failing uniform-density, zero-field, polarity, and reconstruction-residual tests.
+- [x] Implement edge-centered electron and hole drift and diffusion reconstructions with explicit metadata.
+- [x] Add canonical observables and a deterministic reconciliation validator.
 
 ### Task 6: Pinned official parity and external conformance harness
 
@@ -139,10 +139,10 @@
 - Consumes: pinned DEVSIM source checkout, canonical adapter runs, supported CI operating systems, and optional licensed Sentaurus result bundles.
 - Produces: diode, small-signal, and oxide-interface invariant comparisons plus reproducible cross-platform and cross-backend comparison commands.
 
-- [ ] Add failing parity tests that execute pinned official examples and compare independently parsed numeric invariants.
-- [ ] Add deterministic platform artifact generation and comparison without weakening missing-evidence status.
-- [ ] Add a licensed-host conformance command that consumes canonical Sentaurus bundles without bundling documentation or credentials.
-- [ ] Run every locally available parity and platform check.
+- [x] Add failing parity tests that execute pinned official examples and compare independently parsed numeric invariants.
+- [x] Add deterministic platform artifact generation and comparison without weakening missing-evidence status.
+- [x] Add a licensed-host conformance command that consumes canonical Sentaurus bundles without bundling documentation or credentials.
+- [x] Run every locally available parity and platform check.
 
 ### Task 7: End-to-end scientific closure
 
@@ -157,7 +157,7 @@
 - Consumes: every newly reviewed capability and its evidence.
 - Produces: prompt preprocessing questions, execution, canonical bundles, validation, graph discovery, and honest readiness status.
 
-- [ ] Add natural researcher prompts covering each new capability and consequential missing input.
-- [ ] Verify capability-driven questions and refusal paths contain no named-device branches.
-- [ ] Run bounded live Bedrock workflows only when the configured credential is available.
-- [ ] Run Ruff, strict mypy, the complete Python suite, desktop tests, dependency sync, credential scans, named-device scans, and patch hygiene before the final commit.
+- [x] Add natural researcher prompts covering each new capability and consequential missing input.
+- [x] Verify capability-driven questions and refusal paths contain no named-device branches.
+- [x] Run bounded live Bedrock workflows only when the configured credential is available.
+- [x] Run Ruff, strict mypy, the complete Python suite, desktop tests, dependency sync, credential scans, named-device scans, and patch hygiene before the final commit.

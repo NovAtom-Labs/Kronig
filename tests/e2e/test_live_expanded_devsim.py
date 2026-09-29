@@ -28,6 +28,11 @@ def _require_live(pytestconfig: pytest.Config) -> None:
         ("unsupported-contact-and-physics", "blocked"),
         ("generic-layered-voltage-study", "ready"),
         ("supported-oxide-charge-sweep", "ready"),
+        ("supported-fermi-junction", "ready"),
+        ("supported-schottky-sweep", "ready"),
+        ("supported-surface-physics", "ready"),
+        ("supported-spatial-temperature", "clarification"),
+        ("supported-current-components", "ready"),
     ),
 )
 def test_live_preparation_respects_expanded_devsim_scope(
@@ -49,7 +54,9 @@ def test_live_preparation_respects_expanded_devsim_scope(
         answers=(),
     )
 
-    assert outcome.decision.status == expected_status
+    assert outcome.decision.status == expected_status, outcome.decision.model_dump_json(
+        indent=2
+    )
     assert len(outcome.decision.questions) <= case.maximum_questions
     if expected_status == "ready":
         assert outcome.compiled_request is not None
@@ -64,7 +71,10 @@ def test_live_preparation_respects_expanded_devsim_scope(
                 *(question.prompt for question in outcome.decision.questions),
             )
         ).lower()
-        assert any(concept.replace("_", " ") in unresolved for concept in case.required_concepts)
+        assert any(
+            concept.replace("_", " ") in unresolved
+            for concept in case.required_concepts
+        ), outcome.decision.model_dump_json(indent=2)
     if expected_status == "blocked":
         explanation = " ".join(
             (outcome.decision.summary, *outcome.decision.warnings)

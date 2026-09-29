@@ -95,3 +95,35 @@ def test_linear_temperature_profile_is_preserved_in_canonical_field(tmp_path: Pa
     assert values[0] == pytest.approx(280.0)
     assert values[-1] == pytest.approx(340.0)
     assert all(value > 0 for value in values)
+
+
+@pytest.mark.integration
+def test_piecewise_temperature_profile_preserves_steps_and_boundaries(
+    tmp_path: Path,
+) -> None:
+    payload = yaml.safe_load((ROOT / "examples" / "pn-junction.yaml").read_text())
+    payload["study"] = {"kind": "equilibrium"}
+    payload["physics"]["temperature_profiles"] = [
+        {
+            "kind": "piecewise_constant",
+            "region": "p_region",
+            "boundaries": ["0 um", "0.25 um", "0.5 um"],
+            "values": ["280 K", "300 K"],
+        },
+        {
+            "kind": "constant",
+            "region": "n_region",
+            "value": "340 K",
+        },
+    ]
+    payload["observables"] = ["potential", "lattice_temperature"]
+
+    result = _run(payload, tmp_path / "piecewise")
+    field = result.datasets["lattice_temperature"]
+    positions = result.axes[field.axes[0]].values
+    values = field.values
+
+    assert any(position == pytest.approx(0.25e-6) for position in positions)
+    assert values[0] == pytest.approx(280.0)
+    assert any(value == pytest.approx(300.0) for value in values)
+    assert values[-1] == pytest.approx(340.0)

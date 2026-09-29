@@ -107,3 +107,48 @@ cases:
     required_concepts: [fermi_statistics, schottky_transport, unsupported_physics, no_silent_substitution]
     forbidden_inventions: [replace_fermi_with_boltzmann, replace_schottky_with_ohmic]
     maximum_questions: 7
+
+  - id: supported-fermi-junction
+    title: Degenerate silicon junction with ohmic contacts
+    prompt_file: prompts/supported-fermi-junction.md
+    expected_status: ready
+    expected_study: dc
+    required_concepts: [fermi_statistics, ohmic_initialization, coupled_transport, terminal_current]
+    forbidden_inventions: [boltzmann_substitution, schottky_contact, changed_doping]
+    maximum_questions: 7
+
+  - id: supported-schottky-sweep
+    title: Boltzmann thermionic metal silicon boundary
+    prompt_file: prompts/supported-schottky-sweep.md
+    expected_status: ready
+    expected_study: dc_points
+    required_concepts: [metal_work_function, thermionic_emission, richardson_constants, bias_polarity]
+    forbidden_inventions: [ohmic_substitution, fermi_statistics, tunneling]
+    maximum_questions: 7
+
+  - id: supported-surface-physics
+    title: Silicon oxide interface recombination and trap charge
+    prompt_file: prompts/supported-surface-physics.md
+    expected_status: ready
+    expected_study: dc
+    required_concepts: [surface_srh, capture_velocities, interface_trap, interface_charge]
+    forbidden_inventions: [trap_distribution, tunneling, surface_mobility]
+    maximum_questions: 7
+
+  - id: supported-spatial-temperature
+    title: Prescribed lattice temperature across a silicon stack
+    prompt_file: prompts/supported-spatial-temperature.md
+    expected_status: clarification
+    expected_study: dc
+    required_concepts: [physics.temperature, contacts.right]
+    forbidden_inventions: [self_heating, scalar_temperature_substitution, fermi_statistics]
+    maximum_questions: 7
+
+  - id: supported-current-components
+    title: Drift and diffusion diagnostics for Boltzmann transport
+    prompt_file: prompts/supported-current-components.md
+    expected_status: ready
+    expected_study: dc_points
+    required_concepts: [drift_current, diffusion_current, reconciliation_residual, boltzmann_statistics]
+    forbidden_inventions: [fermi_decomposition, omit_native_total, force_zero_residual]
+    maximum_questions: 7

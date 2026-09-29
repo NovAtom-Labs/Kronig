@@ -14,7 +14,7 @@ Represent a one-dimensional problem as ordered regions, adjacent interfaces, spa
 
 Regions are contiguous intervals with explicit materials and mesh spacing. The reviewed material set contains silicon, silicon dioxide, and a generic dielectric whose relative permittivity is supplied by the researcher. Carrier continuity equations apply only inside semiconductor regions. Dielectrics participate in electrostatics and displacement, not electron or hole transport. Unknown materials and generic dielectrics without a relative permittivity are refused.
 
-Adjacent material regions require explicit interface records. Electrostatic continuity is available for reviewed semiconductor and dielectric compositions. Fixed interface charge is implemented as a displacement jump, normalized to canonical `C/m^2`, and covered by zero-charge reduction, sign, and mesh-refinement benchmarks. Interface trap distributions and surface recombination remain gated until their equations and independent references are reviewed.
+Adjacent material regions require explicit interface records. Electrostatic continuity is available for reviewed semiconductor and dielectric compositions. Fixed interface charge is implemented as a displacement jump, normalized to canonical `C/m^2`, and covered by zero-charge reduction, sign, and mesh-refinement benchmarks. Explicit surface SRH and one charged single-level donor or acceptor trap are available when a silicon side and coupled carrier transport are present. Capture velocities and trap properties remain researcher inputs. Trap distributions, tunneling, and frequency dispersion are refused.
 
 ## Profiles and units
 
@@ -24,17 +24,17 @@ Never infer an ambiguous unit. A statement such as an oxide thickness of `10 m` 
 
 ## Boundary semantics
 
-An ohmic contact is valid only where the reviewed semiconductor contact equations are intended. An ideal gate is valid on a dielectric boundary. A metal work-function boundary is available on dielectric boundaries and creates an explicit flat-band offset from the pinned semiconductor energy reference. Insulating boundaries create no contact equation and cannot be driven by a study. Contact voltage offsets and optional physical areas remain explicit experiment inputs. A numerical contact voltage is not a metal work function.
+An ohmic contact is valid only where the reviewed semiconductor contact equations are intended. An ideal gate is valid on a dielectric boundary. A metal work-function boundary on a dielectric creates an explicit flat-band offset. On silicon it selects the reviewed Boltzmann thermionic Schottky boundary with explicit or reviewed-default Richardson constants. Insulating boundaries create no contact equation and cannot be driven by a study. Contact voltage offsets and optional physical areas remain explicit experiment inputs. A numerical contact voltage is not a metal work function.
 
-A requested aluminum work function, Schottky barrier, surface recombination velocity, tunneling boundary, or interface trap distribution changes the physical boundary model. If the adapter does not advertise the exact contact capability, block the run. Never replace a metal-semiconductor boundary with an ohmic contact merely to obtain convergence.
+A requested work function, Schottky barrier, surface recombination velocity, tunneling boundary, or interface trap distribution changes the physical boundary model. If the adapter does not advertise the exact requested combination, block the run. Never replace a metal-semiconductor boundary with an ohmic contact merely to obtain convergence. The current Schottky envelope excludes Fermi injection, tunneling, and image-force lowering.
 
 ## Electrostatics and transport sequence
 
 Construct the mesh and material parameters first. Solve electrostatic equilibrium before creating and initializing carrier solutions. For drift diffusion, create the electron and hole equations only in semiconductor regions, then connect compatible semiconductor interfaces and solve the coupled system.
 
-The reviewed transport paths use Boltzmann carrier statistics, constant or doping-dependent Klaassen bulk mobility, optional one-dimensional high-field saturation, Shockley-Read-Hall recombination, optional Auger recombination, and optional Slotboom band-gap narrowing. Model identifiers and parameters are allowlisted and preserved in result provenance. The adapter extracts separate electron and hole mobility, current, recombination, generation, band-energy, and quasi-Fermi datasets when requested.
+The reviewed transport paths use Boltzmann Scharfetter-Gummel transport or the documented Fermi quasi-Fermi-gradient formulation, constant or doping-dependent Klaassen bulk mobility, optional one-dimensional high-field saturation, Shockley-Read-Hall recombination, optional Auger recombination, and optional Slotboom band-gap narrowing. Model identifiers and parameters are allowlisted and preserved in result provenance. The adapter extracts separate electron and hole mobility, current, recombination, generation, band-energy, and quasi-Fermi datasets when requested. Boltzmann runs may also request continuum drift and diffusion diagnostics plus their reconciliation residual.
 
-Fermi-Dirac transport, direct metal-semiconductor Schottky transport, Philips-style surface mobility, interface traps, incomplete ionization, quantum corrections, and self-heating remain explicit research gates. The presence of DEVSIM Fermi-integral functions does not by itself validate a coupled Fermi drift-diffusion implementation.
+Fermi Schottky injection, Philips-style surface mobility, trap distributions, incomplete ionization, quantum corrections, and self-heating remain explicit research gates. Prescribed positive silicon temperature profiles are available only in their reviewed Boltzmann equilibrium and DC envelope and are not a heat-flow solve.
 
 ## Equilibrium and DC studies
 

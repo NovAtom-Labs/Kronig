@@ -9,9 +9,11 @@ from tcad_agent.domain.interfaces import Interface1D
 from tcad_agent.domain.profiles import (
     ConstantProfile,
     PiecewiseConstantProfile,
+    PiecewiseConstantTemperatureProfile,
     Profile1D,
     ProfileSpecies,
     TabulatedProfile,
+    TabulatedTemperatureProfile,
     TemperatureProfile1D,
 )
 from tcad_agent.domain.studies import DCStudy, EquilibriumStudy, Study1D
@@ -453,6 +455,23 @@ class ExperimentSpec(StrictModel):
                 or coordinates[-1].to("m") > region.x1.to("m") + 1e-15
             ):
                 raise ValueError("profile coordinates must lie inside their region")
+        for temperature_profile in self.physics.temperature_profiles:
+            region = regions_by_id[temperature_profile.region]
+            temperature_coordinates: tuple[QuantityValue, ...] = ()
+            if isinstance(
+                temperature_profile, PiecewiseConstantTemperatureProfile
+            ):
+                temperature_coordinates = temperature_profile.boundaries
+            elif isinstance(temperature_profile, TabulatedTemperatureProfile):
+                temperature_coordinates = temperature_profile.positions
+            if temperature_coordinates and (
+                temperature_coordinates[0].to("m") < region.x0.to("m") - 1e-15
+                or temperature_coordinates[-1].to("m")
+                > region.x1.to("m") + 1e-15
+            ):
+                raise ValueError(
+                    "temperature profile coordinates must lie inside their region"
+                )
         contact_ids = [contact.id for contact in self.contacts]
         if len(contact_ids) != len(set(contact_ids)):
             raise ValueError("contact IDs must be unique")

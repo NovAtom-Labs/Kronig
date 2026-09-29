@@ -12,8 +12,11 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from tcad_agent.adapters.registry import BackendAdapterUnavailable, get_backend
+from tcad_agent.bundles.reader import BundleIntegrityError
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
 from tcad_agent.capabilities.service import CapabilityService
+from tcad_agent.conformance.bundles import compare_verified_bundles
+from tcad_agent.conformance.models import ComparisonStatus
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.experiments.errors import (
     ExperimentCapabilityError,
@@ -30,13 +33,16 @@ load_dotenv()
 app = typer.Typer(help="Validate, compile, run, and report simulator-neutral TCAD studies.")
 knowledge_app = typer.Typer(help="Search the authorized versioned TCAD knowledge index.")
 evaluation_app = typer.Typer(help="Inspect versioned TCAD agent evaluation prompts.")
+conformance_app = typer.Typer(help="Compare verified canonical backend evidence bundles.")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(evaluation_app, name="evaluation")
+app.add_typer(conformance_app, name="conformance")
 
 DEFAULT_COMPILED_OUTPUT = Path("compiled")
 DEFAULT_RUN_OUTPUT = Path("runs")
 DEFAULT_KNOWLEDGE_INDEX = Path("knowledge-sources/index/knowledge.sqlite3")
 DEFAULT_AGENT_EVALUATIONS = Path("evaluations/agent/cases.yaml")
+DEFAULT_CONFORMANCE_RULES = Path("evaluations/conformance/cases.yaml")
 
 
 def _load_spec(path: Path) -> ExperimentSpec:
@@ -124,6 +130,38 @@ def report_command(bundle: Path) -> None:
         typer.echo(f"report not found: {report}", err=True)
         raise typer.Exit(2)
     typer.echo(report.read_text())
+
+
+@conformance_app.command("compare")
+def compare_conformance_command(
+    devsim_bundle: Path,
+    sentaurus_bundle: Path,
+    case_id: Annotated[str, typer.Option("--case")],
+    rules_path: Annotated[
+        Path, typer.Option("--rules")
+    ] = DEFAULT_CONFORMANCE_RULES,
+    output: Annotated[Path | None, typer.Option("--output")] = None,
+) -> None:
+    """Compare hash-verified DEVSIM and licensed Sentaurus evidence bundles."""
+    try:
+        payload, status = compare_verified_bundles(
+            devsim_bundle,
+            sentaurus_bundle,
+            rules_path=rules_path,
+            case_id=case_id,
+        )
+    except (BundleIntegrityError, OSError, ValueError, yaml.YAMLError) as exc:
+        typer.echo(f"conformance comparison failed: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    rendered = json.dumps(payload, sort_keys=True, indent=2) + "\n"
+    if output is None:
+        typer.echo(rendered, nl=False)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered)
+        typer.echo(str(output))
+    if status is not ComparisonStatus.PASSED:
+        raise typer.Exit(1)
 
 
 @evaluation_app.command("show")

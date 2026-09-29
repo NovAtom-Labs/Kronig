@@ -33,6 +33,27 @@ def _unwrap_json_fence(text: str) -> str:
     return stripped
 
 
+def _repair_clarification_paths(text: str) -> str:
+    """Derive omitted unresolved paths from already typed clarification questions."""
+
+    payload = json.loads(text)
+    if (
+        isinstance(payload, dict)
+        and payload.get("status") == "clarification"
+        and not payload.get("unresolved_critical")
+        and isinstance(payload.get("questions"), list)
+    ):
+        paths = tuple(
+            question.get("field_path")
+            for question in payload["questions"]
+            if isinstance(question, dict)
+            and isinstance(question.get("field_path"), str)
+        )
+        if paths:
+            payload["unresolved_critical"] = paths
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 class OpenHandsPreparationModel:
     """Ask the configured execution model for one typed preparation decision."""
 
@@ -131,7 +152,7 @@ class OpenHandsPreparationModel:
             ).strip()
             try:
                 decision = PreparationDecision.model_validate_json(
-                    _unwrap_json_fence(text)
+                    _repair_clarification_paths(_unwrap_json_fence(text))
                 )
                 decision = self._reconcile_explicit_researcher_origins(
                     decision, original_prompt, answers

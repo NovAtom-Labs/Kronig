@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "source": {
+    "repository": "https://github.com/devsim/devsim.git",
+    "commit": "43b41ca845184c47e22b72d144db7e7db8509377",
+    "simulator_release": "2.9.1"
+  },
+  "diode_1d": {
+    "script": "examples/diode/diode_1d.py",
+    "intrinsic_density_cm3": 10000000000.0,
+    "terminal_current_a_per_cm2": {
+      "0.0": -2.1558854434500012e-09,
+      "0.1": 1.1592313132996792e-07,
+      "0.2": 1.136336617995751e-06,
+      "0.30000000000000004": 1.593146076941914e-05,
+      "0.4": 0.0004487529323802764,
+      "0.5": 0.018155155173288424
+    },
+    "comparison": "Current density divided by intrinsic-density squared"
+  },
+  "ssac_cap": {
+    "script": "testing/ssac_cap.py",
+    "frequencies_hz": [10000000000.0, 1000000000000000.0],
+    "capacitance_f_per_cm2": 3.4515e-13
+  },
+  "cap2_interface": {
+    "script": "testing/cap2.py",
+    "terminal_charge_c_per_cm2": 5.10822e-13,
+    "applied_voltage_v": 1.0
+  }
+}

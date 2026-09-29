@@ -1,3 +1,5 @@
+import json
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -14,6 +16,42 @@ from tcad_agent.runners.models import RunBudget
 from tcad_agent.validation.engine import ValidationEngine
 
 ROOT = Path(__file__).parents[2]
+OFFICIAL_INVARIANTS = ROOT / "tests" / "fixtures" / "devsim" / "official-reference-invariants.json"
+NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+
+
+def _official_source_root() -> Path:
+    source_root = next(
+        (
+            candidate
+            for candidate in (ROOT / "devsim" / "source", ROOT.parent / "devsim" / "source")
+            if candidate.is_dir()
+        ),
+        None,
+    )
+    if source_root is None:
+        pytest.skip("pinned DEVSIM source checkout is unavailable")
+    return source_root
+
+
+def _run_official(relative: str, tmp_path: Path) -> str:
+    source_root = _official_source_root()
+    script = source_root / relative
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [resolve_devsim_python(ROOT), str(script)],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return completed.stdout
+
+
+def _official_invariants() -> dict[str, object]:
+    return json.loads(OFFICIAL_INVARIANTS.read_text())
 
 
 @pytest.mark.integration
@@ -130,16 +168,7 @@ def test_terminal_current_is_stable_under_bias_step_refinement(tmp_path: Path) -
 def test_parallel_plate_charge_matches_pinned_official_devsim_example(
     tmp_path: Path,
 ) -> None:
-    source_root = next(
-        (
-            candidate
-            for candidate in (ROOT / "devsim" / "source", ROOT.parent / "devsim" / "source")
-            if candidate.is_dir()
-        ),
-        None,
-    )
-    if source_root is None:
-        pytest.skip("pinned DEVSIM source checkout is unavailable")
+    source_root = _official_source_root()
     official = source_root / "examples" / "capacitance" / "cap1d.py"
     completed = subprocess.run(
         [resolve_devsim_python(ROOT), str(official)],
@@ -197,3 +226,232 @@ def test_parallel_plate_charge_matches_pinned_official_devsim_example(
         official_charge_c_per_cm2 * 1e4,
         rel=2e-5,
     )
+
+
+@pytest.mark.integration
+def test_transport_matches_pinned_official_diode_invariant(tmp_path: Path) -> None:
+    fixture = _official_invariants()["diode_1d"]
+    assert isinstance(fixture, dict)
+    stdout = _run_official("examples/diode/diode_1d.py", tmp_path / "official-diode")
+    official = {
+        float(match.group(1)): float(match.group(2))
+        for match in re.finditer(
+            rf"^top[ \t]+({NUMBER})[ \t]+{NUMBER}[ \t]+{NUMBER}[ \t]+({NUMBER})$",
+            stdout,
+            re.MULTILINE,
+        )
+    }
+    expected = {
+        float(key): float(value)
+        for key, value in dict(fixture["terminal_current_a_per_cm2"]).items()
+    }
+    assert official == pytest.approx(expected, rel=1e-10, abs=1e-20)
+
+    spec = ExperimentSpec.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "pinned transport parity",
+            "dimension": 1,
+            "regions": [
+                {
+                    "id": "left",
+                    "material": "silicon",
+                    "x0": "0 cm",
+                    "x1": "0.5e-5 cm",
+                    "mesh_spacing": "1e-7 cm",
+                },
+                {
+                    "id": "right",
+                    "material": "silicon",
+                    "x0": "0.5e-5 cm",
+                    "x1": "1e-5 cm",
+                    "mesh_spacing": "1e-7 cm",
+                },
+            ],
+            "profiles": [
+                {
+                    "kind": "constant",
+                    "region": "left",
+                    "species": "acceptor",
+                    "value": "1e18 cm^-3",
+                },
+                {
+                    "kind": "constant",
+                    "region": "right",
+                    "species": "donor",
+                    "value": "1e18 cm^-3",
+                },
+            ],
+            "contacts": [
+                {"id": "top", "location": "x_min", "kind": "ohmic"},
+                {"id": "bot", "location": "x_max", "kind": "ohmic"},
+            ],
+            "physics": {
+                "equations": ["poisson", "electron_continuity", "hole_continuity"],
+                "models": ["boltzmann", "constant_mobility", "srh"],
+                "parameters": {
+                    "electron_lifetime": "1e-8 s",
+                    "hole_lifetime": "1e-8 s",
+                },
+                "temperature": "300 K",
+            },
+            "study": {
+                "kind": "dc_points",
+                "contact": "top",
+                "values": ["0 V", "0.1 V", "0.2 V", "0.3 V", "0.4 V", "0.5 V"],
+            },
+            "observables": [
+                "terminal_current",
+                "effective_intrinsic_carrier_concentration",
+            ],
+        }
+    )
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "adapter-diode"), RunBudget(seconds=120)
+    )
+    result = adapter.normalize(native)
+    assert result.status == "completed", native.stderr_path.read_text()
+    adapter_current = result.bias_points[-1].terminal_currents_a_per_m2["top"]
+    adapter_ni_cm3 = result.datasets[
+        "effective_intrinsic_carrier_concentration"
+    ].values[0] / 1e6
+    official_coefficient = official[0.5] * 1e4 / 1e20
+    adapter_coefficient = adapter_current / adapter_ni_cm3**2
+    assert adapter_coefficient == pytest.approx(official_coefficient, rel=0.03)
+
+
+@pytest.mark.integration
+def test_small_signal_matches_pinned_official_capacitance_invariant(
+    tmp_path: Path,
+) -> None:
+    fixture = _official_invariants()["ssac_cap"]
+    assert isinstance(fixture, dict)
+    stdout = _run_official("testing/ssac_cap.py", tmp_path / "official-ssac")
+    rows = re.findall(
+        rf"^V1\.I[ \t]+({NUMBER})[ \t]+({NUMBER})$|"
+        rf"^topbias[ \t]+({NUMBER})[ \t]+({NUMBER})$",
+        stdout,
+        re.MULTILINE,
+    )
+    complex_rows = [
+        complex(float(real or voltage_real), float(imaginary or voltage_imaginary))
+        for real, imaginary, voltage_real, voltage_imaginary in rows
+    ]
+    assert len(complex_rows) == 4
+    official_capacitances = []
+    for frequency, current, voltage in zip(
+        (1e10, 1e15), complex_rows[::2], complex_rows[1::2], strict=True
+    ):
+        admittance = -current / voltage
+        official_capacitances.append(admittance.imag / (2 * math.pi * frequency))
+    expected = float(fixture["capacitance_f_per_cm2"])
+    assert official_capacitances == pytest.approx((expected, expected), rel=1e-10)
+
+    spec = ExperimentSpec.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "pinned small signal parity",
+            "dimension": 1,
+            "regions": [
+                {
+                    "id": "medium",
+                    "material": "generic_dielectric",
+                    "relative_permittivity": 3.9,
+                    "x0": "0 cm",
+                    "x1": "1 cm",
+                    "mesh_spacing": "0.1 cm",
+                }
+            ],
+            "profiles": [],
+            "contacts": [
+                {"id": "top", "location": "x_min", "kind": "ideal_gate"},
+                {"id": "bot", "location": "x_max", "kind": "ideal_gate"},
+            ],
+            "physics": {"equations": ["poisson"]},
+            "study": {
+                "kind": "frequency",
+                "contact": "top",
+                "start": "10 GHz",
+                "stop": "1 PHz",
+                "points": 2,
+                "spacing": "log",
+                "amplitude": "1 V",
+            },
+            "observables": ["potential", "terminal_charge"],
+        }
+    )
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "adapter-ssac"), RunBudget(seconds=120)
+    )
+    result = adapter.normalize(native)
+    assert result.status == "completed", native.stderr_path.read_text()
+    adapter_capacitance = result.datasets["ac_capacitance__top"].values
+    assert adapter_capacitance == pytest.approx(
+        tuple(value * 1e4 for value in official_capacitances), rel=2e-5
+    )
+
+
+@pytest.mark.integration
+def test_interface_flux_matches_pinned_official_two_region_invariant(
+    tmp_path: Path,
+) -> None:
+    fixture = _official_invariants()["cap2_interface"]
+    assert isinstance(fixture, dict)
+    stdout = _run_official("testing/cap2.py", tmp_path / "official-interface")
+    charges = [
+        float(value)
+        for value in re.findall(r"^([+-]?\d+\.\d+e[+-]\d+)$", stdout, re.MULTILINE)
+    ]
+    expected = float(fixture["terminal_charge_c_per_cm2"])
+    assert charges[0] == pytest.approx(expected, rel=1e-10)
+    assert charges[1] == pytest.approx(-expected, rel=1e-10)
+
+    spec = ExperimentSpec.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "pinned interface parity",
+            "dimension": 1,
+            "regions": [
+                {
+                    "id": "left",
+                    "material": "generic_dielectric",
+                    "relative_permittivity": 11.1,
+                    "x0": "0 cm",
+                    "x1": "0.5 cm",
+                    "mesh_spacing": "0.1 cm",
+                },
+                {
+                    "id": "right",
+                    "material": "silicon_dioxide",
+                    "x0": "0.5 cm",
+                    "x1": "1 cm",
+                    "mesh_spacing": "0.1 cm",
+                },
+            ],
+            "interfaces": [
+                {"id": "boundary", "left_region": "left", "right_region": "right"}
+            ],
+            "profiles": [],
+            "contacts": [
+                {"id": "top", "location": "x_min", "kind": "ideal_gate"},
+                {"id": "bot", "location": "x_max", "kind": "ideal_gate"},
+            ],
+            "physics": {"equations": ["poisson"]},
+            "study": {"kind": "dc_points", "contact": "top", "values": ["1 V"]},
+            "observables": ["potential", "terminal_charge", "electrostatic_flux"],
+        }
+    )
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "adapter-interface"), RunBudget(seconds=120)
+    )
+    result = adapter.normalize(native)
+    assert result.status == "completed", native.stderr_path.read_text()
+    point = result.operating_points[0]
+    assert point.terminal_charges_c_per_m2["top"] == pytest.approx(
+        expected * 1e4, rel=2e-5
+    )
+    flux = result.datasets["electrostatic_flux"].values
+    assert max(flux) == pytest.approx(min(flux), rel=1e-10)

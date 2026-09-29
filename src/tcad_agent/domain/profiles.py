@@ -186,6 +186,33 @@ class LinearTemperatureProfile(_DomainModel):
     _validate_values = field_validator("start_value", "end_value")(_temperature)
 
 
+class PiecewiseConstantTemperatureProfile(_DomainModel):
+    kind: Literal["piecewise_constant"]
+    region: str
+    boundaries: tuple[QuantityValue, ...] = Field(min_length=2, max_length=10001)
+    values: tuple[QuantityValue, ...] = Field(min_length=1, max_length=10000)
+
+    _validate_boundaries = field_validator("boundaries")(
+        lambda values: tuple(_length(value) for value in values)
+    )
+    _validate_values = field_validator("values")(
+        lambda values: tuple(_temperature(value) for value in values)
+    )
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> Self:
+        if len(self.boundaries) != len(self.values) + 1:
+            raise ValueError(
+                "piecewise-constant temperature requires one value per interval"
+            )
+        coordinates = [boundary.to("m") for boundary in self.boundaries]
+        if any(right <= left for left, right in pairwise(coordinates)):
+            raise ValueError(
+                "piecewise-constant temperature boundaries must be strictly increasing"
+            )
+        return self
+
+
 class TabulatedTemperatureProfile(_DomainModel):
     kind: Literal["tabulated"]
     region: str
@@ -213,6 +240,7 @@ class TabulatedTemperatureProfile(_DomainModel):
 TemperatureProfile1D = Annotated[
     ConstantTemperatureProfile
     | LinearTemperatureProfile
+    | PiecewiseConstantTemperatureProfile
     | TabulatedTemperatureProfile,
     Field(discriminator="kind"),
 ]

@@ -36,11 +36,32 @@ def test_release_workflow_gates_publication_on_every_native_build() -> None:
     assert isinstance(jobs, dict)
 
     assert workflow["on"]["push"]["tags"] == ["v*"]
-    assert set(jobs) == {"validate", "build", "release"}
+    assert set(jobs) == {"validate", "build", "scientific-conformance", "release"}
     assert jobs["build"]["needs"] == "validate"
-    assert jobs["release"]["needs"] == "build"
+    assert jobs["scientific-conformance"]["needs"] == "build"
+    assert jobs["release"]["needs"] == ["build", "scientific-conformance"]
     assert jobs["release"]["permissions"]["contents"] == "write"
     assert jobs["release"]["if"] == "startsWith(github.ref, 'refs/tags/')"
+
+
+def test_release_workflow_requires_four_platform_scientific_evidence_records() -> None:
+    workflow = load_workflow()
+    build_steps = workflow["jobs"]["build"]["steps"]
+    build_commands = "\n".join(
+        str(step.get("run", "")) for step in build_steps if isinstance(step, dict)
+    )
+    conformance = workflow["jobs"]["scientific-conformance"]
+    conformance_commands = "\n".join(
+        str(step.get("run", ""))
+        for step in conformance["steps"]
+        if isinstance(step, dict)
+    )
+
+    assert "scientific_platform_evidence.py write" in build_commands
+    assert "matrix.platform" in build_commands
+    assert "matrix.arch" in build_commands
+    assert "scientific_platform_evidence.py compare" in conformance_commands
+    assert conformance["runs-on"] == "ubuntu-24.04"
 
 
 def test_release_workflow_builds_all_supported_native_targets() -> None:

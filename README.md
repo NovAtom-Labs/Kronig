@@ -105,8 +105,8 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Scientific contract | Strict simulator-neutral `ExperimentSpec` with dimensional quantities, typed axes and datasets, and unknown-field rejection |
 | Geometry | Up to 32 ordered, contiguous silicon, silicon-dioxide, or researcher-parameterized dielectric regions with bounded mesh controls and automatic profile landmarks |
 | Profiles | Constant, piecewise, linear, Gaussian, error-function, and tabulated donor or acceptor profiles plus fixed bulk charge |
-| Interfaces | Explicit material interfaces, electrostatic continuity, mesh refinement, and fixed interface charge |
-| Physics | Poisson and drift diffusion, Boltzmann statistics, constant or Klaassen mobility, high-field saturation, SRH, Auger, Slotboom band-gap narrowing, and canonical band energies |
+| Interfaces | Explicit material interfaces, electrostatic continuity, mesh refinement, fixed charge, surface SRH, and a single-level donor or acceptor trap |
+| Physics | Poisson and drift diffusion, reviewed Boltzmann or Fermi transport, constant or Klaassen mobility, high-field saturation, bulk and surface SRH, Auger, Slotboom band-gap narrowing, Schottky thermionic boundaries, prescribed spatial temperature, current-component diagnostics, and canonical band energies |
 | Studies | Equilibrium, exact or ranged DC, adaptive recovery, quasi-static C-V, small-signal AC, frequency, transient step, ramp, or pulse, temperature, and registered parameter studies |
 | DEVSIM | Local deterministic compilation, execution, normalization, validation, reporting, and evidence bundles |
 | Sentaurus | Deterministic command compilation, source maps, signed remote protocol, canonical result contract, and conformance rules |
@@ -122,11 +122,12 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Dimension | 1D | 1D |
 | Material | Silicon, silicon dioxide, and generic dielectric with explicit permittivity | Silicon |
 | Regions | Up to 32 ordered regions | Up to 32 ordered regions |
-| Contacts | Semiconductor ohmic, dielectric ideal-gate or work-function boundaries, insulating boundaries, offsets, and optional area | Endpoint ohmic or explicit metal work-function contacts |
-| Statistics | Boltzmann | Boltzmann or Fermi |
+| Contacts | Semiconductor ohmic, dielectric ideal-gate or work-function boundaries, reviewed silicon Schottky thermionic boundaries, insulating boundaries, offsets, optional area, and optional Richardson constants | Endpoint ohmic or explicit metal-work-function contacts |
+| Statistics | Boltzmann and reviewed Fermi transport with statistics-consistent ohmic initialization | Boltzmann or Fermi |
 | Mobility | Constant, Klaassen, and reviewed one-dimensional high-field saturation | Constant and reviewed Sentaurus mappings |
-| Recombination | SRH and Auger | SRH and Auger |
+| Recombination | Bulk SRH, Auger, surface SRH, and single-level charged interface traps | SRH and Auger |
 | Band-gap narrowing | Reviewed Slotboom implementation | Supported by the adapter contract |
+| Temperature | Scalar temperature, temperature studies, and prescribed constant, linear, piecewise-constant, or tabulated silicon profiles in the reviewed DC envelope | Scalar temperature |
 | Studies | Equilibrium, DC, charge or C-V, AC or frequency, transient step, ramp, or pulse, temperature, and registered parameters, with a 10,000-point resource limit | Equilibrium and DC sweep, up to 10 points |
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
@@ -158,8 +159,11 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 - No arbitrary model-written simulator syntax.
 - No process simulation, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or arbitrary circuit co-simulation.
 - No automated calibration against fabrication measurements.
-- Direct metal-semiconductor Schottky transport and coupled Fermi-Dirac drift diffusion remain disabled research gates. Metal work function is supported only as a reviewed electrostatic boundary on dielectric contacts.
-- Philips-style surface mobility is outside the one-dimensional adapter because the pinned DEVSIM implementation requires two-dimensional element fields. Surface recombination, interface traps, spatial temperature profiles, coupled Fermi transport, and direct Schottky transport remain evidence-backed research gates.
+- Fermi transport is limited to its reviewed one-dimensional silicon, ohmic-contact benchmark envelope. The current verified upper benchmark is `5e19 cm^-3`; Fermi Schottky injection and Fermi drift/diffusion decomposition remain refused.
+- Silicon Schottky contacts use the reviewed Boltzmann thermionic-emission boundary. Image-force lowering, tunneling, distributed interface states at the contact, and Fermi-statistics injection are not silently added.
+- Surface physics supports surface SRH and one charged single-level donor or acceptor trap. Trap distributions, tunneling, frequency dispersion, and Philips-style surface mobility remain outside the reviewed one-dimensional boundary.
+- Prescribed spatial temperature supports positive constant, linear, piecewise-constant, or tabulated silicon profiles with reviewed local material and transport terms under equilibrium or DC. It is not a heat-flow or self-heating solve, and unbenchmarked model and study combinations are refused.
+- Drift and diffusion current components are explicit continuum diagnostics for Boltzmann transport. The native Scharfetter-Gummel total and their reconciliation residual remain visible; the diagnostic is not presented as native solver state.
 - Parameter studies are restricted to the registered model-parameter paths. Arbitrary runtime paths and arbitrary material values are rejected.
 - DC sweeps retain every requested terminal operating point plus bias-indexed spatial profiles. Failed solves remain explicit and are masked as gaps in the scientific viewer.
 - Licensed Sentaurus execution remains unavailable until a separate host, exact simulator version, extractor, signing keys, quotas, and conformance cases are configured and verified.
@@ -254,6 +258,14 @@ canonical datasets:
   tests/unit/evaluations/test_scientific_cases.py \
   tests/integration/test_scientific_research_workbench.py
 ```
+
+Pinned official DEVSIM diode, capacitance, small-signal, and two-region interface invariants are exercised with:
+
+```bash
+.venv/bin/pytest -q tests/integration/test_devsim_reference_benchmarks.py
+```
+
+Native release CI runs this suite on Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon. Each target uploads a compact scientific evidence record, and a release gate rejects missing targets or disagreement in application revision, DEVSIM version and source revision, invariant fixture hash, or suite identity.
 
 Live Bedrock behavior tests are intentionally opt-in because they incur API cost. The unified suite
 checks a real DEVSIM run, unsupported-physics refusal, and an ordinary repository edit through the

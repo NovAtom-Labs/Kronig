@@ -77,8 +77,9 @@ It never exposes a shell, model prompt, unrestricted file path, or user-controll
 6. Run `examples/al-pn-al-equilibrium.yaml` manually once and compare it with the expert golden deck and plots.
 7. Start the reference service behind the approved HTTPS identity.
 8. Run `pytest -m sentaurus tests/integration/test_cross_backend_conformance.py -q` from the client.
-9. Review every failed or warning comparison. Do not loosen a tolerance without the TCAD domain lead approving the case file.
-10. Attach the signed run bundle and conformance report, then mark the manifest configured.
+9. Compare the hash-verified bundles with `tcad-agent conformance compare /path/to/devsim-bundle /path/to/sentaurus-bundle --case al-pn-al-equilibrium --output conformance-report.json`.
+10. Review every failed or warning comparison. Do not loosen a tolerance without the TCAD domain lead approving the case file.
+11. Attach both bundles and `conformance-report.json`, then mark the manifest configured.
 
 ## Rollback
 

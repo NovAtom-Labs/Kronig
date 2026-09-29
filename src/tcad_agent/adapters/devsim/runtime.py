@@ -294,6 +294,16 @@ def _temperature_expression(profile: dict[str, Any], region: dict[str, Any]) -> 
             f"{float(profile['start_k']):.17e}+"
             f"((x-{float(region['x0_cm']):.17e})/{width:.17e})*{delta:.17e}"
         )
+    if profile["kind"] == "piecewise_constant":
+        boundaries = profile["boundaries_cm"]
+        values = profile["values_k"]
+        expression = f"{float(values[-1]):.17e}"
+        for index in range(len(values) - 2, -1, -1):
+            expression = (
+                f"ifelse(x < {float(boundaries[index + 1]):.17e}, "
+                f"{float(values[index]):.17e}, {expression})"
+            )
+        return expression
     positions = profile["positions_cm"]
     values = profile["values_k"]
     expression = f"{float(values[-1]):.17e}"
