@@ -66,3 +66,41 @@ def test_relative_workspace_executes_from_runner_working_directory(
 
     assert job.entrypoint.is_absolute()
     assert native.status == "completed", native.stderr_path.read_text()
+
+
+@pytest.mark.integration
+def test_reviewed_transport_observables_normalize_with_centering(tmp_path) -> None:
+    payload = yaml.safe_load((EXAMPLES / "pn-junction.yaml").read_text())
+    spec = ExperimentSpec.model_validate(payload)
+    requested = spec.model_copy(
+        update={
+            "observables": (
+                *spec.observables,
+                Observable.ELECTRIC_FIELD,
+                Observable.CHARGE_DENSITY,
+                Observable.ELECTRON_CURRENT_DENSITY,
+                Observable.HOLE_CURRENT_DENSITY,
+                Observable.ELECTRON_MOBILITY,
+                Observable.HOLE_MOBILITY,
+                Observable.RECOMBINATION_RATE,
+            )
+        }
+    )
+    adapter = DevsimAdapter.from_defaults()
+    job = adapter.compile(requested, tmp_path / "transport-observables")
+
+    native = LocalRunner(devsim_python=DEVSIM_PYTHON).run(job, RunBudget(seconds=120))
+    result = adapter.normalize(native)
+
+    assert result.status == "completed", native.stderr_path.read_text()
+    for name in (
+        "charge_density",
+        "electron_current_density",
+        "hole_current_density",
+        "electron_mobility",
+        "hole_mobility",
+        "recombination_rate",
+    ):
+        assert result.datasets[name].values
+    assert result.datasets["electric_field"].centering == "edge"
+    assert result.datasets["electron_density"].centering == "node"

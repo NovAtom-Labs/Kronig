@@ -36,6 +36,18 @@ class CapabilityService:
             tuple(profile.kind for profile in spec.profiles),
             manifest.profiles,
         )
+        requested_interfaces = tuple(
+            "fixed_charge"
+            if interface.fixed_charge_density is not None
+            else "continuity"
+            for interface in spec.interfaces
+        )
+        self._check_many(
+            issues,
+            "interfaces",
+            requested_interfaces,
+            manifest.interfaces,
+        )
         self._check_many(
             issues,
             "contacts",

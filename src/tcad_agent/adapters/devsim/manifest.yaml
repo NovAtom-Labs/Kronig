@@ -1,15 +1,28 @@
 schema_version: "1.0"
 backend: devsim
-adapter_version: "0.1.0"
+adapter_version: "0.2.0"
 execution_state: configured
 dimensions: [1]
 equations: [poisson, electron_continuity, hole_continuity]
 models: [boltzmann, constant_mobility, srh]
-materials: [silicon]
-profiles: [constant]
-contacts: [ohmic]
-studies: [equilibrium, dc]
-observables: [terminal_current, potential, electric_field, electron_density, hole_density]
+materials: [silicon, silicon_dioxide]
+profiles: [constant, linear, gaussian, error_function, tabulated]
+interfaces: [continuity]
+contacts: [ohmic, ideal_gate]
+studies: [equilibrium, dc, dc_points]
+observables:
+  - terminal_current
+  - terminal_charge
+  - potential
+  - electric_field
+  - electron_density
+  - hole_density
+  - charge_density
+  - electron_current_density
+  - hole_current_density
+  - electron_mobility
+  - hole_mobility
+  - recombination_rate
 limits:
   max_bias_points: 10
   max_regions: 32

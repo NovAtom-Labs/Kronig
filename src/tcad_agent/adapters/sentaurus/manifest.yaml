@@ -7,6 +7,7 @@ equations: [poisson, electron_continuity, hole_continuity]
 models: [boltzmann, fermi, constant_mobility, srh, auger, band_gap_narrowing]
 materials: [silicon]
 profiles: [constant]
+interfaces: [continuity, fixed_charge]
 contacts: [ohmic, metal_work_function]
 studies: [equilibrium, dc]
 observables:

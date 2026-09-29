@@ -4,20 +4,40 @@ from __future__ import annotations
 
 import hashlib
 import json
-from decimal import Decimal
 from pathlib import Path
 
 from tcad_agent.adapters.devsim import runtime
+from tcad_agent.adapters.devsim.extract import normalize_native_field
+from tcad_agent.adapters.devsim.payload import DevsimPayload
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
 from tcad_agent.capabilities.service import CapabilityService
 from tcad_agent.domain.errors import CapabilityError
-from tcad_agent.domain.models import DCStudy, ExperimentSpec, ProfileSpecies
-from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries
+from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.domain.profiles import (
+    ConstantProfile,
+    ErrorFunctionProfile,
+    GaussianProfile,
+    LinearProfile,
+    TabulatedProfile,
+)
+from tcad_agent.domain.studies import (
+    ACStudy,
+    DCPointsStudy,
+    DCStudy,
+    EquilibriumStudy,
+    FrequencyStudy,
+    ParameterStudy,
+    TemperatureStudy,
+    TransientStudy,
+    expand_study_points,
+)
+from tcad_agent.results.datasets import AxisKind, Dataset, DatasetCentering, ScientificAxis
+from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries, OperatingPoint
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
 
 class DevsimAdapter:
-    compiler_version = "0.1.0"
+    compiler_version = "0.2.0"
 
     def __init__(self, manifest: CapabilityManifest) -> None:
         self._manifest = manifest
@@ -37,7 +57,7 @@ class DevsimAdapter:
             raise CapabilityError(details)
         payload = self._payload(spec)
         workspace = workspace.resolve()
-        input_bytes = (json.dumps(payload, sort_keys=True, indent=2) + "\n").encode()
+        input_bytes = (payload.model_dump_json(indent=2) + "\n").encode()
         runtime_path = Path(runtime.__file__)
         runtime_bytes = runtime_path.read_bytes()
         workspace.mkdir(parents=True, exist_ok=False)
@@ -56,51 +76,150 @@ class DevsimAdapter:
             compiler_version=self.compiler_version,
         )
 
-    def _payload(self, spec: ExperimentSpec) -> dict[str, object]:
-        doping = {region.id: 0.0 for region in spec.regions}
+    def _payload(self, spec: ExperimentSpec) -> DevsimPayload:
+        regions = [
+            {
+                "id": region.id,
+                "material": region.material,
+                "x0_cm": region.x0.to("cm"),
+                "x1_cm": region.x1.to("cm"),
+                "mesh_spacing_cm": (
+                    region.mesh_spacing.to("cm")
+                    if region.mesh_spacing is not None
+                    else max((region.x1.to("cm") - region.x0.to("cm")) / 50.0, 1e-9)
+                ),
+            }
+            for region in spec.regions
+        ]
+        interfaces = [
+            {
+                "id": interface.id,
+                "left_region": interface.left_region,
+                "right_region": interface.right_region,
+                "fixed_charge_cm2": (
+                    interface.fixed_charge_density.to("cm^-2")
+                    if interface.fixed_charge_density is not None
+                    else None
+                ),
+            }
+            for interface in spec.interfaces
+        ]
+        profiles: list[dict[str, object]] = []
         for profile in spec.profiles:
-            sign = 1.0 if profile.species is ProfileSpecies.DONOR else -1.0
-            doping[profile.region] += sign * profile.value.to("cm^-3")
-        mesh_lines: list[dict[str, float | str]] = []
-        for index, region in enumerate(spec.regions):
-            spacing = (
-                region.mesh_spacing.to("cm")
-                if region.mesh_spacing is not None
-                else max((region.x1.to("cm") - region.x0.to("cm")) / 50.0, 1e-9)
-            )
-            if index == 0:
-                mesh_lines.append(
-                    {"position_cm": region.x0.to("cm"), "spacing_cm": spacing, "tag": "x_min"}
-                )
-            tag = "x_max" if index == len(spec.regions) - 1 else f"boundary_{index}"
-            mesh_lines.append(
-                {"position_cm": region.x1.to("cm"), "spacing_cm": spacing, "tag": tag}
-            )
-        contacts = {str(contact.location): contact.id for contact in spec.contacts}
-        study: dict[str, object] = {"kind": spec.study.kind}
-        if isinstance(spec.study, DCStudy):
-            start = Decimal(str(spec.study.start.to("V")))
-            stop = Decimal(str(spec.study.stop.to("V")))
-            step = Decimal(str(spec.study.step.to("V")))
-            values: list[float] = []
-            current = start
-            while current <= stop:
-                values.append(float(current))
-                current += step
-            study.update({"contact": spec.study.contact, "biases_v": values})
-        return {
-            "schema_version": "1.0",
-            "experiment_name": spec.name,
-            "mesh_lines": mesh_lines,
-            "segments": [
-                {"x1_cm": region.x1.to("cm"), "net_doping_cm3": doping[region.id]}
-                for region in spec.regions
-            ],
-            "contacts": contacts,
-            "temperature_k": spec.physics.temperature.to("K"),
-            "study": study,
-            "observables": [str(value) for value in spec.observables],
-        }
+            common: dict[str, object] = {
+                "kind": profile.kind,
+                "region": profile.region,
+                "species": str(profile.species),
+            }
+            if isinstance(profile, ConstantProfile):
+                common["value_cm3"] = profile.value.to("cm^-3")
+            elif isinstance(profile, LinearProfile):
+                common["start_value_cm3"] = profile.start_value.to("cm^-3")
+                common["end_value_cm3"] = profile.end_value.to("cm^-3")
+            elif isinstance(profile, GaussianProfile):
+                common["peak_cm3"] = profile.peak.to("cm^-3")
+                common["center_cm"] = profile.center.to("cm")
+                common["standard_deviation_cm"] = profile.standard_deviation.to("cm")
+            elif isinstance(profile, ErrorFunctionProfile):
+                common["surface_value_cm3"] = profile.surface_value.to("cm^-3")
+                common["junction_position_cm"] = profile.junction_position.to("cm")
+                common["characteristic_length_cm"] = profile.characteristic_length.to("cm")
+                common["orientation"] = profile.orientation
+            elif isinstance(profile, TabulatedProfile):
+                common["positions_cm"] = tuple(value.to("cm") for value in profile.positions)
+                common["values_cm3"] = tuple(value.to("cm^-3") for value in profile.values)
+                common["interpolation"] = profile.interpolation
+            profiles.append(common)
+        contacts = [
+            {
+                "id": contact.id,
+                "location": str(contact.location),
+                "kind": str(contact.kind),
+                "work_function_ev": (
+                    contact.work_function.to("eV") if contact.work_function is not None else None
+                ),
+            }
+            for contact in spec.contacts
+        ]
+        study = self._study_payload(spec)
+        return DevsimPayload.model_validate(
+            {
+                "schema_version": "2.0",
+                "experiment_name": spec.name,
+                "regions": regions,
+                "interfaces": interfaces,
+                "profiles": profiles,
+                "contacts": contacts,
+                "physics": {
+                    "equations": [str(value) for value in spec.physics.equations],
+                    "models": list(spec.physics.models),
+                    "temperature_k": spec.physics.temperature.to("K"),
+                },
+                "study": study,
+                "observables": [str(value) for value in spec.observables],
+            }
+        )
+
+    @staticmethod
+    def _study_payload(spec: ExperimentSpec) -> dict[str, object]:
+        study = spec.study
+        if isinstance(study, EquilibriumStudy):
+            return {"kind": "equilibrium"}
+        if isinstance(study, DCStudy):
+            return {
+                "kind": "dc",
+                "contact": study.contact,
+                "biases_v": tuple(value.to("V") for value in expand_study_points(study)),
+                "strategy": study.strategy,
+                "minimum_step_v": (
+                    study.minimum_step.to("V") if study.minimum_step is not None else None
+                ),
+                "maximum_retries": study.maximum_retries,
+            }
+        if isinstance(study, DCPointsStudy):
+            return {
+                "kind": "dc_points",
+                "contact": study.contact,
+                "biases_v": tuple(value.to("V") for value in study.values),
+            }
+        if isinstance(study, ACStudy):
+            return {
+                "kind": "ac",
+                "contact": study.contact,
+                "frequencies_hz": (study.frequency.to("Hz"),),
+                "amplitude_v": study.amplitude.to("V"),
+            }
+        if isinstance(study, FrequencyStudy):
+            return {
+                "kind": "frequency",
+                "contact": study.contact,
+                "frequencies_hz": tuple(value.to("Hz") for value in expand_study_points(study)),
+                "amplitude_v": study.amplitude.to("V"),
+            }
+        if isinstance(study, TransientStudy):
+            return {
+                "kind": "transient",
+                "start_s": study.start.to("s"),
+                "stop_s": study.stop.to("s"),
+                "initial_step_s": study.initial_step.to("s"),
+                "maximum_step_s": study.maximum_step.to("s"),
+                "maximum_steps": study.maximum_steps,
+            }
+        if isinstance(study, TemperatureStudy):
+            return {
+                "kind": "temperature",
+                "parameter_path": "physics.temperature",
+                "values_si": tuple(value.to("K") for value in study.values),
+                "unit": "K",
+            }
+        if isinstance(study, ParameterStudy):
+            return {
+                "kind": "parameter",
+                "parameter_path": study.parameter_path,
+                "values_si": tuple(value.magnitude_si for value in study.values),
+                "unit": study.values[0].si_unit,
+            }
+        raise TypeError(f"unsupported study: {type(study).__name__}")
 
     def normalize(self, native: NativeRunResult) -> CanonicalResult:
         if native.status != "completed" or native.result_path is None:
@@ -122,16 +241,48 @@ class DevsimAdapter:
             for point in data["bias_points"]
         )
         fields: dict[str, FieldSeries] = {}
+        axes: dict[str, ScientificAxis] = {}
+        datasets: dict[str, Dataset] = {}
         for name, field in data["fields"].items():
-            scale = {"cm^-3": 1e6, "V/cm": 1e2}.get(field["unit"], 1.0)
-            unit = {"cm^-3": "m^-3", "V/cm": "V/m"}.get(
-                field["unit"], field["unit"]
-            )
+            positions, values, unit = normalize_native_field(field)
             fields[name] = FieldSeries(
-                positions_m=tuple(value * 1e-2 for value in field["positions_cm"]),
-                values=tuple(value * scale for value in field["values"]),
+                positions_m=positions,
+                values=values,
                 unit=unit,
             )
+            axis_id = f"position__{name}"
+            axes[axis_id] = ScientificAxis(
+                id=axis_id,
+                kind=AxisKind.POSITION,
+                label="Position",
+                unit="m",
+                values=positions,
+            )
+            datasets[name] = Dataset(
+                id=name,
+                label=name.replace("_", " ").title(),
+                unit=unit,
+                axes=(axis_id,),
+                shape=(len(values),),
+                centering=DatasetCentering(field.get("centering", "node")),
+                values=values,
+            )
+        operating_points = tuple(
+            OperatingPoint(
+                index=index,
+                state="converged" if point["converged"] else "failed",
+                coordinates={"bias": point["bias_v"]},
+                terminal_currents_a_per_m2={
+                    name: value * 1e4 for name, value in point["currents_a_per_cm2"].items()
+                },
+                terminal_charges_c_per_m2={
+                    name: value * 1e4 for name, value in point.get("charges_c_per_cm2", {}).items()
+                },
+                attempts=point.get("attempts", 1),
+                message=point.get("message"),
+            )
+            for index, point in enumerate(data["bias_points"])
+        )
         return CanonicalResult(
             backend="devsim",
             simulator_version=data["simulator_version"],
@@ -139,5 +290,8 @@ class DevsimAdapter:
             terminals=tuple(data["terminals"]),
             bias_points=points,
             fields=fields,
+            axes=axes,
+            datasets=datasets,
+            operating_points=operating_points,
             native_result_path=native.result_path,
         )

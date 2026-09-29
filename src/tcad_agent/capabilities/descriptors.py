@@ -177,6 +177,7 @@ class CapabilityCatalog(StrictModel):
             ("model", manifest.models),
             ("material", manifest.materials),
             ("profile", manifest.profiles),
+            ("interface", manifest.interfaces),
             ("contact", manifest.contacts),
             ("study", manifest.studies),
             ("observable", manifest.observables),

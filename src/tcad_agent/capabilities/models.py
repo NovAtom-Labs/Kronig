@@ -41,6 +41,7 @@ class CapabilityManifest(StrictModel):
     models: tuple[str, ...] = ()
     materials: tuple[str, ...] = ("silicon",)
     profiles: tuple[str, ...] = ("constant",)
+    interfaces: tuple[str, ...] = ("continuity",)
     contacts: tuple[str, ...] = ("ohmic",)
     studies: tuple[str, ...] = ("equilibrium", "dc")
     observables: tuple[str, ...] = ()
@@ -54,6 +55,7 @@ class CapabilityManifest(StrictModel):
             "models",
             "materials",
             "profiles",
+            "interfaces",
             "contacts",
             "studies",
             "observables",
