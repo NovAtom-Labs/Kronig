@@ -138,6 +138,8 @@ class ContactPayload(_PayloadModel):
     location: Literal["x_min", "x_max"]
     kind: Literal["ohmic", "ideal_gate", "metal_work_function", "insulating"]
     work_function_ev: float | None = None
+    electron_richardson_a_cm2_k2: float | None = Field(default=None, gt=0)
+    hole_richardson_a_cm2_k2: float | None = Field(default=None, gt=0)
     voltage_offset_v: float = 0.0
     area_m2: float | None = Field(default=None, gt=0)
 

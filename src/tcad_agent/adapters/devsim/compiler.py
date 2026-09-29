@@ -175,6 +175,24 @@ class DevsimAdapter:
                 "work_function_ev": (
                     contact.work_function.to("eV") if contact.work_function is not None else None
                 ),
+                "electron_richardson_a_cm2_k2": (
+                    contact.electron_richardson_constant.to("A/cm^2/K^2")
+                    if contact.electron_richardson_constant is not None
+                    else (
+                        112.0
+                        if str(contact.kind) == "metal_work_function"
+                        else None
+                    )
+                ),
+                "hole_richardson_a_cm2_k2": (
+                    contact.hole_richardson_constant.to("A/cm^2/K^2")
+                    if contact.hole_richardson_constant is not None
+                    else (
+                        32.0
+                        if str(contact.kind) == "metal_work_function"
+                        else None
+                    )
+                ),
                 "voltage_offset_v": contact.voltage_offset.to("V"),
                 "area_m2": (
                     contact.area.to("m^2") if contact.area is not None else None
@@ -228,6 +246,19 @@ class DevsimAdapter:
                     "reviewed quasi-Fermi-gradient discretization"
                 ),
                 "version": "devsim-43b41ca+novatom.fermi-gradient.2026-09-29.v1",
+            }
+        if any(
+            str(contact.kind) == "metal_work_function"
+            and spec.regions[0 if str(contact.location) == "x_min" else -1].material
+            == "silicon"
+            for contact in spec.contacts
+        ):
+            parameter_sources["schottky_transport"] = {
+                "source": (
+                    "Agent Kronig reviewed thermionic-emission boundary with "
+                    "metal-work-function barrier"
+                ),
+                "version": "novatom.schottky-thermionic.2026-09-29.v1",
             }
         mesh_anchors = self._mesh_anchor_payloads(spec, regions)
         return DevsimPayload.model_validate(

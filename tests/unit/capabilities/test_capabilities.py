@@ -174,3 +174,55 @@ def test_fermi_statistics_requires_coupled_carrier_transport(
         if item.code == "missing_model_dependency" and item.requested == "fermi"
     )
     assert set(issue.supported) == {"electron_continuity", "hole_continuity"}
+
+
+def test_schottky_contact_requires_coupled_carrier_transport(
+    valid_spec: ExperimentSpec, devsim_manifest: CapabilityManifest
+) -> None:
+    contact = Contact.model_validate(
+        {
+            "id": valid_spec.contacts[0].id,
+            "location": "x_min",
+            "kind": "metal_work_function",
+            "work_function": "4.10 eV",
+        }
+    )
+    physics = valid_spec.physics.model_copy(
+        update={"equations": (valid_spec.physics.equations[0],), "models": ()}
+    )
+    requested = valid_spec.model_copy(
+        update={"contacts": (contact, *valid_spec.contacts[1:]), "physics": physics}
+    )
+
+    decision = CapabilityService().check(requested, devsim_manifest)
+
+    issue = next(item for item in decision.issues if item.code == "missing_contact_dependency")
+    assert set(issue.supported) == {"electron_continuity", "hole_continuity"}
+
+
+def test_schottky_contact_refuses_unbenchmarked_fermi_injection(
+    valid_spec: ExperimentSpec, devsim_manifest: CapabilityManifest
+) -> None:
+    contact = Contact.model_validate(
+        {
+            "id": valid_spec.contacts[0].id,
+            "location": "x_min",
+            "kind": "metal_work_function",
+            "work_function": "4.10 eV",
+        }
+    )
+    models = tuple(
+        "fermi" if model == "boltzmann" else model
+        for model in valid_spec.physics.models
+    )
+    requested = valid_spec.model_copy(
+        update={
+            "contacts": (contact, *valid_spec.contacts[1:]),
+            "physics": valid_spec.physics.model_copy(update={"models": models}),
+        }
+    )
+
+    decision = CapabilityService().check(requested, devsim_manifest)
+
+    issue = next(item for item in decision.issues if item.code == "incompatible_contact_model")
+    assert issue.supported == ("boltzmann",)

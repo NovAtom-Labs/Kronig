@@ -159,6 +159,34 @@ def test_metal_contact_requires_energy_work_function() -> None:
     assert contact.work_function.to("eV") == pytest.approx(4.10)
 
 
+def test_metal_contact_accepts_unit_checked_richardson_constants() -> None:
+    contact = Contact.model_validate(
+        {
+            "id": "anode",
+            "location": "x_min",
+            "kind": "metal_work_function",
+            "work_function": "4.10 eV",
+            "electron_richardson_constant": "112 A / cm^2 / K^2",
+            "hole_richardson_constant": "32 A / cm^2 / K^2",
+        }
+    )
+
+    assert contact.electron_richardson_constant is not None
+    assert contact.electron_richardson_constant.to("A/cm^2/K^2") == pytest.approx(112)
+
+
+def test_richardson_constant_is_only_valid_for_metal_contacts() -> None:
+    with pytest.raises(ValueError, match="Richardson"):
+        Contact.model_validate(
+            {
+                "id": "anode",
+                "location": "x_min",
+                "kind": "ohmic",
+                "electron_richardson_constant": "112 A / cm^2 / K^2",
+            }
+        )
+
+
 def test_metal_contact_rejects_missing_work_function() -> None:
     with pytest.raises(ValidationError, match="metal work-function contact"):
         Contact.model_validate(

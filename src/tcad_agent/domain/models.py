@@ -207,6 +207,8 @@ class Contact(StrictModel):
     location: ContactLocation
     kind: ContactKind
     work_function: QuantityValue | None = None
+    electron_richardson_constant: QuantityValue | None = None
+    hole_richardson_constant: QuantityValue | None = None
     voltage_offset: QuantityValue = Field(
         default_factory=lambda: QuantityValue.model_validate("0 V")
     )
@@ -217,6 +219,17 @@ class Contact(StrictModel):
     def require_energy(cls, value: QuantityValue | None) -> QuantityValue | None:
         if value is not None:
             value.require("eV", "energy")
+        return value
+
+    @field_validator("electron_richardson_constant", "hole_richardson_constant")
+    @classmethod
+    def require_richardson_constant(
+        cls, value: QuantityValue | None
+    ) -> QuantityValue | None:
+        if value is not None:
+            value.require("A/cm^2/K^2", "Richardson constant")
+            if value.to("A/cm^2/K^2") <= 0:
+                raise ValueError("Richardson constant must be positive")
         return value
 
     @field_validator("voltage_offset")
@@ -241,6 +254,14 @@ class Contact(StrictModel):
             raise ValueError("metal work-function contact requires work_function")
         if self.kind is ContactKind.OHMIC and self.work_function is not None:
             raise ValueError("ohmic contact cannot define work_function")
+        richardson_values = (
+            self.electron_richardson_constant,
+            self.hole_richardson_constant,
+        )
+        if self.kind is not ContactKind.METAL_WORK_FUNCTION and any(
+            value is not None for value in richardson_values
+        ):
+            raise ValueError("Richardson constants require a metal work-function contact")
         if self.kind is ContactKind.INSULATING:
             if self.work_function is not None:
                 raise ValueError("insulating boundary cannot define work_function")

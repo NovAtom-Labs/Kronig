@@ -1037,6 +1037,65 @@ def main() -> int:
                     backend_contact,
                     is_circuit=circuit_driven,
                 )
+        elif region["material"] == "silicon" and contact["kind"] == "metal_work_function":
+            region_name = region["id"]
+            if not InEdgeModelList(device, region_name, "contactcharge_edge"):
+                CreateEdgeModel(
+                    device,
+                    region_name,
+                    "contactcharge_edge",
+                    "Permittivity*ElectricField",
+                )
+                CreateEdgeModelDerivatives(
+                    device,
+                    region_name,
+                    "contactcharge_edge",
+                    "Permittivity*ElectricField",
+                    "Potential",
+                )
+            thermal_voltage = float(
+                get_parameter(device=device, region=region_name, name="V_t")
+            )
+            intrinsic_work_function = (
+                payload["physics"]["electron_affinity_ev"]
+                + 0.5 * payload["physics"]["band_gap_ev"]
+                + 0.5
+                * thermal_voltage
+                * math.log(
+                    payload["physics"]["effective_density_conduction_cm3"]
+                    / payload["physics"]["effective_density_valence_cm3"]
+                )
+            )
+            offset = intrinsic_work_function - contact["work_function_ev"]
+            model_name = GetContactNodeModelName(backend_contact)
+            model = (
+                f"Potential-{GetContactBiasName(backend_contact)}-"
+                f"{offset:.17g}"
+            )
+            CreateContactNodeModel(device, backend_contact, model_name, model)
+            CreateContactNodeModel(
+                device, backend_contact, f"{model_name}:Potential", "1"
+            )
+            if circuit_driven:
+                CreateContactNodeModelDerivative(
+                    device,
+                    backend_contact,
+                    model_name,
+                    model,
+                    GetContactBiasName(backend_contact),
+                )
+            potential_options: dict[str, Any] = {
+                "device": device,
+                "contact": backend_contact,
+                "name": "PotentialEquation",
+                "node_model": model_name,
+                "edge_charge_model": "contactcharge_edge",
+            }
+            if circuit_driven:
+                potential_options["circuit_node"] = GetContactBiasName(
+                    backend_contact
+                )
+            contact_equation(**potential_options)
         elif (
             region["material"] in {"silicon_dioxide", "generic_dielectric"}
             and contact["kind"] in {"ideal_gate", "metal_work_function"}
@@ -1579,6 +1638,81 @@ def main() -> int:
                             is_circuit_study and contact["id"] == study["contact"]
                         ),
                     )
+            elif (
+                region["material"] == "silicon"
+                and contact["kind"] == "metal_work_function"
+            ):
+                backend_contact = _backend_contact_id(contact)
+                region_name = region["id"]
+                electron_affinity = float(payload["physics"]["electron_affinity_ev"])
+                band_gap = float(payload["physics"]["band_gap_ev"])
+                work_function = float(contact["work_function_ev"])
+                conduction_density = float(
+                    payload["physics"]["effective_density_conduction_cm3"]
+                )
+                valence_density = float(
+                    payload["physics"]["effective_density_valence_cm3"]
+                )
+                electron_target = conduction_density * math.exp(
+                    -(work_function - electron_affinity) / (8.617333262145e-5 * temperature)
+                )
+                hole_target = valence_density * math.exp(
+                    -(electron_affinity + band_gap - work_function)
+                    / (8.617333262145e-5 * temperature)
+                )
+                electron_richardson = float(
+                    contact.get("electron_richardson_a_cm2_k2") or 112.0
+                )
+                hole_richardson = float(
+                    contact.get("hole_richardson_a_cm2_k2") or 32.0
+                )
+                elementary_charge = 1.602176634e-19
+                electron_velocity = (
+                    electron_richardson
+                    * temperature**2
+                    / (elementary_charge * conduction_density)
+                )
+                hole_velocity = (
+                    hole_richardson
+                    * temperature**2
+                    / (elementary_charge * valence_density)
+                )
+                endpoint = "n0" if contact["location"] == "x_min" else "n1"
+                for variable, equation_name, target, velocity, current_model in (
+                    (
+                        "Electrons",
+                        "ElectronContinuityEquation",
+                        electron_target,
+                        electron_velocity,
+                        "ElectronCurrent",
+                    ),
+                    (
+                        "Holes",
+                        "HoleContinuityEquation",
+                        hole_target,
+                        hole_velocity,
+                        "HoleCurrent",
+                    ),
+                ):
+                    flux_name = f"{backend_contact}_{variable.lower()}_thermionic"
+                    flux = (
+                        f"ElectronCharge*{velocity:.17e}*"
+                        f"({variable}@{endpoint}-{target:.17e})"
+                    )
+                    CreateEdgeModel(device, region_name, flux_name, flux)
+                    CreateEdgeModelDerivatives(
+                        device, region_name, flux_name, flux, variable
+                    )
+                    options: dict[str, Any] = {
+                        "device": device,
+                        "contact": backend_contact,
+                        "name": equation_name,
+                        "edge_model": flux_name,
+                        "edge_current_model": current_model,
+                    }
+                    if is_circuit_study and contact["id"] == study["contact"]:
+                        options["circuit_node"] = GetContactBiasName(backend_contact)
+                    contact_equation(**options)
         for interface, left, right in interface_names:
             if left["material"] == right["material"] == "silicon":
                 for variable, equation_name in (

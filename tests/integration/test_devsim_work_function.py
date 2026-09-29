@@ -5,7 +5,6 @@ import pytest
 
 from tcad_agent.adapters.devsim.compiler import DevsimAdapter
 from tcad_agent.adapters.registry import resolve_devsim_python
-from tcad_agent.domain.errors import CapabilityError
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.runners.local import LocalRunner
 from tcad_agent.runners.models import RunBudget
@@ -38,9 +37,24 @@ def _oxide_slab(kind: str, *, material: str = "silicon_dioxide") -> ExperimentSp
             "profiles": [],
             "contacts": [
                 left_contact,
-                {"id": "right", "location": "x_max", "kind": "ideal_gate"},
+                {
+                    "id": "right",
+                    "location": "x_max",
+                    "kind": "ohmic" if material == "silicon" else "ideal_gate",
+                },
             ],
-            "physics": {"equations": ["poisson"]},
+            "physics": {
+                "equations": (
+                    ["poisson", "electron_continuity", "hole_continuity"]
+                    if material == "silicon"
+                    else ["poisson"]
+                ),
+                "models": (
+                    ["boltzmann", "constant_mobility", "srh"]
+                    if material == "silicon"
+                    else []
+                ),
+            },
             "study": {"kind": "equilibrium"},
             "observables": ["potential", "electric_field", "terminal_charge"],
         }
@@ -68,10 +82,13 @@ def test_metal_gate_work_function_creates_reviewed_flat_band_offset(
     assert potential[0] - potential[-1] == pytest.approx(expected_offset, rel=2e-3)
 
 
-def test_direct_semiconductor_work_function_contact_is_not_silently_ohmic(
+def test_direct_semiconductor_work_function_contact_compiles_as_schottky(
     tmp_path: Path,
 ) -> None:
     spec = _oxide_slab("metal_work_function", material="silicon")
 
-    with pytest.raises(CapabilityError, match="Schottky"):
-        DevsimAdapter.from_defaults().compile(spec, tmp_path / "not-ohmic")
+    job = DevsimAdapter.from_defaults().compile(spec, tmp_path / "schottky")
+
+    payload = job.input_files[0].read_text()
+    assert '"kind": "metal_work_function"' in payload
+    assert '"work_function_ev": 4.1' in payload

@@ -29,13 +29,7 @@ Primary source:
 
 ## Direct metal-semiconductor Schottky transport
 
-The pinned `simple_physics.py` explicitly leaves work-function carrier-boundary treatment for future work. No reviewed thermionic electron and hole boundary, Richardson parameter registry, image-force policy, or Schottky benchmark is supplied by the pinned package.
-
-Direct metal-semiconductor work-function contacts therefore remain blocked. Metal work function is supported only for electrostatic dielectric gate contacts. It is never converted to an ohmic semiconductor boundary.
-
-Primary source:
-
-- https://github.com/devsim/devsim/blob/43b41ca845184c47e22b72d144db7e7db8509377/python_packages/simple_physics.py
+This gate is closed for the reviewed one-dimensional Boltzmann thermionic-emission envelope. Equations, parameter defaults, explicit exclusions, provenance, and benchmark coverage are recorded in `devsim-schottky-transport.md`. Fermi-statistics Schottky injection remains refused rather than approximated.
 
 ## Spatial temperature profiles
 

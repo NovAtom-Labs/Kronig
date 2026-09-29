@@ -179,6 +179,7 @@ class CapabilityService:
                 "ohmic": ("silicon",),
                 "ideal_gate": ("silicon_dioxide", "generic_dielectric"),
                 "metal_work_function": (
+                    "silicon",
                     "silicon_dioxide",
                     "generic_dielectric",
                 ),
@@ -190,11 +191,6 @@ class CapabilityService:
             }[kind]
             if adjacent.material not in allowed_materials:
                 message = "contact kind is incompatible with its adjacent material"
-                if kind == "metal_work_function" and adjacent.material == "silicon":
-                    message = (
-                        "direct semiconductor metal work-function contact requires "
-                        "a reviewed Schottky transport boundary"
-                    )
                 issues.append(
                     CapabilityIssue(
                         path=f"contacts[{index}]",
@@ -204,6 +200,34 @@ class CapabilityService:
                         supported=allowed_materials,
                     )
                 )
+            if kind == "metal_work_function" and adjacent.material == "silicon":
+                equations = {str(value) for value in spec.physics.equations}
+                if not {"electron_continuity", "hole_continuity"}.issubset(equations):
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"contacts[{index}]",
+                            code="missing_contact_dependency",
+                            message=(
+                                "semiconductor metal work-function contact requires "
+                                "coupled carrier transport"
+                            ),
+                            requested="metal_work_function:silicon",
+                            supported=("electron_continuity", "hole_continuity"),
+                        )
+                    )
+                if "fermi" in spec.physics.models:
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"contacts[{index}]",
+                            code="incompatible_contact_model",
+                            message=(
+                                "Schottky transport is currently benchmarked with "
+                                "Boltzmann carrier statistics"
+                            ),
+                            requested="metal_work_function:fermi",
+                            supported=("boltzmann",),
+                        )
+                    )
         self._check_one(issues, "study.kind", spec.study.kind, manifest.studies)
         study_contact = getattr(spec.study, "contact", None)
         if study_contact is not None:
