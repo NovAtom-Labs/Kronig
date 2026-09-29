@@ -378,8 +378,26 @@ class DevsimAdapter:
                 "start_s": study.start.to("s"),
                 "stop_s": study.stop.to("s"),
                 "initial_step_s": study.initial_step.to("s"),
+                "minimum_step_s": (
+                    study.minimum_step.to("s")
+                    if study.minimum_step is not None
+                    else study.initial_step.to("s") / 16.0
+                ),
                 "maximum_step_s": study.maximum_step.to("s"),
                 "maximum_steps": study.maximum_steps,
+                "maximum_retries": study.maximum_retries,
+                "pulse_delay_s": (
+                    study.pulse_delay.to("s") if study.pulse_delay is not None else None
+                ),
+                "rise_time_s": (
+                    study.rise_time.to("s") if study.rise_time is not None else None
+                ),
+                "pulse_width_s": (
+                    study.pulse_width.to("s") if study.pulse_width is not None else None
+                ),
+                "fall_time_s": (
+                    study.fall_time.to("s") if study.fall_time is not None else None
+                ),
             }
         if isinstance(study, TemperatureStudy):
             return {
@@ -774,6 +792,7 @@ class DevsimAdapter:
                     "derived:imaginary_over_omega:"
                     f"complex_admittance__{driven_contact}"
                 ),
+                metadata={"dc_operating_point_v": "0.0"},
             )
             area = contact_areas.get(driven_contact)
             if area is not None:

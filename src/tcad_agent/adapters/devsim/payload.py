@@ -222,14 +222,20 @@ class ACPayload(_PayloadModel):
 class TransientPayload(_PayloadModel):
     kind: Literal["transient"]
     contact: str
-    waveform: Literal["step", "ramp"]
+    waveform: Literal["step", "ramp", "pulse"]
     initial_voltage_v: float
     final_voltage_v: float
     start_s: float
     stop_s: float
     initial_step_s: float = Field(gt=0)
+    minimum_step_s: float = Field(gt=0)
     maximum_step_s: float = Field(gt=0)
     maximum_steps: int = Field(ge=1, le=10000)
+    maximum_retries: int = Field(ge=0, le=32)
+    pulse_delay_s: float | None = Field(default=None, ge=0)
+    rise_time_s: float | None = Field(default=None, ge=0)
+    pulse_width_s: float | None = Field(default=None, gt=0)
+    fall_time_s: float | None = Field(default=None, ge=0)
 
 
 class ParameterPayload(_PayloadModel):

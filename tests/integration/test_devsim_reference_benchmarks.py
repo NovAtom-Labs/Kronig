@@ -1,3 +1,5 @@
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,10 @@ def test_abrupt_equilibrium_reference_passes_canonical_physics_checks(
     payload = yaml.safe_load(
         (ROOT / "examples" / "al-pn-al-equilibrium-devsim.yaml").read_text()
     )
+    payload["observables"] = sorted(
+        set(payload["observables"])
+        | {"electrostatic_flux", "charge_density"}
+    )
     spec = ExperimentSpec.model_validate(payload)
     adapter = DevsimAdapter.from_defaults()
     native = LocalRunner(resolve_devsim_python(ROOT)).run(
@@ -33,6 +39,7 @@ def test_abrupt_equilibrium_reference_passes_canonical_physics_checks(
 
     assert result.status == "completed", native.stderr_path.read_text()
     assert report.checks_by_id["electric-field-potential-gradient"].status == "passed"
+    assert report.checks_by_id["poisson-residual-consistency"].status == "passed"
     assert report.checks_by_id["built-in-potential-reference"].status == "passed"
     assert report.checks_by_id["equilibrium-terminal-current"].status == "passed"
     assert report.overall == "passed"
@@ -117,3 +124,76 @@ def test_terminal_current_is_stable_under_bias_step_refinement(tmp_path: Path) -
 
     scale = max(abs(currents[1]), 1e-20)
     assert abs(currents[0] - currents[1]) / scale < 0.01
+
+
+@pytest.mark.integration
+def test_parallel_plate_charge_matches_pinned_official_devsim_example(
+    tmp_path: Path,
+) -> None:
+    source_root = next(
+        (
+            candidate
+            for candidate in (ROOT / "devsim" / "source", ROOT.parent / "devsim" / "source")
+            if candidate.is_dir()
+        ),
+        None,
+    )
+    if source_root is None:
+        pytest.skip("pinned DEVSIM source checkout is unavailable")
+    official = source_root / "examples" / "capacitance" / "cap1d.py"
+    completed = subprocess.run(
+        [resolve_devsim_python(ROOT), str(official)],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    match = re.search(r"contact: contact1 charge:\s+([+-]?\d+\.\d+e[+-]\d+)", completed.stdout)
+    assert match is not None
+    official_charge_c_per_cm2 = float(match.group(1))
+
+    spec = ExperimentSpec.model_validate(
+        {
+            "schema_version": "1.0",
+            "name": "official capacitance parity",
+            "dimension": 1,
+            "regions": [
+                {
+                    "id": "medium",
+                    "material": "generic_dielectric",
+                    "relative_permittivity": 3.9,
+                    "x0": "0 cm",
+                    "x1": "1 cm",
+                    "mesh_spacing": "0.1 cm",
+                }
+            ],
+            "profiles": [],
+            "contacts": [
+                {"id": "contact1", "location": "x_min", "kind": "ideal_gate"},
+                {"id": "contact2", "location": "x_max", "kind": "ideal_gate"},
+            ],
+            "physics": {"equations": ["poisson"]},
+            "study": {
+                "kind": "dc_points",
+                "contact": "contact1",
+                "values": ["1 V"],
+            },
+            "observables": ["potential", "terminal_charge"],
+        }
+    )
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "adapter-capacitance"), RunBudget(seconds=120)
+    )
+    result = adapter.normalize(native)
+
+    assert result.status == "completed", native.stderr_path.read_text()
+    adapter_charge_c_per_m2 = result.operating_points[0].terminal_charges_c_per_m2[
+        "contact1"
+    ]
+    assert adapter_charge_c_per_m2 == pytest.approx(
+        official_charge_c_per_cm2 * 1e4,
+        rel=2e-5,
+    )

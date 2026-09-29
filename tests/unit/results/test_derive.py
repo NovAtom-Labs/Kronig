@@ -92,3 +92,61 @@ def test_peak_location_average_and_builtin_potential_use_canonical_values() -> N
     assert registry.scalar("built_in_potential", potential, {"x": axis}).value == pytest.approx(
         0.9
     )
+
+
+def test_resistance_is_derived_from_compatible_canonical_voltage_and_current() -> None:
+    axis = ScientificAxis(
+        id="bias", kind="bias", label="Bias", unit="V", values=(0.0, 1.0, 2.0)
+    )
+    voltage = Dataset(
+        id="applied_voltage",
+        label="Applied voltage",
+        unit="V",
+        axes=("bias",),
+        shape=(3,),
+        centering="operating_point",
+        values=(0.0, 1.0, 2.0),
+    )
+    current = Dataset(
+        id="terminal_current__right",
+        label="Terminal current density",
+        unit="A/m^2",
+        axes=("bias",),
+        shape=(3,),
+        centering="operating_point",
+        values=(0.0, 0.5, 1.0),
+    )
+
+    resistance = DerivationRegistry.resistance(voltage, current, {"bias": axis})
+
+    assert resistance.unit == "ohm*m^2"
+    assert resistance.values == pytest.approx((0.0, 2.0, 2.0))
+    assert resistance.validity == (False, True, True)
+    assert resistance.source == "derived:ratio:applied_voltage/terminal_current__right"
+
+
+def test_resistance_refuses_incompatible_axes_or_units() -> None:
+    axis = ScientificAxis(
+        id="bias", kind="bias", label="Bias", unit="V", values=(0.0, 1.0)
+    )
+    voltage = Dataset(
+        id="applied_voltage",
+        label="Applied voltage",
+        unit="V",
+        axes=("bias",),
+        shape=(2,),
+        centering="operating_point",
+        values=(0.0, 1.0),
+    )
+    incompatible = Dataset(
+        id="terminal_current",
+        label="Current",
+        unit="V",
+        axes=("bias",),
+        shape=(2,),
+        centering="operating_point",
+        values=(1.0, 1.0),
+    )
+
+    with pytest.raises(ValueError, match="canonical current"):
+        DerivationRegistry.resistance(voltage, incompatible, {"bias": axis})

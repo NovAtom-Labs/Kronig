@@ -162,3 +162,23 @@ def test_material_and_physics_registries_are_evidence_gated() -> None:
         "band_gap",
     }
     assert silicon.backend_compatibility == {"devsim": "2.9.1"}
+
+
+def test_transient_capability_exposes_conditional_pulse_inputs() -> None:
+    catalog = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend("devsim"))
+    transient = next(item for item in catalog.descriptors if item.id == "study.transient")
+
+    assert {item.path for item in transient.optional_inputs} >= {
+        "study.pulse_delay",
+        "study.rise_time",
+        "study.pulse_width",
+        "study.fall_time",
+        "study.minimum_step",
+        "study.maximum_retries",
+    }
+    assert all(
+        "pulse" in (item.question_hint or "").lower()
+        for item in transient.optional_inputs
+        if item.path.startswith("study.pulse")
+        or item.path in {"study.rise_time", "study.fall_time"}
+    )

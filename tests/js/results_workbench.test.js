@@ -145,3 +145,26 @@ assertEqual(
   0,
   "datasets with unresolved axes never reach the viewer",
 );
+
+const crossRun = results.comparisonDatasetOptions([
+  {bundle_path: "run-a", result: overlayPayload.result},
+  {bundle_path: "run-b", result: overlayPayload.result},
+]);
+assertEqual(crossRun.length, 6, "comparison discovery preserves every verified run dataset");
+assertEqual(crossRun[3].runLabel, "run-b", "comparison datasets retain run provenance");
+assertEqual(
+  results.compatibleOverlayOptions(crossRun[0], crossRun).map((item) => item.runLabel).join(","),
+  "run-a,run-b,run-b",
+  "compatible overlays can span verified runs while refusing unit mismatches",
+);
+const comparisonCsv = results.comparisonCsv(
+  {axis: {label: "Bias", unit: "V", values: [-1, 0, 1]}, values: [1, 2, 3]},
+  crossRun[0],
+  {axis: {label: "Bias", unit: "V", values: [-1, 0, 1]}, values: [3, 2, 1]},
+  crossRun[1],
+);
+assertEqual(
+  comparisonCsv.split("\n")[0],
+  "Bias (V),Electron current · run-a (A/m^2),Hole current · run-a (A/m^2)",
+  "comparison CSV exports every visible series with run provenance",
+);

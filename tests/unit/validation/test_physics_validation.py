@@ -271,3 +271,161 @@ def test_requested_bidirectional_bias_order_is_checked_without_forcing_monotonic
     )
     failed = ValidationEngine().validate(reordered, spec=spec)
     assert failed.checks_by_id["requested-study-order"].status == "failed"
+
+
+def test_poisson_residual_uses_canonical_flux_and_charge() -> None:
+    result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        axes={
+            "x_node": ScientificAxis(
+                id="x_node",
+                kind="position",
+                label="Position",
+                unit="m",
+                values=(0.0, 1.0, 2.0, 3.0),
+            ),
+            "x_edge": ScientificAxis(
+                id="x_edge",
+                kind="position",
+                label="Position",
+                unit="m",
+                values=(0.5, 1.5, 2.5),
+            ),
+        },
+        datasets={
+            "electrostatic_flux": Dataset(
+                id="electrostatic_flux",
+                label="Electric displacement flux",
+                unit="C/m^2",
+                axes=("x_edge",),
+                shape=(3,),
+                centering="edge",
+                values=(0.0, 2.0, 5.0),
+            ),
+            "charge_density": Dataset(
+                id="charge_density",
+                label="Charge density",
+                unit="C/m^3",
+                axes=("x_node",),
+                shape=(4,),
+                centering="node",
+                values=(99.0, 2.0, 3.0, 99.0),
+            ),
+        },
+    )
+
+    report = ValidationEngine().validate(result)
+
+    assert report.checks_by_id["poisson-residual-consistency"].status == "passed"
+    inconsistent = result.model_copy(
+        update={
+            "datasets": {
+                **result.datasets,
+                "charge_density": result.datasets["charge_density"].model_copy(
+                    update={"values": (99.0, 8.0, 3.0, 99.0)}
+                ),
+            }
+        }
+    )
+    failed = ValidationEngine().validate(inconsistent)
+    assert failed.checks_by_id["poisson-residual-consistency"].status == "failed"
+
+
+def test_sweep_continuity_detects_isolated_canonical_outlier() -> None:
+    axis = ScientificAxis(
+        id="bias",
+        kind="bias",
+        label="Bias",
+        unit="V",
+        values=(-2.0, -1.0, 0.0, 1.0, 2.0),
+    )
+
+    def result_with(values: tuple[float, ...]) -> CanonicalResult:
+        return CanonicalResult(
+            backend="devsim",
+            simulator_version="2.9.1",
+            status="completed",
+            axes={"bias": axis},
+            datasets={
+                "terminal_current__right": Dataset(
+                    id="terminal_current__right",
+                    label="Terminal current",
+                    unit="A/m^2",
+                    axes=("bias",),
+                    shape=(5,),
+                    centering="operating_point",
+                    values=values,
+                )
+            },
+        )
+
+    continuous = ValidationEngine().validate(result_with((-2.0, -1.0, 0.0, 1.0, 2.0)))
+    discontinuous = ValidationEngine().validate(
+        result_with((-2.0, -1.0, 10000.0, 1.0, 2.0))
+    )
+
+    assert continuous.checks_by_id["sweep-continuity"].status == "passed"
+    assert discontinuous.checks_by_id["sweep-continuity"].status == "failed"
+
+
+def test_ac_and_quasistatic_capacitance_are_compared_when_pair_is_present() -> None:
+    result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        axes={
+            "frequency": ScientificAxis(
+                id="frequency",
+                kind="frequency",
+                label="Frequency",
+                unit="Hz",
+                values=(1.0, 10.0),
+            ),
+            "bias": ScientificAxis(
+                id="bias",
+                kind="bias",
+                label="Bias",
+                unit="V",
+                values=(-0.1, 0.0, 0.1),
+            ),
+        },
+        datasets={
+            "ac_capacitance__gate": Dataset(
+                id="ac_capacitance__gate",
+                label="AC capacitance",
+                unit="F/m^2",
+                axes=("frequency",),
+                shape=(2,),
+                centering="contact",
+                values=(2.02e-3, 1.9e-3),
+                metadata={"dc_operating_point_v": "0.0"},
+            ),
+            "capacitance__gate": Dataset(
+                id="capacitance__gate",
+                label="Quasi-static capacitance",
+                unit="F/m^2",
+                axes=("bias",),
+                shape=(3,),
+                centering="operating_point",
+                values=(2.1e-3, 2.0e-3, 1.9e-3),
+            ),
+        },
+    )
+
+    passed = ValidationEngine().validate(result)
+    failed_result = result.model_copy(
+        update={
+            "datasets": {
+                **result.datasets,
+                "ac_capacitance__gate": result.datasets[
+                    "ac_capacitance__gate"
+                ].model_copy(update={"values": (4.0e-3, 3.8e-3)}),
+            }
+        }
+    )
+    failed = ValidationEngine().validate(failed_result)
+
+    assert passed.checks_by_id["ac-quasistatic-capacitance-consistency"].status == "passed"
+    assert failed.checks_by_id["ac-quasistatic-capacitance-consistency"].status == "failed"

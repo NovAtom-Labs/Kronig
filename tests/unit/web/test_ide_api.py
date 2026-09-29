@@ -477,6 +477,39 @@ def test_workspace_results_endpoint_sanitizes_invalid_bundle_error(
     }
 
 
+def test_workspace_results_comparison_loads_only_bounded_verified_bundles(
+    tmp_path: Path, result_bundle_factory
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    first = result_bundle_factory(root)
+    second = root / "run-0002"
+    shutil.copytree(first, second)
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+
+    response = web.get(
+        f"/api/workspaces/{workspace['id']}/results/compare",
+        params=[
+            ("paths", "run-0001/results/canonical.json"),
+            ("paths", "run-0002/results/canonical.json"),
+        ],
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [run["bundle_path"] for run in payload["runs"]] == [
+        "run-0001",
+        "run-0002",
+    ]
+
+    too_many = web.get(
+        f"/api/workspaces/{workspace['id']}/results/compare",
+        params=[("paths", f"run-{index}/results/canonical.json") for index in range(9)],
+    )
+    assert too_many.status_code == 422
+
+
 def test_workspace_file_preview_recognizes_extensionless_utf8_text(
     tmp_path: Path,
 ) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import statistics
+
 from tcad_agent.results.datasets import AxisKind, Dataset
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.models import ValidationCheck
@@ -152,6 +154,277 @@ def physics_checks(
     )
 
 
+def poisson_residual_checks(
+    result: CanonicalResult,
+    *,
+    relative_tolerance: float = 5e-2,
+    absolute_tolerance_c_per_m3: float = 1e-3,
+) -> tuple[ValidationCheck, ...]:
+    """Check div(D) = rho on compatible canonical one-dimensional fields."""
+
+    flux = result.datasets.get("electrostatic_flux")
+    charge = result.datasets.get("charge_density")
+    identifier = "poisson-residual-consistency"
+    paths = (
+        "result.datasets.electrostatic_flux",
+        "result.datasets.charge_density",
+    )
+    if flux is None or charge is None:
+        return (
+            ValidationCheck(
+                id=identifier,
+                level="physical",
+                status="not_applicable",
+                message="Electrostatic flux and charge density were not both requested.",
+                evidence_paths=paths,
+            ),
+        )
+    if flux.unit != "C/m^2" or charge.unit != "C/m^3":
+        return (_failed_poisson_check("incompatible canonical units", paths),)
+    try:
+        flux_positions, flux_study, flux_profiles = _position_profiles(result, flux)
+        node_positions, charge_study, charge_profiles = _position_profiles(result, charge)
+    except ValueError as exc:
+        return (_failed_poisson_check(str(exc), paths),)
+    if flux_study != charge_study or len(flux_profiles) != len(charge_profiles):
+        return (_failed_poisson_check("flux and charge study axes do not match", paths),)
+    errors: list[float] = []
+    scales: list[float] = []
+    for (flux_values, flux_valid), (charge_values, charge_valid) in zip(
+        flux_profiles, charge_profiles, strict=True
+    ):
+        segment_start = 0
+        segment_bounds: list[tuple[int, int]] = []
+        for index in range(1, len(node_positions)):
+            if node_positions[index] <= node_positions[index - 1]:
+                segment_bounds.append((segment_start, index))
+                segment_start = index
+        segment_bounds.append((segment_start, len(node_positions)))
+        for start, stop in segment_bounds:
+            segment_positions = node_positions[start:stop]
+            if len(segment_positions) < 3:
+                continue
+            edge_indices = tuple(
+                index
+                for index, position in enumerate(flux_positions)
+                if segment_positions[0] < position < segment_positions[-1]
+            )
+            if len(edge_indices) + 1 != len(segment_positions):
+                return (_failed_poisson_check("node-edge topology mismatch", paths),)
+            for local_index in range(1, len(segment_positions) - 1):
+                left_edge = edge_indices[local_index - 1]
+                right_edge = edge_indices[local_index]
+                charge_index = start + local_index
+                if not (
+                    flux_valid[left_edge]
+                    and flux_valid[right_edge]
+                    and charge_valid[charge_index]
+                ):
+                    continue
+                control_width = (
+                    segment_positions[local_index + 1]
+                    - segment_positions[local_index - 1]
+                ) / 2
+                if control_width <= 0:
+                    return (
+                        _failed_poisson_check(
+                            "position coordinates are not increasing", paths
+                        ),
+                    )
+                divergence = (
+                    flux_values[right_edge] - flux_values[left_edge]
+                ) / control_width
+                density = charge_values[charge_index]
+                errors.append(abs(divergence - density))
+                scales.append(max(abs(divergence), abs(density)))
+    if not errors:
+        return (_failed_poisson_check("no valid interior control volume is available", paths),)
+    maximum_error = max(errors)
+    limit = absolute_tolerance_c_per_m3 + relative_tolerance * max(scales)
+    return (
+        ValidationCheck(
+            id=identifier,
+            level="physical",
+            status="passed" if maximum_error <= limit else "failed",
+            measured_value=maximum_error,
+            limit=limit,
+            message="The divergence of electric displacement flux must equal charge density.",
+            evidence_origin="derived",
+            evidence_paths=paths,
+        ),
+    )
+
+
+def _failed_poisson_check(
+    reason: str, paths: tuple[str, str]
+) -> ValidationCheck:
+    return ValidationCheck(
+        id="poisson-residual-consistency",
+        level="physical",
+        status="failed",
+        measured_value=reason,
+        limit="compatible node and edge datasets",
+        message="The canonical Poisson residual could not be evaluated consistently.",
+        evidence_paths=paths,
+    )
+
+
+def sweep_continuity_checks(
+    result: CanonicalResult,
+    *,
+    maximum_slope_outlier_ratio: float = 1000.0,
+) -> tuple[ValidationCheck, ...]:
+    """Detect isolated numerical outliers without assuming monotonic device response."""
+
+    candidates = [
+        dataset
+        for dataset in result.datasets.values()
+        if len(dataset.axes) == 1
+        and result.axes[dataset.axes[0]].kind is AxisKind.BIAS
+        and len(dataset.values) >= 5
+        and dataset.centering.value in {"contact", "operating_point"}
+    ]
+    if not candidates:
+        return (
+            ValidationCheck(
+                id="sweep-continuity",
+                level="numerical",
+                status="not_applicable",
+                message="No eligible canonical bias sweep contains at least five points.",
+                evidence_paths=("result.datasets",),
+            ),
+        )
+    worst_ratio = 0.0
+    worst_dataset = ""
+    for dataset in candidates:
+        axis = result.axes[dataset.axes[0]]
+        validity = dataset.validity or (True,) * len(dataset.values)
+        slopes: list[float] = []
+        for left, right in zip(
+            range(len(dataset.values) - 1),
+            range(1, len(dataset.values)),
+            strict=True,
+        ):
+            if not (validity[left] and validity[right]):
+                continue
+            step = axis.values[right] - axis.values[left]
+            if step == 0:
+                continue
+            slopes.append(abs((dataset.values[right] - dataset.values[left]) / step))
+        positive = sorted(value for value in slopes if value > 0)
+        if len(positive) < 3:
+            continue
+        baseline_count = max(1, len(positive) // 2)
+        baseline = statistics.median(positive[:baseline_count])
+        ratio = max(positive) / baseline
+        if ratio > worst_ratio:
+            worst_ratio = ratio
+            worst_dataset = dataset.id
+    if not worst_dataset:
+        return (
+            ValidationCheck(
+                id="sweep-continuity",
+                level="numerical",
+                status="not_applicable",
+                message="Eligible sweeps contain too few valid nonzero secant slopes.",
+                evidence_paths=("result.datasets",),
+            ),
+        )
+    return (
+        ValidationCheck(
+            id="sweep-continuity",
+            level="numerical",
+            status="passed" if worst_ratio <= maximum_slope_outlier_ratio else "failed",
+            measured_value=worst_ratio,
+            limit=maximum_slope_outlier_ratio,
+            message=(
+                "No isolated bias-sweep secant slope may exceed the reviewed robust "
+                f"outlier ratio; worst dataset: {worst_dataset}."
+            ),
+            evidence_origin="derived",
+            evidence_paths=(f"result.datasets.{worst_dataset}",),
+        ),
+    )
+
+
+def capacitance_consistency_checks(
+    result: CanonicalResult,
+    *,
+    relative_tolerance: float = 5e-2,
+    absolute_tolerance_f_per_m2: float = 1e-12,
+) -> tuple[ValidationCheck, ...]:
+    """Compare low-frequency AC and quasi-static capacitance when paired evidence exists."""
+
+    identifier = "ac-quasistatic-capacitance-consistency"
+    comparisons: list[tuple[str, float, float]] = []
+    for name, ac in result.datasets.items():
+        if not name.startswith("ac_capacitance__"):
+            continue
+        terminal = name.removeprefix("ac_capacitance__")
+        quasistatic = result.datasets.get(f"capacitance__{terminal}")
+        operating_point = ac.metadata.get("dc_operating_point_v")
+        if quasistatic is None or operating_point is None:
+            continue
+        if ac.unit != "F/m^2" or quasistatic.unit != ac.unit:
+            continue
+        if len(ac.axes) != 1 or len(quasistatic.axes) != 1:
+            continue
+        frequency_axis = result.axes[ac.axes[0]]
+        bias_axis = result.axes[quasistatic.axes[0]]
+        if (
+            frequency_axis.kind is not AxisKind.FREQUENCY
+            or bias_axis.kind is not AxisKind.BIAS
+        ):
+            continue
+        frequency_index = min(
+            range(len(frequency_axis.values)), key=frequency_axis.values.__getitem__
+        )
+        target_bias = float(operating_point)
+        bias_index = min(
+            range(len(bias_axis.values)),
+            key=lambda index: abs(bias_axis.values[index] - target_bias),
+        )
+        comparisons.append(
+            (terminal, ac.values[frequency_index], quasistatic.values[bias_index])
+        )
+    if not comparisons:
+        return (
+            ValidationCheck(
+                id=identifier,
+                level="physical",
+                status="not_applicable",
+                message=(
+                    "A paired low-frequency AC and quasi-static capacitance result at "
+                    "a recorded DC operating point is unavailable."
+                ),
+                evidence_paths=("result.datasets",),
+            ),
+        )
+    relative_errors = [
+        abs(ac_value - qs_value) / max(abs(ac_value), abs(qs_value), absolute_tolerance_f_per_m2)
+        for _terminal, ac_value, qs_value in comparisons
+    ]
+    worst_index = max(range(len(relative_errors)), key=relative_errors.__getitem__)
+    terminal, _ac_value, _qs_value = comparisons[worst_index]
+    worst_error = relative_errors[worst_index]
+    return (
+        ValidationCheck(
+            id=identifier,
+            level="physical",
+            status="passed" if worst_error <= relative_tolerance else "failed",
+            measured_value=worst_error,
+            limit=relative_tolerance,
+            message=(
+                "Low-frequency AC capacitance must agree with the paired "
+                f"quasi-static derivative; worst terminal: {terminal}."
+            ),
+            evidence_origin="derived",
+            evidence_paths=(
+                f"result.datasets.ac_capacitance__{terminal}",
+                f"result.datasets.capacitance__{terminal}",
+            ),
+        ),
+    )
 def _failed_field_check(reason: str) -> ValidationCheck:
     return ValidationCheck(
         id="electric-field-potential-gradient",

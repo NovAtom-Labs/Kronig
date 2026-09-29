@@ -142,19 +142,35 @@ class FrequencyStudy(_StudyModel):
 class TransientStudy(_StudyModel):
     kind: Literal["transient"]
     contact: str
-    waveform: Literal["step", "ramp"]
+    waveform: Literal["step", "ramp", "pulse"]
     initial_voltage: QuantityValue
     final_voltage: QuantityValue
     start: QuantityValue
     stop: QuantityValue
     initial_step: QuantityValue
+    minimum_step: QuantityValue | None = None
     maximum_step: QuantityValue
     maximum_steps: int = Field(default=10000, ge=1, le=10000)
+    maximum_retries: int = Field(default=6, ge=0, le=32)
+    pulse_delay: QuantityValue | None = None
+    rise_time: QuantityValue | None = None
+    pulse_width: QuantityValue | None = None
+    fall_time: QuantityValue | None = None
 
-    @field_validator("start", "stop", "initial_step", "maximum_step")
+    @field_validator(
+        "start",
+        "stop",
+        "initial_step",
+        "minimum_step",
+        "maximum_step",
+        "pulse_delay",
+        "rise_time",
+        "pulse_width",
+        "fall_time",
+    )
     @classmethod
-    def require_time(cls, value: QuantityValue) -> QuantityValue:
-        return value.require("s", "time")
+    def require_time(cls, value: QuantityValue | None) -> QuantityValue | None:
+        return value.require("s", "time") if value is not None else None
 
     @field_validator("initial_voltage", "final_voltage")
     @classmethod
@@ -169,6 +185,33 @@ class TransientStudy(_StudyModel):
             raise ValueError("transient initial step must be positive")
         if self.maximum_step.to("s") < self.initial_step.to("s"):
             raise ValueError("maximum transient step cannot be smaller than initial step")
+        if self.minimum_step is not None:
+            if self.minimum_step.to("s") <= 0:
+                raise ValueError("minimum transient step must be positive")
+            if self.minimum_step.to("s") > self.initial_step.to("s"):
+                raise ValueError("minimum transient step cannot exceed initial step")
+        pulse_fields = (
+            self.pulse_delay,
+            self.rise_time,
+            self.pulse_width,
+            self.fall_time,
+        )
+        if self.waveform == "pulse":
+            names = ("pulse_delay", "rise_time", "pulse_width", "fall_time")
+            missing = [
+                name
+                for name, value in zip(names, pulse_fields, strict=True)
+                if value is None
+            ]
+            if missing:
+                raise ValueError(f"pulse waveform requires {', '.join(missing)}")
+            delay, rise, width, fall = (value.to("s") for value in pulse_fields if value)
+            if delay < 0 or rise < 0 or width <= 0 or fall < 0:
+                raise ValueError("pulse timing must be nonnegative and pulse_width positive")
+            if delay + rise + width + fall > self.stop.to("s") - self.start.to("s"):
+                raise ValueError("pulse timing must fit inside the transient interval")
+        elif any(value is not None for value in pulse_fields):
+            raise ValueError("pulse timing fields require waveform='pulse'")
         return self
 
 

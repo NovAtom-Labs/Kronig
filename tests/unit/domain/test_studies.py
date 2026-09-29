@@ -109,3 +109,47 @@ def test_study_rejects_unbounded_point_count() -> None:
                 "amplitude": "10 mV",
             }
         )
+
+
+def test_transient_pulse_requires_a_complete_bounded_timing_contract() -> None:
+    pulse = STUDY.validate_python(
+        {
+            "kind": "transient",
+            "contact": "gate",
+            "waveform": "pulse",
+            "initial_voltage": "0 V",
+            "final_voltage": "1 V",
+            "start": "0 ns",
+            "stop": "10 ns",
+            "initial_step": "0.1 ns",
+            "minimum_step": "1 ps",
+            "maximum_step": "1 ns",
+            "pulse_delay": "1 ns",
+            "rise_time": "1 ns",
+            "pulse_width": "4 ns",
+            "fall_time": "1 ns",
+            "maximum_retries": 5,
+        }
+    )
+
+    assert pulse.waveform == "pulse"
+    assert pulse.pulse_width.to("s") == pytest.approx(4e-9)
+    assert pulse.minimum_step.to("s") == pytest.approx(1e-12)
+
+    with pytest.raises(ValidationError, match="pulse_width"):
+        STUDY.validate_python(
+            {
+                "kind": "transient",
+                "contact": "gate",
+                "waveform": "pulse",
+                "initial_voltage": "0 V",
+                "final_voltage": "1 V",
+                "start": "0 ns",
+                "stop": "10 ns",
+                "initial_step": "0.1 ns",
+                "maximum_step": "1 ns",
+                "pulse_delay": "1 ns",
+                "rise_time": "1 ns",
+                "fall_time": "1 ns",
+            }
+        )

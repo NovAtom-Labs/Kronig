@@ -107,7 +107,7 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Profiles | Constant, piecewise, linear, Gaussian, error-function, and tabulated donor or acceptor profiles plus fixed bulk charge |
 | Interfaces | Explicit material interfaces, electrostatic continuity, mesh refinement, and fixed interface charge |
 | Physics | Poisson and drift diffusion, Boltzmann statistics, constant or Klaassen mobility, high-field saturation, SRH, Auger, Slotboom band-gap narrowing, and canonical band energies |
-| Studies | Equilibrium, exact or ranged DC, adaptive recovery, quasi-static C-V, small-signal AC, frequency, transient step or ramp, temperature, and registered parameter studies |
+| Studies | Equilibrium, exact or ranged DC, adaptive recovery, quasi-static C-V, small-signal AC, frequency, transient step, ramp, or pulse, temperature, and registered parameter studies |
 | DEVSIM | Local deterministic compilation, execution, normalization, validation, reporting, and evidence bundles |
 | Sentaurus | Deterministic command compilation, source maps, signed remote protocol, canonical result contract, and conformance rules |
 | Knowledge | Manifest-gated retrieval over pinned official DEVSIM documentation and source plus source-grounded portable TCAD guides, with review state, backend/version filters, hashes, and citations |
@@ -127,7 +127,7 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Mobility | Constant, Klaassen, and reviewed one-dimensional high-field saturation | Constant and reviewed Sentaurus mappings |
 | Recombination | SRH and Auger | SRH and Auger |
 | Band-gap narrowing | Reviewed Slotboom implementation | Supported by the adapter contract |
-| Studies | Equilibrium, DC, charge or C-V, AC or frequency, transient step or ramp, temperature, and registered parameters, with a 10,000-point resource limit | Equilibrium and DC sweep, up to 10 points |
+| Studies | Equilibrium, DC, charge or C-V, AC or frequency, transient step, ramp, or pulse, temperature, and registered parameters, with a 10,000-point resource limit | Equilibrium and DC sweep, up to 10 points |
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
 
@@ -159,7 +159,7 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 - No process simulation, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or arbitrary circuit co-simulation.
 - No automated calibration against fabrication measurements.
 - Direct metal-semiconductor Schottky transport and coupled Fermi-Dirac drift diffusion remain disabled research gates. Metal work function is supported only as a reviewed electrostatic boundary on dielectric contacts.
-- Philips-style surface mobility, surface recombination, interface traps, and transient pulse waveforms remain disabled until their equations and reference benchmarks are complete.
+- Philips-style surface mobility is outside the one-dimensional adapter because the pinned DEVSIM implementation requires two-dimensional element fields. Surface recombination, interface traps, spatial temperature profiles, coupled Fermi transport, and direct Schottky transport remain evidence-backed research gates.
 - Parameter studies are restricted to the registered model-parameter paths. Arbitrary runtime paths and arbitrary material values are rejected.
 - DC sweeps retain every requested terminal operating point plus bias-indexed spatial profiles. Failed solves remain explicit and are masked as gaps in the scientific viewer.
 - Licensed Sentaurus execution remains unavailable until a separate host, exact simulator version, extractor, signing keys, quotas, and conformance cases are configured and verified.

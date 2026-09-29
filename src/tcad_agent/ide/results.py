@@ -29,6 +29,10 @@ class WorkspaceResultView(StrictModel):
     manifest: BundleManifest
 
 
+class WorkspaceResultComparison(StrictModel):
+    runs: tuple[WorkspaceResultView, ...]
+
+
 class WorkspaceResultReader:
     """Read and verify the canonical artifacts behind a workbench view."""
 
@@ -38,6 +42,21 @@ class WorkspaceResultReader:
         "results/canonical.json",
         "validation/report.json",
     )
+
+    comparison_limit = 8
+
+    def read_many(
+        self, root: Path, canonical_paths: list[str]
+    ) -> WorkspaceResultComparison:
+        if not 2 <= len(canonical_paths) <= self.comparison_limit:
+            raise WorkspaceResultError(
+                f"result comparison requires 2 to {self.comparison_limit} paths"
+            )
+        if len(set(canonical_paths)) != len(canonical_paths):
+            raise WorkspaceResultError("result comparison paths must be distinct")
+        return WorkspaceResultComparison(
+            runs=tuple(self.read(root, path) for path in canonical_paths)
+        )
 
     def read(self, root: Path, canonical_path: str) -> WorkspaceResultView:
         relative = Path(canonical_path)

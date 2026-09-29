@@ -11,9 +11,85 @@ import math
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
+
+
+class TransientRecoveryExhausted(RuntimeError):
+    """Raised when a transient step cannot be reduced within reviewed bounds."""
+
+
+@dataclass
+class AdaptiveStepController:
+    initial_step: float
+    minimum_step: float
+    maximum_step: float
+    maximum_retries: int
+    growth_factor: float = 1.5
+    reduction_factor: float = 0.5
+
+    def __post_init__(self) -> None:
+        if not 0 < self.minimum_step <= self.initial_step <= self.maximum_step:
+            raise ValueError("transient step bounds must be positive and ordered")
+        if self.maximum_retries < 0:
+            raise ValueError("maximum transient retries must be nonnegative")
+        self._step = self.initial_step
+        self._retries = 0
+
+    @property
+    def attempt(self) -> int:
+        return self._retries + 1
+
+    def candidate(self, remaining: float) -> float:
+        return min(self._step, self.maximum_step, remaining)
+
+    def failed(self) -> float:
+        self._retries += 1
+        reduced = self._step * self.reduction_factor
+        if self._retries > self.maximum_retries or reduced < self.minimum_step:
+            raise TransientRecoveryExhausted(
+                "transient step recovery exhausted retry or minimum-step limit"
+            )
+        self._step = reduced
+        return self._step
+
+    def succeeded(self) -> None:
+        self._retries = 0
+        self._step = min(self.maximum_step, self._step * self.growth_factor)
+
+
+def waveform_voltage(study: dict[str, Any], time_s: float) -> float:
+    """Evaluate an explicit transient waveform without simulator-specific state."""
+
+    initial = float(study["initial_voltage_v"])
+    final = float(study["final_voltage_v"])
+    start = float(study["start_s"])
+    stop = float(study["stop_s"])
+    waveform = str(study["waveform"])
+    if waveform == "step":
+        return final
+    if waveform == "ramp":
+        fraction = min(1.0, max(0.0, (time_s - start) / (stop - start)))
+        return initial + fraction * (final - initial)
+    if waveform != "pulse":
+        raise ValueError(f"unsupported transient waveform: {waveform}")
+    delay = float(study["pulse_delay_s"])
+    rise = float(study["rise_time_s"])
+    width = float(study["pulse_width_s"])
+    fall = float(study["fall_time_s"])
+    elapsed = time_s - start
+    if elapsed <= delay:
+        return initial
+    if rise > 0 and elapsed < delay + rise:
+        return initial + (elapsed - delay) / rise * (final - initial)
+    if elapsed <= delay + rise + width:
+        return final
+    if fall > 0 and elapsed < delay + rise + width + fall:
+        fraction = (elapsed - delay - rise - width) / fall
+        return final + fraction * (initial - final)
+    return initial
 
 NATIVE_MODEL_NAMES = {
     "potential": "Potential",
@@ -1553,46 +1629,77 @@ def main() -> int:
     if is_transient:
         current_time = float(study["start_s"])
         stop_time = float(study["stop_s"])
-        time_step = float(study["initial_step_s"])
-        maximum_step = float(study["maximum_step_s"])
+        step_controller = AdaptiveStepController(
+            initial_step=float(study["initial_step_s"]),
+            minimum_step=float(study["minimum_step_s"]),
+            maximum_step=float(study["maximum_step_s"]),
+            maximum_retries=int(study["maximum_retries"]),
+        )
         steps = 0
+        recovery_exhausted = False
+        last_converged_fields = extract_fields()
         while current_time < stop_time and steps < int(study["maximum_steps"]):
-            step = min(time_step, maximum_step, stop_time - current_time)
+            step = step_controller.candidate(stop_time - current_time)
             next_time = current_time + step
-            if study["waveform"] == "step":
-                source_voltage = float(study["final_voltage_v"])
-            else:
-                fraction = (next_time - float(study["start_s"])) / (
-                    stop_time - float(study["start_s"])
-                )
-                source_voltage = float(study["initial_voltage_v"]) + fraction * (
-                    float(study["final_voltage_v"])
-                    - float(study["initial_voltage_v"])
-                )
+            source_voltage = waveform_voltage(study, next_time)
             circuit_alter(
                 name=circuit_source_name,
                 value=source_voltage + contact_offsets[study["contact"]],
             )
-            solve(
-                type="transient_bdf1",
-                absolute_error=float(
-                    solver[
-                        "carrier_absolute_error"
-                        if drift_diffusion
-                        else "electrostatic_absolute_error"
-                    ]
-                ),
-                relative_error=float(solver["transient_step_relative_error"]),
-                maximum_iterations=int(solver["maximum_iterations"]),
-                tdelta=step,
-                charge_error=1,
-            )
+            attempt = step_controller.attempt
+            try:
+                solve(
+                    type="transient_bdf1",
+                    absolute_error=float(
+                        solver[
+                            "carrier_absolute_error"
+                            if drift_diffusion
+                            else "electrostatic_absolute_error"
+                        ]
+                    ),
+                    relative_error=float(solver["transient_step_relative_error"]),
+                    maximum_iterations=int(solver["maximum_iterations"]),
+                    tdelta=step,
+                    charge_error=1,
+                )
+            except devsim.error as exc:
+                solver_events.append(
+                    {
+                        "phase": "transient_step",
+                        "time_s": next_time,
+                        "step_s": step,
+                        "attempt": attempt,
+                        "outcome": "failed",
+                        "message": str(exc),
+                    }
+                )
+                try:
+                    step_controller.failed()
+                except TransientRecoveryExhausted as recovery_error:
+                    transient_points.append(
+                        {
+                            "coordinate": next_time,
+                            "converged": False,
+                            "currents_a_per_cm2": {},
+                            "electron_currents_a_per_cm2": {},
+                            "hole_currents_a_per_cm2": {},
+                            "charges_c_per_cm2": {},
+                            "attempts": attempt,
+                            "message": str(recovery_error),
+                        }
+                    )
+                    transient_field_samples.append(
+                        {"valid": False, "fields": last_converged_fields}
+                    )
+                    recovery_exhausted = True
+                    break
+                continue
             solver_events.append(
                 {
                     "phase": "transient_step",
                     "time_s": next_time,
                     "step_s": step,
-                    "attempt": 1,
+                    "attempt": attempt,
                     "outcome": "converged",
                 }
             )
@@ -1645,17 +1752,18 @@ def main() -> int:
                     "electron_currents_a_per_cm2": transient_electron_currents,
                     "hole_currents_a_per_cm2": transient_hole_currents,
                     "charges_c_per_cm2": transient_charges,
-                    "attempts": 1,
+                    "attempts": attempt,
                     "message": None,
                 }
             )
+            last_converged_fields = extract_fields()
             transient_field_samples.append(
-                {"valid": True, "fields": extract_fields()}
+                {"valid": True, "fields": last_converged_fields}
             )
             current_time = next_time
-            time_step = min(maximum_step, time_step * 1.5)
+            step_controller.succeeded()
             steps += 1
-        if current_time < stop_time:
+        if current_time < stop_time and not recovery_exhausted:
             raise RuntimeError("transient study exhausted maximum_steps")
 
     fields = extract_fields()

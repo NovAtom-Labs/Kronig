@@ -94,6 +94,7 @@ let eventSource = null;
 let sendingPrompt = false;
 let activeFile = null;
 let activeResult = null;
+let resultComparisonHistory = [];
 let editingFile = null;
 let fileRequestGeneration = 0;
 let selectedRunId = null;
@@ -496,7 +497,11 @@ function renderFileContent(mode = "preview") {
   if (mode === "source") {
     renderSource(activeFile.content);
   } else if (activeResult) {
-    window.AgentKronigResults.render(fileViewerBody, activeResult);
+    window.AgentKronigResults.render(
+      fileViewerBody,
+      activeResult,
+      resultComparisonHistory.filter((item) => item.bundle_path !== activeResult.bundle_path),
+    );
   } else if (activeFile.kind === "markdown") {
     renderMarkdown(activeFile.content);
   } else if (activeFile.kind === "json") {
@@ -543,6 +548,10 @@ function showFile(preview) {
 function showCanonicalResult(preview, payload) {
   activeFile = preview;
   activeResult = payload;
+  resultComparisonHistory = [
+    payload,
+    ...resultComparisonHistory.filter((item) => item.bundle_path !== payload.bundle_path),
+  ].slice(0, 8);
   editingFile = null;
   workspaceWelcome.classList.add("hidden");
   fileViewer.classList.remove("hidden");

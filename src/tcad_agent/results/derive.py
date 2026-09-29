@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-from tcad_agent.results.datasets import Dataset, ScientificAxis
+from tcad_agent.results.datasets import AxisKind, Dataset, ScientificAxis
 from tcad_agent.results.models import OperatingPoint
 
 
@@ -79,6 +79,55 @@ class DerivationRegistry:
             value=sum(point.terminal_currents_a_per_m2.values()),
             unit="A/m^2",
             source_dataset=f"operating_point:{point.index}",
+        )
+
+    @staticmethod
+    def resistance(
+        voltage: Dataset,
+        current: Dataset,
+        axes: Mapping[str, ScientificAxis],
+    ) -> Dataset:
+        """Return pointwise static resistance while preserving undefined zero-current points."""
+
+        voltage_axis = _require_rank_one(voltage, axes)
+        current_axis = _require_rank_one(current, axes)
+        if voltage.unit != "V":
+            raise ValueError("resistance requires a canonical voltage dataset in V")
+        if current.unit not in {"A", "A/m^2"}:
+            raise ValueError("resistance requires a canonical current dataset in A or A/m^2")
+        if voltage.axes != current.axes or voltage.shape != current.shape:
+            raise ValueError("resistance requires voltage and current on identical axes")
+        if voltage_axis != current_axis or voltage_axis.kind is not AxisKind.BIAS:
+            raise ValueError("resistance requires a canonical bias axis")
+
+        voltage_validity = voltage.validity or (True,) * len(voltage.values)
+        current_validity = current.validity or (True,) * len(current.values)
+        values: list[float] = []
+        validity: list[bool] = []
+        for potential, flow, potential_valid, flow_valid in zip(
+            voltage.values,
+            current.values,
+            voltage_validity,
+            current_validity,
+            strict=True,
+        ):
+            valid = potential_valid and flow_valid and flow != 0.0
+            values.append(potential / flow if valid else 0.0)
+            validity.append(valid)
+        return Dataset(
+            id=f"resistance__{current.id}",
+            label=f"Static resistance from {current.label}",
+            unit="ohm" if current.unit == "A" else "ohm*m^2",
+            axes=voltage.axes,
+            shape=voltage.shape,
+            centering=current.centering,
+            values=tuple(values),
+            validity=tuple(validity),
+            source=f"derived:ratio:{voltage.id}/{current.id}",
+            metadata={
+                "zero_current_policy": "invalid",
+                "definition": "pointwise_voltage_over_current",
+            },
         )
 
 

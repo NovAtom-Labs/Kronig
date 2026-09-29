@@ -222,6 +222,7 @@ class CapabilityCatalog(StrictModel):
             for value in values:
                 identifier = f"{category}.{value}"
                 inputs = _legacy_required_inputs(category, str(value))
+                optional_inputs = _legacy_optional_inputs(category, str(value))
                 descriptors.append(
                     CapabilityDescriptor(
                         id=identifier,
@@ -232,6 +233,7 @@ class CapabilityCatalog(StrictModel):
                             f"adapter-manifest:{manifest.backend}:{manifest.adapter_version}",
                         ),
                         required_inputs=inputs,
+                        optional_inputs=optional_inputs,
                         produces=_legacy_outputs(category, str(value)),
                         supported_materials=_supported_materials(
                             category, str(value), manifest
@@ -316,7 +318,7 @@ def _legacy_required_inputs(
             ),
             "transient": (
                 _researcher_input("study.contact", "Driven contact"),
-                _researcher_input("study.waveform", "Step or ramp waveform"),
+                _researcher_input("study.waveform", "Step, ramp, or pulse waveform"),
                 _researcher_input("study.initial_voltage", "Initial voltage", unit="V"),
                 _researcher_input("study.final_voltage", "Final voltage", unit="V"),
                 _researcher_input("study.stop", "Transient stop time", unit="s"),
@@ -378,6 +380,61 @@ def _legacy_required_inputs(
             ),
         )
     return ()
+
+
+def _legacy_optional_inputs(
+    category: CapabilityCategory, value: str
+) -> tuple[CapabilityInputDescriptor, ...]:
+    if category != "study" or value != "transient":
+        return ()
+    pulse_hint = "Ask only when the researcher selects a pulse waveform."
+    return (
+        CapabilityInputDescriptor(
+            path="study.pulse_delay",
+            description="Pulse delay from transient start",
+            authority=InputAuthority.RESEARCHER,
+            required=False,
+            unit="s",
+            question_hint=pulse_hint,
+        ),
+        CapabilityInputDescriptor(
+            path="study.rise_time",
+            description="Pulse rise time",
+            authority=InputAuthority.RESEARCHER,
+            required=False,
+            unit="s",
+            question_hint=pulse_hint,
+        ),
+        CapabilityInputDescriptor(
+            path="study.pulse_width",
+            description="Pulse high-state duration",
+            authority=InputAuthority.RESEARCHER,
+            required=False,
+            unit="s",
+            question_hint=pulse_hint,
+        ),
+        CapabilityInputDescriptor(
+            path="study.fall_time",
+            description="Pulse fall time",
+            authority=InputAuthority.RESEARCHER,
+            required=False,
+            unit="s",
+            question_hint=pulse_hint,
+        ),
+        CapabilityInputDescriptor(
+            path="study.minimum_step",
+            description="Optional minimum timestep for bounded recovery",
+            authority=InputAuthority.EXPERT,
+            required=False,
+            unit="s",
+        ),
+        CapabilityInputDescriptor(
+            path="study.maximum_retries",
+            description="Optional bounded retry count after a failed transient step",
+            authority=InputAuthority.EXPERT,
+            required=False,
+        ),
+    )
 
 
 def _researcher_input(

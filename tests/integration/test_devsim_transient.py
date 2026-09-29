@@ -116,3 +116,59 @@ def test_transient_step_grows_after_success_without_exceeding_maximum(
     assert steps[1] > steps[0]
     assert max(steps) <= 2e-9 * (1 + 1e-12)
     assert times[-1] == pytest.approx(5e-9)
+
+
+@pytest.mark.integration
+def test_voltage_pulse_returns_to_initial_charge_state(tmp_path: Path) -> None:
+    payload = {
+        "schema_version": "1.0",
+        "name": "dielectric transient pulse",
+        "dimension": 1,
+        "regions": [
+            {
+                "id": "dielectric",
+                "material": "silicon_dioxide",
+                "x0": "0 nm",
+                "x1": "10 nm",
+                "mesh_spacing": "0.5 nm",
+            }
+        ],
+        "profiles": [],
+        "contacts": [
+            {"id": "control", "location": "x_min", "kind": "ideal_gate"},
+            {"id": "reference", "location": "x_max", "kind": "ideal_gate"},
+        ],
+        "physics": {"equations": ["poisson"]},
+        "study": {
+            "kind": "transient",
+            "contact": "control",
+            "waveform": "pulse",
+            "initial_voltage": "0 V",
+            "final_voltage": "0.1 V",
+            "start": "0 ns",
+            "stop": "8 ns",
+            "initial_step": "0.25 ns",
+            "minimum_step": "0.01 ns",
+            "maximum_step": "0.5 ns",
+            "pulse_delay": "1 ns",
+            "rise_time": "1 ns",
+            "pulse_width": "3 ns",
+            "fall_time": "1 ns",
+        },
+        "observables": ["potential", "terminal_charge"],
+    }
+    spec = ExperimentSpec.model_validate(payload)
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "transient-pulse"), RunBudget(seconds=120)
+    )
+    result = adapter.normalize(native)
+
+    assert result.status == "completed", native.stderr_path.read_text()
+    charge = result.datasets["terminal_charge__control"]
+    assert max(abs(value) for value in charge.values) > 1e-6
+    assert abs(charge.values[-1]) < max(abs(value) for value in charge.values) * 1e-6
+    assert any(
+        event.get("phase") == "transient_step"
+        for event in result.metadata["solver_events"]
+    )

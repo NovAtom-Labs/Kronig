@@ -375,3 +375,134 @@ and the remaining acceptance items recorded in
 - [x] Record exact enabled scope and any remaining scientific research gate without claiming approximation as support.
 
 Live verification found and repaired two additional integration defects. The preparation gateway now safely reconciles a model-mislabeled evidence origin only when the exact value is present in researcher text. The TCAD tool exposes the authoritative `ExperimentSpec` JSON Schema so the agent does not guess the portable contract or delegate schema discovery. The DEVSIM adapter also maps public contact identifiers to expression-safe internal symbols while preserving public names in canonical results.
+
+### Task 16: Residual, comparative, continuity, and resistance validation
+
+**Files:**
+- Modify: `src/tcad_agent/validation/physics.py`
+- Modify: `src/tcad_agent/validation/engine.py`
+- Modify: `src/tcad_agent/results/derive.py`
+- Test: `tests/unit/validation/test_physics_validation.py`
+- Test: `tests/unit/results/test_derive.py`
+- Test: `tests/integration/test_devsim_reference_benchmarks.py`
+
+**Interfaces:**
+- Consumes: canonical axes, fields, responses, operating-point validity, and reviewed tolerances.
+- Produces: scale-aware Poisson residual, sweep continuity, AC versus quasi-static capacitance, and resistance evidence without reading logs or device names.
+
+- [x] Write failing synthetic tests for valid and invalid Poisson residuals, discontinuous sweeps, and AC or quasi-static disagreement.
+- [x] Implement validators with explicit applicability and evidence paths.
+- [x] Write failing resistance tests for finite nonzero-current points and zero-current refusal.
+- [x] Implement generic resistance derivation from canonical voltage and current axes.
+- [x] Run real DEVSIM reference cases and the complete validation and derivation suites.
+
+### Task 17: Transient pulse and adaptive failure recovery
+
+**Files:**
+- Modify: `src/tcad_agent/domain/studies.py`
+- Modify: `src/tcad_agent/adapters/devsim/payload.py`
+- Modify: `src/tcad_agent/adapters/devsim/compiler.py`
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Test: `tests/unit/domain/test_studies.py`
+- Test: `tests/integration/test_devsim_transient.py`
+
+**Interfaces:**
+- Consumes: bounded transient schedules and solver controls.
+- Produces: step, ramp, and pulse drive plus bounded retry, step reduction, growth, failed-point preservation, and solver-event provenance.
+
+- [x] Write failing pulse-contract and waveform tests.
+- [x] Implement explicit pulse timing and voltage levels without inferred waveform values.
+- [x] Write a deterministic failing-step controller test.
+- [x] Implement bounded transient step reduction and recovery from the last converged state.
+- [x] Run real DEVSIM step, ramp, and pulse benchmarks.
+
+### Task 18: Multi-run Results Workbench comparison
+
+**Files:**
+- Modify: `src/tcad_agent/web/ide_routes.py`
+- Modify: `src/tcad_agent/web/static/results-workbench.js`
+- Modify: `src/tcad_agent/web/static/ide.css`
+- Test: `tests/unit/web/test_ide_api.py`
+- Test: `tests/js/results_workbench.test.js`
+
+**Interfaces:**
+- Consumes: multiple independently verified canonical bundles in one workspace.
+- Produces: unit-compatible run overlays with provenance labels, failure gaps, and raw-evidence links.
+
+- [x] Write failing API tests for bounded multi-bundle result loading.
+- [x] Write failing discovery tests for compatible and incompatible run overlays.
+- [x] Implement explicit verified-run selection and unit-safe overlay rendering.
+- [x] Verify CSV, SVG, and PNG export of the visible comparison.
+
+### Task 19: Spatial temperature and reviewed interface or surface physics
+
+**Files:**
+- Modify: `src/tcad_agent/domain/profiles.py`
+- Modify: `src/tcad_agent/domain/interfaces.py`
+- Modify: `src/tcad_agent/physics/registry.py`
+- Modify: `src/tcad_agent/adapters/devsim/payload.py`
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Create: reviewed equations and evidence under `knowledge-sources/curated/`
+- Test: `tests/integration/test_devsim_surface_physics.py`
+- Test: `tests/integration/test_devsim_temperature_profile.py`
+
+**Interfaces:**
+- Consumes: explicit spatial profiles, interface parameters, material compatibility, and reviewed sources.
+- Produces: spatial temperature where the equation set supports it, surface recombination, interface traps, and surface mobility only when benchmarked.
+
+- [x] Record the available upstream equations, applicability, and missing evidence for DEVSIM 2.9.1.
+- [x] Classify Philips surface mobility as excluded from the one-dimensional adapter because its pinned implementation requires two-dimensional element fields.
+- [ ] Implement surface recombination and interface-state models only after their full parameter, derivative, sign, and nonzero-bias benchmarks exist.
+- [ ] Implement spatial temperature only after all coupled material, contact, mobility, and recombination equations accept a consistent local temperature field.
+
+### Task 20: Coupled Fermi-Dirac transport
+
+**Files:**
+- Modify only after version-matched evidence is recorded under `knowledge-sources/curated/`.
+- Modify: `src/tcad_agent/physics/registry.py`
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Test: `tests/integration/test_devsim_fermi_statistics.py`
+
+**Interfaces:**
+- Consumes: native DEVSIM Fermi functions, carrier potentials, derivatives, contacts, initialization, and compatible transport models.
+- Produces: coupled degenerate drift diffusion and statistics-specific energies with independent nondegenerate and degenerate benchmarks.
+
+- [x] Audit and record the pinned scalar Fermi functions and the missing carrier, current, contact, and initialization implementation.
+- [x] Preserve and verify the pre-compilation refusal gate.
+- [ ] Implement Fermi statistics without falling back to Boltzmann equations after a reviewed generalized transport formulation is selected.
+- [ ] Enable the capability only after nondegenerate-limit, charge-neutrality, and degenerate real benchmarks pass.
+
+### Task 21: Direct metal-semiconductor Schottky transport
+
+**Files:**
+- Modify only after reviewed thermionic boundary evidence and parameters are recorded.
+- Modify: `src/tcad_agent/domain/models.py`
+- Modify: `src/tcad_agent/physics/registry.py`
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Test: `tests/integration/test_devsim_schottky.py`
+
+**Interfaces:**
+- Consumes: explicit work function, affinity, band gap, temperature, Richardson parameters, sign convention, and carrier statistics.
+- Produces: work-function electrostatics plus independently assembled electron and hole carrier flux boundaries.
+
+- [x] Audit and record the absence of a complete pinned thermionic carrier boundary and required parameter registry.
+- [x] Preserve and verify the direct semiconductor metal-work-function refusal gate.
+- [ ] Implement carrier boundary equations without reusing an ohmic contact after thermionic equations, derivatives, units, signs, barrier-lowering policy, and applicability are reviewed.
+- [ ] Enable the capability only after equilibrium zero-current, barrier-height, polarity, temperature-dependence, and real reference benchmarks pass.
+
+### Task 22: Official-example parity and platform conformance
+
+**Files:**
+- Create deterministic parity fixtures under `tests/fixtures/devsim/`.
+- Create or modify integration tests under `tests/integration/`.
+- Modify cross-platform CI under `.github/workflows/` only where the packaged DEVSIM runtime is available.
+- Modify: `docs/testing/devsim-1d-expansion-acceptance.md`
+
+**Interfaces:**
+- Consumes: all enabled portable capabilities.
+- Produces: pinned official-example parity and Linux, macOS, and Windows evidence without licensed material.
+
+- [ ] Add diode, small-signal, and oxide-interface parity checks using derived numeric invariants rather than copied source. Pinned official capacitance parity is complete.
+- [x] Add deterministic scientific conformance commands to supported platform CI.
+- [x] Run every locally available platform check and record remote-only evidence as unverified until CI executes.
+- [ ] Run full static, unit, integration, desktop, live, credential, provenance, and named-device verification before completion.

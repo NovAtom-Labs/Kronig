@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -34,6 +35,7 @@ from tcad_agent.ide.models import (
 )
 from tcad_agent.ide.repository import WorkspaceFileConflictError
 from tcad_agent.ide.results import (
+    WorkspaceResultComparison,
     WorkspaceResultError,
     WorkspaceResultReader,
     WorkspaceResultView,
@@ -279,6 +281,28 @@ def build_ide_router(
                 409,
                 "invalid_result_bundle",
                 "The result bundle is incomplete, malformed, or failed provenance checks.",
+            ) from exc
+
+    @router.get("/workspaces/{workspace_id}/results/compare")
+    def workspace_result_comparison(
+        workspace_id: UUID, paths: Annotated[list[str], Query()]
+    ) -> WorkspaceResultComparison:
+        workspace = services.workspaces.get(workspace_id)
+        if not 2 <= len(paths) <= services.results.comparison_limit:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Result comparison requires between 2 and "
+                    f"{services.results.comparison_limit} paths."
+                ),
+            )
+        try:
+            return services.results.read_many(workspace.root, paths)
+        except WorkspaceResultError as exc:
+            raise AgentAPIError(
+                409,
+                "invalid_result_comparison",
+                "Every comparison run must be a distinct verified result bundle.",
             ) from exc
 
     @router.get("/workspaces/{workspace_id}/files/content")

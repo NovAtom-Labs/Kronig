@@ -87,6 +87,22 @@
     });
   }
 
+  function comparisonDatasetOptions(payloads) {
+    return (Array.isArray(payloads) ? payloads : []).flatMap((payload, runIndex) => {
+      const runLabel = String(payload?.bundle_path || payload?.manifest?.run_id || `run ${runIndex + 1}`);
+      return datasetOptions(payload).map((dataset) => ({
+        ...dataset,
+        id: `${runIndex}:${runLabel}:${dataset.id}`,
+        name: `${runIndex}:${runLabel}:${dataset.name}`,
+        label: `${dataset.label} · ${runLabel}`,
+        runLabel,
+        runIndex,
+        canonicalDatasetId: dataset.id,
+        canonicalDatasetName: dataset.name,
+      }));
+    });
+  }
+
   function compatibleOverlayOptions(primary, datasets) {
     if (!primary) return [];
     const axisSignature = JSON.stringify(
@@ -100,6 +116,26 @@
         === axisSignature
       && candidate.plotKind === primary.plotKind
     ));
+  }
+
+  function comparisonCsv(primarySeries, primaryDataset, overlaySeries, overlayDataset) {
+    const cell = (value) => {
+      const text = String(value ?? "");
+      return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+    };
+    const headers = [
+      `${primarySeries.axis.label} (${primarySeries.axis.unit})`,
+      `${primaryDataset.label} (${primarySeries.valueUnit || primaryDataset.unit})`,
+    ];
+    if (overlaySeries && overlayDataset) {
+      headers.push(`${overlayDataset.label} (${overlaySeries.valueUnit || overlayDataset.unit})`);
+    }
+    const rows = primarySeries.axis.values.map((coordinate, index) => {
+      const row = [coordinate, primarySeries.values[index]];
+      if (overlaySeries && overlayDataset) row.push(overlaySeries.values[index]);
+      return row;
+    });
+    return `${[headers, ...rows].map((row) => row.map(cell).join(",")).join("\n")}\n`;
   }
 
   function fieldOptions(payload) {
@@ -533,8 +569,8 @@
     return {logAccepted: !scaleMode || scaleMode !== "log" || useLog};
   }
 
-  function renderFields(payload) {
-    const datasets = datasetOptions(payload).filter(
+  function renderFields(payload, comparisonRuns = []) {
+    const datasets = comparisonDatasetOptions([payload, ...comparisonRuns]).filter(
       (dataset) => ["curve", "complex_response", "profile_family", "heatmap"].includes(
         dataset.plotKind,
       ),
@@ -761,12 +797,11 @@
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       const series = seriesForDataset(dataset, slice.value, mode.value);
       if (!series) return;
-      const points = series.axis.values.map((x, index) => ({x, value: series.values[index]}));
-      const content = globalThis.AgentKronigScientificChart.toCsv(
-        points,
-        `${series.axis.label} (${series.axis.unit})`,
-        `${dataset.label} (${series.valueUnit})`,
-      );
+      const overlayDataset = datasets.find((candidate) => candidate.id === overlay.value);
+      const overlaySeries = overlayDataset
+        ? seriesForDataset(overlayDataset, slice.value, mode.value)
+        : null;
+      const content = comparisonCsv(series, dataset, overlaySeries, overlayDataset);
       triggerDownload(`${dataset.id}.csv`, content, "text/csv;charset=utf-8");
     });
     exportSvg.addEventListener("click", () => {
@@ -886,7 +921,7 @@
     return section;
   }
 
-  function render(root, payload) {
+  function render(root, payload, comparisonRuns = []) {
     root.replaceChildren();
     const workbench = element("article", "results-workbench");
     const header = element("header", "results-workbench-header");
@@ -910,7 +945,7 @@
       header,
       renderStructure(payload),
       renderMetrics(payload),
-      renderFields(payload),
+      renderFields(payload, comparisonRuns),
     );
     const lower = element("div", "result-lower-grid");
     lower.append(renderOperatingPoints(payload), renderValidation(payload));
@@ -921,7 +956,9 @@
 
   globalThis.AgentKronigResults = {
     datasetOptions,
+    comparisonDatasetOptions,
     compatibleOverlayOptions,
+    comparisonCsv,
     fieldOptions,
     findCanonicalResultPath,
     formatNumber,

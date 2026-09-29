@@ -18,7 +18,14 @@ from tcad_agent.validation.models import (
     ValidationReport,
     ValidationStatus,
 )
-from tcad_agent.validation.physics import band_checks, physics_checks, recombination_checks
+from tcad_agent.validation.physics import (
+    band_checks,
+    capacitance_consistency_checks,
+    physics_checks,
+    poisson_residual_checks,
+    recombination_checks,
+    sweep_continuity_checks,
+)
 
 
 class ValidationEngine:
@@ -125,6 +132,9 @@ class ValidationEngine:
         checks.extend(dataset_checks(result))
         checks.extend(convergence_checks(result))
         checks.extend(physics_checks(result))
+        checks.extend(poisson_residual_checks(result))
+        checks.extend(sweep_continuity_checks(result))
+        checks.extend(capacitance_consistency_checks(result))
         checks.extend(band_checks(result))
         checks.extend(recombination_checks(result))
         checks.append(self._requested_study_order(result, spec))
