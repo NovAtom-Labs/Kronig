@@ -159,6 +159,49 @@ model-written simulator syntax.
 
 This separation makes the model replaceable. Model reasoning helps interpret intent and choose tools. Deterministic software owns units, support, simulator syntax, execution, checks, provenance, and output.
 
+## Prompt preparation boundary
+
+Every researcher message enters a generic preparation lifecycle before OpenHands receives it:
+
+```text
+exact researcher message
+  -> bounded workspace inventory and local evidence retrieval
+  -> typed preparation decision
+  -> optional in-chat clarification batch
+  -> deterministic compiled request
+  -> OpenHands runtime
+```
+
+`PromptPreparationService` coordinates context collection, retrieval, the structured model gateway,
+and `PromptCompiler`. The gateway uses the same configured model and provider settings as the
+execution runtime.
+It returns only a typed `PreparationDecision`; it does not write files, execute commands, access the
+network, or emit simulator syntax. The desktop can start without configured credentials because the
+environment model is resolved only when preparation begins.
+
+The workspace packet is bounded by file count, file size, and path exclusions. It never follows
+external symlinks or reads credential locations. The evidence packet is bounded by search count,
+passage count, and total characters, and every passage retains its source identity. Repository and
+evidence text are treated as untrusted data.
+
+Each resolved intent field has one authority origin: researcher, repository, evidence, or platform
+default. Deterministic validation enforces those boundaries. Researcher-owned scientific inputs
+cannot originate from evidence or a platform default. Evidence can support expert implementation
+choices such as models, mesh, numerics, material parameters, solver behavior, observables, and
+validation. Platform defaults are limited to operational, output, and presentation fields.
+
+Clarifications are part of the existing run, not a second conversation. A preparation record uses
+optimistic revisions, remains editable while questions are pending, and becomes immutable after a
+compiled request exists. The original message and each answer remain separately recoverable. The
+compiled request is canonical JSON containing the original message, answers, resolved intent,
+context hashes, evidence references, capabilities, warnings, and compiler version. It records both
+original and compiled SHA-256 values.
+
+Preparation events expose safe phase descriptions such as understanding the request, checking local
+evidence, waiting for clarification, and compiling the request. Hidden chain of thought is never
+stored or displayed. Provider and validation failures are sanitized before reaching the activity
+trail.
+
 ## Knowledge boundary
 
 Sources enter through a versioned manifest with source ID, title, URL or controlled location, license, access class, trust level, backend, version, review status, and optional local path. Only allowlisted text formats are indexed. Each passage has a content hash and every hit returns a citation.

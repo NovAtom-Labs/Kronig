@@ -27,6 +27,7 @@ from tcad_agent.ide.models import RunState
 from tcad_agent.ide.paths import WorkspacePathError
 from tcad_agent.ide.sessions import WorkspaceSessionBusyError
 from tcad_agent.ide.store import ConversationNotFoundError, WorkspaceNotFoundError
+from tcad_agent.prompting.service import build_default_prompt_preparation
 from tcad_agent.web.ide_routes import (
     AgentAPIError,
     IDEServices,
@@ -45,7 +46,11 @@ def create_app(
 ) -> FastAPI:
     ide_services = ide or build_default_ide_services()
     active_supervisor = agent_supervisor or AgentSupervisor(
-        ide_services, OpenHandsRuntimeFactory(ide_services.runtime_root)
+        ide_services,
+        OpenHandsRuntimeFactory(ide_services.runtime_root),
+        preparation=build_default_prompt_preparation(
+            Path(__file__).resolve().parents[3]
+        ),
     )
     ide_services.sessions.bind_supervisor(active_supervisor)
     active_runtime_id = runtime_id or runtime_fingerprint()

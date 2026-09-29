@@ -41,7 +41,9 @@ from tcad_agent.ide.results import (
 from tcad_agent.ide.sessions import WorkspaceSessionBusyError, WorkspaceSessionService
 from tcad_agent.ide.store import IDEStoreError, MessageNotFoundError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
+from tcad_agent.prompting.models import PromptPreparationRecord
 from tcad_agent.web.schemas import (
+    AnswerClarificationRequest,
     CreateMessageRequest,
     DenyAgentApprovalRequest,
     OpenWorkspaceRequest,
@@ -372,6 +374,32 @@ def build_ide_router(
     def active_agent_run(workspace_id: UUID) -> AgentRunRecord | None:
         current_session(workspace_id)
         return supervisor.active_run_for_workspace(workspace_id)
+
+    @router.get("/runs/{run_id}/preparation")
+    def prompt_preparation(run_id: UUID) -> PromptPreparationRecord:
+        return services.store.get_prompt_preparation(run_id)
+
+    @router.post("/runs/{run_id}/clarifications", status_code=202)
+    def answer_prompt_clarification(
+        run_id: UUID, payload: AnswerClarificationRequest
+    ) -> AgentRunRecord:
+        try:
+            return supervisor.answer_clarification(
+                run_id, payload.expected_revision, payload.answers
+            )
+        except IDEStoreError as exc:
+            detail = str(exc).lower()
+            code = "stale_revision" if "stale" in detail else "invalid_clarification"
+            status = 409 if code == "stale_revision" else 400
+            raise AgentAPIError(
+                status,
+                code,
+                (
+                    "The clarification changed. Refresh and answer the current questions."
+                    if code == "stale_revision"
+                    else "The clarification answers do not match the active questions."
+                ),
+            ) from exc
 
     @router.get("/runs/{run_id}/changes")
     def run_changes(run_id: UUID) -> WorkspaceChangeSet:

@@ -16,6 +16,11 @@ const refreshSession = document.querySelector("#refresh-session");
 const sessionState = document.querySelector("#session-state");
 const sessionMessages = document.querySelector("#session-messages");
 const jumpToLatest = document.querySelector("#jump-to-latest");
+const clarificationCard = document.querySelector("#clarification-card");
+const clarificationSummary = document.querySelector("#clarification-summary");
+const clarificationForm = document.querySelector("#clarification-form");
+const clarificationQuestions = document.querySelector("#clarification-questions");
+const submitClarification = document.querySelector("#submit-clarification");
 const agentTabs = Array.from(document.querySelectorAll("[data-agent-view]"));
 const agentViews = Array.from(document.querySelectorAll("[data-agent-panel]"));
 const agentActivity = document.querySelector("#agent-activity");
@@ -98,6 +103,7 @@ let selectedApprovalId = null;
 let approvalQueueSignature = "";
 let approvalDrawerMinimized = false;
 let approvalPreviousFocus = null;
+let activePreparation = null;
 const navigationGuard = window.AgentKronigIDEState.createNavigationGuard();
 const repositoryRequests = window.AgentKronigIDEState.createRepositoryRequestCoordinator();
 const submissions = window.AgentKronigIDEState.createSubmissionTracker();
@@ -840,6 +846,51 @@ function renderMessages(messages, {forceScroll = false} = {}) {
   else requestAnimationFrame(() => { sessionMessages.scrollTop = previousScrollTop; });
 }
 
+function renderClarification(preparation) {
+  activePreparation = preparation;
+  const view = window.AgentKronigClarification.view(preparation);
+  clearNode(clarificationQuestions);
+  clarificationCard.classList.toggle("hidden", !view.visible);
+  if (!view.visible) return;
+  clarificationSummary.textContent = view.summary;
+  view.questions.forEach((question, index) => {
+    const field = document.createElement("div");
+    const label = document.createElement("label");
+    const reason = document.createElement("small");
+    const answer = document.createElement("textarea");
+    const inputId = `clarification-${question.id}`;
+    field.className = "clarification-question";
+    label.htmlFor = inputId;
+    label.textContent = `${index + 1}. ${question.prompt}`;
+    reason.textContent = question.reason;
+    answer.id = inputId;
+    answer.dataset.questionId = question.id;
+    answer.required = question.required;
+    answer.rows = 2;
+    answer.autocomplete = "off";
+    answer.placeholder = question.required ? "Your answer" : "Optional";
+    field.append(label, reason, answer);
+    clarificationQuestions.append(field);
+  });
+  requestAnimationFrame(() => {
+    clarificationQuestions.querySelector("textarea")?.focus({preventScroll: true});
+    scrollSessionToBottom();
+  });
+}
+
+async function loadPreparation(run = activeRun) {
+  if (!run?.id) {
+    renderClarification(null);
+    return;
+  }
+  try {
+    const preparation = await api(`/api/runs/${run.id}/preparation`);
+    if (activeRun?.id === run.id) renderClarification(preparation);
+  } catch (_error) {
+    renderClarification(null);
+  }
+}
+
 async function refreshMessages(sessionKey = activeSession?.id, options = {}) {
   const workspaceId = activeWorkspace?.id;
   if (!sessionKey || !workspaceId) return;
@@ -871,6 +922,7 @@ async function synchronizeSession(sessionKey) {
   ) return;
   renderMessages(messages);
   setRun(run);
+  await loadPreparation(run);
   renderApprovals(approvals);
 }
 
@@ -908,6 +960,9 @@ function setRun(run) {
   sendMessage.disabled = messageInput.disabled;
   sendMessage.textContent = sendingPrompt ? "Starting…" : "Send";
   refreshSession.disabled = !activeSession;
+  if (state !== "waiting_for_user" && activePreparation?.run_id !== run?.id) {
+    renderClarification(null);
+  }
 }
 
 function activateAgentView(name, {focus = false} = {}) {
@@ -1448,6 +1503,10 @@ function connectEvents(sessionKey) {
     renderAgentPresentation();
     updateRunFromEvent(event);
     if (event.kind === "message_created") void refreshMessages(sessionKey);
+    if (event.kind === "clarification_required") void loadPreparation(activeRun);
+    if (["clarification_answered", "prompt_compiled"].includes(event.kind)) {
+      renderClarification(null);
+    }
     if (event.kind === "approval_requested" || event.kind === "approval_resolved") {
       void loadApprovals(sessionKey);
     }
@@ -1476,6 +1535,8 @@ function connectEvents(sessionKey) {
     "run_cancelled", "run_recovered_paused", "agent_error", "runtime_state_changed",
     "thinking_started", "thinking_delta", "thinking_aborted", "change_baseline_warning",
     "agent_progress_started", "agent_progress_interrupted",
+    "prompt_preparation_started", "prompt_preparation_progress",
+    "clarification_required", "clarification_answered", "prompt_compiled",
   ].forEach((kind) => eventSource.addEventListener(kind, receive));
   eventSource.onopen = () => {
     streamState.textContent = "LIVE";
@@ -1492,6 +1553,7 @@ async function bindSession(session, workspaceId, routeToken) {
   const run = await api(sessionEndpoint(workspaceId, "/runs/active"));
   if (!navigationGuard.isCurrent(routeToken) || activeSession?.id !== session.id) return;
   setRun(run);
+  await loadPreparation(run);
   await loadApprovals(session.id);
   if (!navigationGuard.isCurrent(routeToken) || activeSession?.id !== session.id) return;
   connectEvents(session.id);
@@ -1502,6 +1564,8 @@ function clearSession() {
   activeRun = null;
   selectedRunId = null;
   activeChangeSet = null;
+  activePreparation = null;
+  renderClarification(null);
   submissions.reset();
   runPresentation.reset();
   setRun(null);
@@ -1604,6 +1668,34 @@ browseWorkspace.addEventListener("click", async () => {
   } finally {
     browseWorkspace.disabled = false;
     browseWorkspace.textContent = "Open folder";
+  }
+});
+
+clarificationForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!activeRun?.id || !activePreparation) return;
+  showError();
+  const values = {};
+  clarificationQuestions.querySelectorAll("textarea[data-question-id]").forEach((input) => {
+    values[input.dataset.questionId] = input.value;
+  });
+  submitClarification.disabled = true;
+  submitClarification.textContent = "Preparing…";
+  try {
+    const payload = window.AgentKronigClarification.submission(activePreparation, values);
+    const run = await api(`/api/runs/${activeRun.id}/clarifications`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    renderClarification(null);
+    setRun(run);
+    await refreshMessages(activeSession?.id, {forceScroll: true});
+  } catch (error) {
+    showError(error.message);
+    if (error.code === "stale_revision") await loadPreparation(activeRun);
+  } finally {
+    submitClarification.disabled = false;
+    submitClarification.textContent = "Continue";
   }
 });
 

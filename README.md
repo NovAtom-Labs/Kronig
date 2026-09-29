@@ -55,7 +55,13 @@ The selected repository is the default authority boundary. Repository-local read
 Research request
       |
       v
-Repository inspection and consequential questions
+Bounded repository context and local TCAD evidence
+      |
+      v
+Intent preparation and consequential questions, when needed
+      |
+      v
+Deterministic compiled agent request
       |
       v
 Simulator-neutral ExperimentSpec
@@ -81,12 +87,21 @@ Evidence summary, hashes, provenance, and run bundle
 
 The language model interprets intent and operates tools. It is not the authority for units, simulator syntax, supported physics, or numerical acceptance. Schemas, capability manifests, adapters, runners, and validators own those decisions.
 
+### Intent preparation
+
+Before an agent run begins, Agent Kronig prepares the research request with the same configured model that performs the work. The preparer receives the exact researcher message, a bounded inventory of the open repository, backend capabilities, and a small set of locally retrieved TCAD passages. It can either mark the request ready, ask a short batch of consequential questions in the chat, or block an unsupported request with a specific reason.
+
+The researcher message is never rewritten in place. Answers are stored separately and a deterministic compiler produces a canonical JSON request with source labels and SHA-256 hashes. Geometry, materials, doping, contacts, applied conditions, study bounds, fixed parameters, and requested deliverables must come from the researcher. Local evidence may guide expert choices such as physics models, meshing, numerics, solver recovery, diagnostics, and validation, but it cannot fill in missing research intent. Operational defaults may select presentation and canonical output details only.
+
+Question count is adaptive rather than fixed. The normal target is three to five questions and the hard limit is seven. Complete requests proceed without ceremonial questions. If local evidence is insufficient, the compiled request can authorize the execution agent to request bounded web research through the existing network approval policy.
+
 ## Current capabilities
 
 | Area | Alpha capability |
 | --- | --- |
 | Workspace | Native three-pane repository, file, chat, activity, and changes interface |
 | Agent runtime | Process-scoped OpenHands execution, repository file tools, bounded terminal commands, tasks, approvals, and delegated agents |
+| Intent preparation | Same-model structured preparation, bounded repository and TCAD context, adaptive clarification, deterministic compilation, and provenance hashes |
 | Scientific contract | Strict one-dimensional `ExperimentSpec` with dimensional quantities and unknown-field rejection |
 | Geometry | Ordered, contiguous silicon regions described as data, without named-device branches |
 | Doping | Constant donor and acceptor profiles |

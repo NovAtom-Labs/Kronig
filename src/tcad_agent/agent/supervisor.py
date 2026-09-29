@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +26,8 @@ from tcad_agent.ide.models import (
 )
 from tcad_agent.ide.store import IDEStoreError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
+from tcad_agent.prompting.models import ClarificationAnswer
+from tcad_agent.prompting.service import PromptPreparationService
 
 
 class AgentRunConflictError(IDEStoreError):
@@ -91,9 +94,16 @@ _ACTIVE_STATES = {
 class AgentSupervisor:
     """Own background agent threads and keep the database as source of truth."""
 
-    def __init__(self, services: SupervisorServices, runtime: RuntimeFactory) -> None:
+    def __init__(
+        self,
+        services: SupervisorServices,
+        runtime: RuntimeFactory,
+        *,
+        preparation: PromptPreparationService | None = None,
+    ) -> None:
         self.services = services
         self.runtime_factory = runtime
+        self.preparation = preparation
         self._guard = threading.RLock()
         self._threads: dict[UUID, threading.Thread] = {}
         self._runtimes: dict[UUID, RuntimeConversation] = {}
@@ -140,20 +150,17 @@ class AgentSupervisor:
                     "change_baseline_warning",
                     {"run_id": str(run.id), "detail": baseline_warning},
                 )
-            permission_grants = self._grants_for(run.id)
-            bridge = AgentEventBridge(
-                conversation_id,
-                run.id,
-                self.services.store,
-                self.services.events,
-                self.services.conversations,
-                workspace=workspace.root,
-                permission_grants=permission_grants,
-            )
-            try:
-                runtime = self.runtime_factory.create(
-                    workspace.root, run.sdk_conversation_id, bridge
+            if self.preparation is not None:
+                self.services.store.create_prompt_preparation(run.id, prompt)
+                self.services.events.append(
+                    conversation_id,
+                    "prompt_preparation_started",
+                    {"run_id": str(run.id), "phase": "understanding_request"},
                 )
+                self._launch_preparation(run.id, workspace.root)
+                return run
+            try:
+                return self._begin_execution(run, workspace.root, prompt)
             except Exception as error:
                 failed = self._transition(run.id, RunState.FAILED)
                 self.services.events.append(
@@ -162,14 +169,62 @@ class AgentSupervisor:
                     {"run_id": str(run.id), "detail": safe_event_text(error)},
                 )
                 raise
-            self._runtimes[run.id] = runtime
-            runtime.send_message(prompt)
-            running = self._transition(run.id, RunState.RUNNING)
-            self.services.events.append(
-                conversation_id, "run_started", {"run_id": str(run.id)}
+
+    def answer_clarification(
+        self,
+        run_id: UUID,
+        expected_revision: int,
+        answers: tuple[ClarificationAnswer, ...],
+    ) -> AgentRunRecord:
+        if self.preparation is None:
+            raise IDEStoreError("prompt preparation is not configured")
+        run = self.services.store.get_run(run_id)
+        if run.state is not RunState.WAITING_FOR_USER:
+            raise IDEStoreError("run is not waiting for clarification")
+        preparation = self.services.store.get_prompt_preparation(run_id)
+        if preparation.revision != expected_revision:
+            raise IDEStoreError(f"stale prompt preparation revision for {run_id}")
+        decision = preparation.decision
+        if decision is None or decision.status != "clarification":
+            raise IDEStoreError("run has no active clarification questions")
+        by_id = {answer.question_id: answer for answer in answers}
+        if len(by_id) != len(answers):
+            raise IDEStoreError("clarification answers must have unique question ids")
+        known = {question.id for question in decision.questions}
+        required = {question.id for question in decision.questions if question.required}
+        if not set(by_id).issubset(known) or not required.issubset(by_id):
+            raise IDEStoreError("clarification answers do not match the active questions")
+        combined = (*preparation.answers, *answers)
+        updated = self.services.store.update_prompt_preparation(
+            run_id,
+            expected_revision,
+            answers=combined,
+            decision=None,
+            compiled_request=None,
+        )
+        rendered = ["Clarification answers"]
+        question_by_id = {question.id: question for question in decision.questions}
+        for answer in answers:
+            rendered.extend(
+                (f"- {question_by_id[answer.question_id].prompt}", f"  {answer.answer}")
             )
-            self._launch(running, workspace.root)
-            return running
+        self.services.conversations.add_user_message(
+            run.conversation_id, "\n".join(rendered)
+        )
+        queued = self._transition(run_id, RunState.QUEUED)
+        self.services.events.append(
+            run.conversation_id,
+            "clarification_answered",
+            {
+                "run_id": str(run_id),
+                "answer_count": len(answers),
+                "preparation_revision": updated.revision,
+            },
+        )
+        conversation = self.services.conversations.get(run.conversation_id)
+        workspace = self.services.workspaces.get(conversation.workspace_id)
+        self._launch_preparation(run_id, workspace.root)
+        return queued
 
     def approve(self, approval_id: UUID, expected_revision: int) -> AgentRunRecord:
         approval = self.services.store.resolve_approval(
@@ -217,9 +272,11 @@ class AgentSupervisor:
         return self._continue(run_id)
 
     def stop(self, run_id: UUID) -> AgentRunRecord:
-        runtime = self._runtime_for(run_id)
-        runtime.interrupt()
         run = self.services.store.get_run(run_id)
+        with self._guard:
+            runtime = self._runtimes.get(run_id)
+        if runtime is not None:
+            runtime.interrupt()
         for approval in self.services.store.list_pending_approvals(
             run.conversation_id
         ):
@@ -255,11 +312,24 @@ class AgentSupervisor:
     def join(self, run_id: UUID, timeout: float | None = None) -> bool:
         """Wait for one runtime thread and report whether it has stopped."""
 
-        with self._guard:
-            thread = self._threads.get(run_id)
-        if thread is not None:
-            thread.join(timeout=timeout)
-        return thread is None or not thread.is_alive()
+        deadline = None if timeout is None else time.monotonic() + timeout
+        previous: threading.Thread | None = None
+        while True:
+            with self._guard:
+                thread = self._threads.get(run_id)
+            if thread is None:
+                return True
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
+            if thread.is_alive():
+                return False
+            with self._guard:
+                current = self._threads.get(run_id)
+            if current is thread or current is previous:
+                return True
+            previous = thread
+            if deadline is not None and time.monotonic() >= deadline:
+                return current is None or not current.is_alive()
 
     def _continue(
         self, run_id: UUID, *, runtime: RuntimeConversation | None = None
@@ -306,6 +376,122 @@ class AgentSupervisor:
             }
             self._permission_grants[run_id] = restored
             return restored
+
+    def _begin_execution(
+        self, run: AgentRunRecord, workspace: Path, compiled_prompt: str
+    ) -> AgentRunRecord:
+        permission_grants = self._grants_for(run.id)
+        bridge = AgentEventBridge(
+            run.conversation_id,
+            run.id,
+            self.services.store,
+            self.services.events,
+            self.services.conversations,
+            workspace=workspace,
+            permission_grants=permission_grants,
+        )
+        runtime = self.runtime_factory.create(
+            workspace, run.sdk_conversation_id, bridge
+        )
+        with self._guard:
+            self._runtimes[run.id] = runtime
+        runtime.send_message(compiled_prompt)
+        running = self._transition(run.id, RunState.RUNNING)
+        self.services.events.append(
+            run.conversation_id, "run_started", {"run_id": str(run.id)}
+        )
+        self._launch(running, workspace)
+        return running
+
+    def _launch_preparation(self, run_id: UUID, workspace: Path) -> None:
+        thread = threading.Thread(
+            target=self._prepare,
+            args=(run_id, workspace),
+            name=f"agent-kronig-preparation-{run_id}",
+            daemon=True,
+        )
+        with self._guard:
+            self._threads[run_id] = thread
+        thread.start()
+
+    def _prepare(self, run_id: UUID, workspace: Path) -> None:
+        if self.preparation is None:
+            return
+        try:
+            record = self.services.store.get_prompt_preparation(run_id)
+            self.services.events.append(
+                self.services.store.get_run(run_id).conversation_id,
+                "prompt_preparation_progress",
+                {"run_id": str(run_id), "phase": "checking_local_evidence"},
+            )
+            outcome = self.preparation.prepare(
+                root=workspace,
+                original_prompt=record.original_prompt,
+                answers=record.answers,
+            )
+            current_run = self.services.store.get_run(run_id)
+            if current_run.state is RunState.CANCELLED:
+                return
+            updated = self.services.store.update_prompt_preparation(
+                run_id,
+                record.revision,
+                answers=record.answers,
+                decision=outcome.decision,
+                compiled_request=outcome.compiled_request,
+            )
+            if outcome.decision.status == "clarification":
+                waiting = self._transition(run_id, RunState.WAITING_FOR_USER)
+                self.services.events.append(
+                    waiting.conversation_id,
+                    "clarification_required",
+                    {
+                        "run_id": str(run_id),
+                        "preparation_revision": updated.revision,
+                        "question_count": len(outcome.decision.questions),
+                        "questions": [
+                            question.model_dump(mode="json")
+                            for question in outcome.decision.questions
+                        ],
+                    },
+                )
+                return
+            if outcome.decision.status == "blocked":
+                self.services.conversations.add_assistant_message(
+                    current_run.conversation_id, outcome.decision.summary
+                )
+                blocked = self._transition(run_id, RunState.BLOCKED)
+                self.services.events.append(
+                    blocked.conversation_id,
+                    "run_blocked",
+                    {"run_id": str(run_id), "detail": outcome.decision.summary},
+                )
+                return
+            compiled = outcome.compiled_request
+            if compiled is None:
+                raise IDEStoreError("ready preparation did not compile")
+            self.services.events.append(
+                current_run.conversation_id,
+                "prompt_compiled",
+                {
+                    "run_id": str(run_id),
+                    "compiler_version": compiled.compiler_version,
+                    "original_sha256": compiled.original_sha256,
+                    "compiled_sha256": compiled.compiled_sha256,
+                    "evidence_count": len(compiled.evidence),
+                    "warning_count": len(compiled.decision.warnings),
+                },
+            )
+            self._begin_execution(current_run, workspace, compiled.compiled_prompt)
+        except Exception as error:
+            current = self.services.store.get_run(run_id)
+            if current.state is RunState.CANCELLED:
+                return
+            failed = self._transition(run_id, RunState.FAILED)
+            self.services.events.append(
+                failed.conversation_id,
+                "run_failed",
+                {"run_id": str(run_id), "detail": safe_event_text(error)},
+            )
 
     def _launch(
         self,

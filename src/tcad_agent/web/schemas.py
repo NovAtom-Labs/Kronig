@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tcad_agent.prompting.models import ClarificationAnswer
+
 
 class WebRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -19,6 +21,11 @@ class CreateMessageRequest(WebRequest):
 
 class StartAgentRunRequest(WebRequest):
     message_id: UUID
+
+
+class AnswerClarificationRequest(WebRequest):
+    expected_revision: int = Field(ge=0)
+    answers: tuple[ClarificationAnswer, ...] = Field(min_length=1, max_length=7)
 
 
 class SaveWorkspaceFileRequest(WebRequest):

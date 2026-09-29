@@ -134,6 +134,8 @@
         state.runState = "running";
       } else if (event.kind === "approval_requested") {
         state.runState = "waiting_for_approval";
+      } else if (event.kind === "clarification_required") {
+        state.runState = "waiting_for_user";
       }
       const labels = {
         completed: "Run completed",
@@ -174,6 +176,19 @@
         if (state.inference) state.inference.status = "interrupted";
       } else if (event.kind === "tool_call_started") startTool(state, event);
       else if (event.kind === "tool_call_completed") completeTool(state, event);
+      else if (event.kind === "prompt_preparation_started") {
+        state.currentOperation = "Understanding the research request";
+      } else if (event.kind === "prompt_preparation_progress") {
+        state.currentOperation = event.payload?.phase === "checking_local_evidence"
+          ? "Checking local scientific evidence"
+          : "Preparing the request";
+      } else if (event.kind === "clarification_required") {
+        state.currentOperation = "Waiting for research details";
+      } else if (event.kind === "clarification_answered") {
+        state.currentOperation = "Applying the confirmed details";
+      } else if (event.kind === "prompt_compiled") {
+        state.currentOperation = "Request prepared";
+      }
       else if (event.kind === "approval_requested") {
         const payload = event.payload || {};
         const approvalId = String(payload.approval_id || event.id);

@@ -28,6 +28,12 @@ from tcad_agent.ide.models import (
     WorkspaceRecord,
     is_run_grantable,
 )
+from tcad_agent.prompting.models import (
+    ClarificationAnswer,
+    CompiledAgentRequest,
+    PreparationDecision,
+    PromptPreparationRecord,
+)
 
 
 class IDEStoreError(RuntimeError):
@@ -137,6 +143,17 @@ class SqliteIDEStore:
                     run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
                     manifest_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS prompt_preparations (
+                    run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
+                    original_prompt TEXT NOT NULL,
+                    answers_json TEXT NOT NULL,
+                    decision_json TEXT,
+                    compiled_request_json TEXT,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
                 """
             )
@@ -477,6 +494,96 @@ class SqliteIDEStore:
             {"run_id": str(run.id), "state": run.state.value},
         )
         return run
+
+    def create_prompt_preparation(
+        self, run_id: UUID, original_prompt: str
+    ) -> PromptPreparationRecord:
+        self.get_run(run_id)
+        prompt = original_prompt.strip()
+        if not prompt:
+            raise IDEStoreError("prompt preparation requires a non-empty prompt")
+        now = datetime.now(UTC)
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO prompt_preparations (
+                        run_id, original_prompt, answers_json, decision_json,
+                        compiled_request_json, revision, created_at, updated_at
+                    ) VALUES (?, ?, '[]', NULL, NULL, 0, ?, ?)
+                    """,
+                    (str(run_id), prompt, now.isoformat(), now.isoformat()),
+                )
+        except sqlite3.IntegrityError as error:
+            raise IDEStoreError(
+                f"prompt preparation already exists for run {run_id}"
+            ) from error
+        return self.get_prompt_preparation(run_id)
+
+    def get_prompt_preparation(self, run_id: UUID) -> PromptPreparationRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM prompt_preparations WHERE run_id = ?",
+                (str(run_id),),
+            ).fetchone()
+        if row is None:
+            raise IDEStoreError(f"prompt preparation does not exist: {run_id}")
+        return self._prompt_preparation(row)
+
+    def update_prompt_preparation(
+        self,
+        run_id: UUID,
+        expected_revision: int,
+        *,
+        answers: tuple[ClarificationAnswer, ...],
+        decision: PreparationDecision | None,
+        compiled_request: CompiledAgentRequest | None,
+    ) -> PromptPreparationRecord:
+        now = datetime.now(UTC)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM prompt_preparations WHERE run_id = ?",
+                (str(run_id),),
+            ).fetchone()
+            if row is None:
+                raise IDEStoreError(f"prompt preparation does not exist: {run_id}")
+            if row["compiled_request_json"] is not None:
+                raise IDEStoreError("compiled prompt preparation is immutable")
+            cursor = connection.execute(
+                """
+                UPDATE prompt_preparations
+                SET answers_json = ?, decision_json = ?, compiled_request_json = ?,
+                    revision = revision + 1, updated_at = ?
+                WHERE run_id = ? AND revision = ?
+                """,
+                (
+                    json.dumps(
+                        [answer.model_dump(mode="json") for answer in answers],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    decision.model_dump_json() if decision is not None else None,
+                    (
+                        compiled_request.model_dump_json()
+                        if compiled_request is not None
+                        else None
+                    ),
+                    now.isoformat(),
+                    str(run_id),
+                    expected_revision,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise IDEStoreError(f"stale prompt preparation revision for {run_id}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_prompt_preparation(run_id)
 
     def get_run(self, run_id: UUID) -> AgentRunRecord:
         with self._connect() as connection:
@@ -1001,6 +1108,33 @@ class SqliteIDEStore:
                 if row["resolved_at"] is not None
                 else None
             ),
+        )
+
+    @staticmethod
+    def _prompt_preparation(row: sqlite3.Row) -> PromptPreparationRecord:
+        answers = tuple(
+            ClarificationAnswer.model_validate(item)
+            for item in json.loads(row["answers_json"])
+        )
+        decision = row["decision_json"]
+        compiled_request = row["compiled_request_json"]
+        return PromptPreparationRecord(
+            run_id=UUID(row["run_id"]),
+            original_prompt=row["original_prompt"],
+            answers=answers,
+            decision=(
+                PreparationDecision.model_validate_json(decision)
+                if decision is not None
+                else None
+            ),
+            compiled_request=(
+                CompiledAgentRequest.model_validate_json(compiled_request)
+                if compiled_request is not None
+                else None
+            ),
+            revision=row["revision"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
         )
 
     @staticmethod

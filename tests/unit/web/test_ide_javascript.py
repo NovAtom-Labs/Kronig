@@ -157,6 +157,25 @@ def test_changes_view_model_handles_text_binary_and_rename_operations() -> None:
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
+def test_prompt_clarification_view_preserves_generic_questions_and_answers() -> None:
+    project_root = Path(__file__).parents[3]
+    source = (
+        project_root / "src/tcad_agent/web/static/prompt-clarification.js"
+    ).read_text()
+    assertions = (
+        project_root / "tests/js/prompt_clarification.test.js"
+    ).read_text()
+    completed = subprocess.run(
+        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_production_ide_script_parses(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
