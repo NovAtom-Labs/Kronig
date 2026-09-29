@@ -141,3 +141,36 @@ def test_recombination_model_dependencies_are_refused_before_runtime(
     issue = next(item for item in decision.issues if item.code == "missing_model_dependency")
     assert issue.requested == "auger"
     assert set(issue.supported) == {"electron_continuity", "hole_continuity"}
+
+
+def test_mixed_carrier_statistics_are_refused_before_runtime(
+    valid_spec: ExperimentSpec, devsim_manifest: CapabilityManifest
+) -> None:
+    physics = valid_spec.physics.model_copy(
+        update={"models": (*valid_spec.physics.models, "fermi")}
+    )
+    requested = valid_spec.model_copy(update={"physics": physics})
+
+    decision = CapabilityService().check(requested, devsim_manifest)
+
+    issue = next(item for item in decision.issues if item.code == "incompatible_models")
+    assert issue.message == "select exactly one carrier-statistics model"
+    assert set(issue.supported) == {"boltzmann", "fermi"}
+
+
+def test_fermi_statistics_requires_coupled_carrier_transport(
+    valid_spec: ExperimentSpec, devsim_manifest: CapabilityManifest
+) -> None:
+    physics = valid_spec.physics.model_copy(
+        update={"equations": (valid_spec.physics.equations[0],), "models": ("fermi",)}
+    )
+    requested = valid_spec.model_copy(update={"physics": physics})
+
+    decision = CapabilityService().check(requested, devsim_manifest)
+
+    issue = next(
+        item
+        for item in decision.issues
+        if item.code == "missing_model_dependency" and item.requested == "fermi"
+    )
+    assert set(issue.supported) == {"electron_continuity", "hole_continuity"}

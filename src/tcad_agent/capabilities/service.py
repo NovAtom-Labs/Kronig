@@ -97,6 +97,32 @@ class CapabilityService:
                     supported=("constant_mobility", "klaassen_mobility"),
                 )
             )
+        statistics_models = {
+            model for model in spec.physics.models if model in {"boltzmann", "fermi"}
+        }
+        if len(statistics_models) > 1:
+            issues.append(
+                CapabilityIssue(
+                    path="physics.models",
+                    code="incompatible_models",
+                    message="select exactly one carrier-statistics model",
+                    requested=",".join(sorted(statistics_models)),
+                    supported=("boltzmann", "fermi"),
+                )
+            )
+        if "fermi" in statistics_models and not {
+            "electron_continuity",
+            "hole_continuity",
+        }.issubset({str(value) for value in spec.physics.equations}):
+            issues.append(
+                CapabilityIssue(
+                    path="physics.models",
+                    code="missing_model_dependency",
+                    message="Fermi statistics requires coupled electron and hole continuity",
+                    requested="fermi",
+                    supported=("electron_continuity", "hole_continuity"),
+                )
+            )
         self._check_many(
             issues,
             "regions.material",

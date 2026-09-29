@@ -4,7 +4,7 @@ adapter_version: "0.2.0"
 execution_state: configured
 dimensions: [1]
 equations: [poisson, electron_continuity, hole_continuity]
-models: [boltzmann, constant_mobility, klaassen_mobility, high_field_saturation, srh, auger, slotboom_bgn]
+models: [boltzmann, fermi, constant_mobility, klaassen_mobility, high_field_saturation, srh, auger, slotboom_bgn]
 materials: [silicon, silicon_dioxide, generic_dielectric]
 profiles: [constant, fixed_charge, piecewise_constant, linear, gaussian, error_function, tabulated]
 interfaces: [continuity, fixed_charge]

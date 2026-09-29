@@ -58,6 +58,37 @@ class PhysicsRegistry:
                     backend_compatibility={"devsim": "2.9.1"},
                 ),
                 CapabilityDescriptor(
+                    id="model.fermi",
+                    category="model",
+                    summary=(
+                        "Coupled Fermi-Dirac carrier statistics using DEVSIM native "
+                        "Fermi integrals and quasi-Fermi-gradient transport"
+                    ),
+                    maturity=CapabilityMaturity.REVIEWED,
+                    evidence_refs=(
+                        "devsim-fermi-integrals:2.9.1",
+                        "novatom.fermi-gradient.2026-09-29.v1",
+                    ),
+                    requires=(
+                        "equation.poisson",
+                        "equation.electron_continuity",
+                        "equation.hole_continuity",
+                    ),
+                    conflicts=("model.boltzmann",),
+                    produces=(
+                        "electron_density",
+                        "hole_density",
+                        "electron_quasi_fermi_level",
+                        "hole_quasi_fermi_level",
+                    ),
+                    supported_materials=("silicon",),
+                    parameter_sources=(
+                        "devsim-fermi-integrals:2.9.1",
+                        "novatom.fermi-gradient.2026-09-29.v1",
+                    ),
+                    backend_compatibility={"devsim": "2.9.1"},
+                ),
+                CapabilityDescriptor(
                     id="model.constant_mobility",
                     category="model",
                     summary="Constant electron and hole bulk mobility",

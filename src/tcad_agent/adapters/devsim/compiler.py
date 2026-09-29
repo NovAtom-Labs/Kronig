@@ -220,6 +220,15 @@ class DevsimAdapter:
         material_parameters.update(
             {key: value for key, value in overrides.items() if value is not None}
         )
+        parameter_sources = dict(SILICON_PARAMETER_SOURCES)
+        if "fermi" in spec.physics.models:
+            parameter_sources["carrier_statistics"] = {
+                "source": (
+                    "DEVSIM 2.9.1 Fermi/InvFermi primitives and Agent Kronig "
+                    "reviewed quasi-Fermi-gradient discretization"
+                ),
+                "version": "devsim-43b41ca+novatom.fermi-gradient.2026-09-29.v1",
+            }
         mesh_anchors = self._mesh_anchor_payloads(spec, regions)
         return DevsimPayload.model_validate(
             {
@@ -235,7 +244,7 @@ class DevsimAdapter:
                     "models": list(spec.physics.models),
                     "temperature_k": spec.physics.temperature.to("K"),
                     "parameter_set_id": SILICON_PARAMETER_SET_ID,
-                    "parameter_sources": SILICON_PARAMETER_SOURCES,
+                    "parameter_sources": parameter_sources,
                     **material_parameters,
                 },
                 "sign_convention": spec.sign_convention.model_dump(mode="json"),

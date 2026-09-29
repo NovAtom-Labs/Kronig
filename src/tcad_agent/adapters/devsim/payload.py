@@ -155,6 +155,7 @@ class PhysicsPayload(_PayloadModel):
     models: tuple[
         Literal[
             "boltzmann",
+            "fermi",
             "constant_mobility",
             "high_field_saturation",
             "klaassen_mobility",

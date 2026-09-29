@@ -91,6 +91,81 @@ def waveform_voltage(study: dict[str, Any], time_s: float) -> float:
         return final + fraction * (initial - final)
     return initial
 
+
+def _inverse_fermi_ratio(ratio: float) -> float:
+    """Pinned Joyce-Dixon inverse used by DEVSIM 2.9.1's native InvFermi."""
+
+    if ratio <= 0:
+        raise ValueError("Fermi carrier ratio must be positive")
+    breakpoint = 8.46296036621705
+    if ratio < breakpoint:
+        return (
+            math.log(ratio)
+            + 0.5 / math.sqrt(math.pi) * ratio
+            - 4.9500897298752622e-3 * ratio**2
+            + 1.4838577128872821e-4 * ratio**3
+            - 4.4256301190009895e-6 * ratio**4
+        )
+    return math.sqrt(
+        (0.75 * math.sqrt(math.pi) * ratio) ** (4.0 / 3.0)
+        - math.pi**2 / 6.0
+    ) - 0.0137050034663995
+
+
+def _fermi_ratio(eta: float) -> float:
+    """Invert the pinned approximation with the same positive Newton update."""
+
+    ratio = max(math.exp(min(eta, 700.0)), 1e-300)
+    for _ in range(40):
+        value = _inverse_fermi_ratio(ratio) - eta
+        epsilon = max(ratio * 1e-7, 1e-12)
+        derivative = (
+            _inverse_fermi_ratio(ratio + epsilon)
+            - _inverse_fermi_ratio(max(ratio - epsilon, ratio * 0.5))
+        ) / (epsilon + min(epsilon, ratio * 0.5))
+        update = -value / derivative
+        while ratio + update <= 0:
+            update *= 0.5
+        ratio += update
+        if abs(update) <= 1e-13 * max(abs(ratio), 1.0):
+            break
+    return ratio
+
+
+def _fermi_contact_state(
+    *,
+    net_doping_cm3: float,
+    conduction_density_cm3: float,
+    valence_density_cm3: float,
+    band_gap_ev: float,
+    thermal_voltage_v: float,
+) -> tuple[float, float, float]:
+    """Return neutral n, p, and electrostatic potential for an ohmic boundary."""
+
+    gap = band_gap_ev / thermal_voltage_v
+
+    def neutrality(eta_n: float) -> float:
+        electrons = conduction_density_cm3 * _fermi_ratio(eta_n)
+        holes = valence_density_cm3 * _fermi_ratio(-gap - eta_n)
+        return electrons - holes - net_doping_cm3
+
+    lower = -max(gap + 80.0, 160.0)
+    upper = max(gap + 80.0, 160.0)
+    for _ in range(240):
+        middle = 0.5 * (lower + upper)
+        if neutrality(middle) < 0:
+            lower = middle
+        else:
+            upper = middle
+    eta_n = 0.5 * (lower + upper)
+    electrons = conduction_density_cm3 * _fermi_ratio(eta_n)
+    holes = valence_density_cm3 * _fermi_ratio(-gap - eta_n)
+    energy_offset = 0.5 * band_gap_ev + 0.5 * thermal_voltage_v * math.log(
+        conduction_density_cm3 / valence_density_cm3
+    )
+    potential = energy_offset + thermal_voltage_v * eta_n
+    return electrons, holes, potential
+
 NATIVE_MODEL_NAMES = {
     "potential": "Potential",
     "electric_field": "ElectricField",
@@ -426,6 +501,7 @@ def main() -> int:
         contact_equation,
         create_1d_mesh,
         create_device,
+        edge_from_node_model,
         equation,
         finalize_mesh,
         get_circuit_node_value,
@@ -448,9 +524,11 @@ def main() -> int:
         CreateContactNodeModelDerivative,
         CreateContinuousInterfaceModel,
         CreateEdgeModel,
+        CreateEdgeModelDerivatives,
         CreateNodeModel,
         CreateNodeModelDerivative,
         CreateSolution,
+        InEdgeModelList,
     )
     from devsim.python_packages.simple_physics import (  # type: ignore[import-untyped]
         CreateOxideContact,
@@ -585,6 +663,9 @@ def main() -> int:
 
     temperature = payload["physics"]["temperature_k"]
     selected_models = set(payload["physics"]["models"])
+    fermi_statistics = "fermi" in selected_models
+    if fermi_statistics:
+        set_parameter(device=device, name="FermiBlend", value=0.0)
     by_region: dict[str, list[dict[str, Any]]] = {
         region["id"]: [] for region in regions
     }
@@ -751,6 +832,43 @@ def main() -> int:
                 "EffectiveBandGap",
                 "BandGap-BandGapNarrowing",
             )
+            if fermi_statistics:
+                electron_eta = (
+                    "(Potential-0.5*EffectiveBandGap-"
+                    "0.5*V_t*log(EffectiveDensityConduction/"
+                    "EffectiveDensityValence))/V_t"
+                )
+                hole_eta = (
+                    "(-Potential-0.5*EffectiveBandGap+"
+                    "0.5*V_t*log(EffectiveDensityConduction/"
+                    "EffectiveDensityValence))/V_t"
+                )
+                intrinsic_electrons = (
+                    "(1-FermiBlend)*EffectiveIntrinsicDensity*exp(Potential/V_t)+"
+                    f"FermiBlend*EffectiveDensityConduction*Fermi({electron_eta})"
+                )
+                intrinsic_holes = (
+                    "(1-FermiBlend)*EffectiveIntrinsicDensity*exp(-Potential/V_t)+"
+                    f"FermiBlend*EffectiveDensityValence*Fermi({hole_eta})"
+                )
+                CreateNodeModel(
+                    device, name, "IntrinsicElectrons", intrinsic_electrons
+                )
+                CreateNodeModelDerivative(
+                    device,
+                    name,
+                    "IntrinsicElectrons",
+                    intrinsic_electrons,
+                    "Potential",
+                )
+                CreateNodeModel(device, name, "IntrinsicHoles", intrinsic_holes)
+                CreateNodeModelDerivative(
+                    device,
+                    name,
+                    "IntrinsicHoles",
+                    intrinsic_holes,
+                    "Potential",
+                )
         else:
             SetOxideParameters(device, name, temperature)
             if region["material"] == "generic_dielectric":
@@ -773,6 +891,9 @@ def main() -> int:
                     variable_update="default",
                 )
 
+    carrier_contact_targets: dict[str, tuple[float, float]] = {}
+    contact_equilibrium_potentials: dict[str, float] = {}
+    fermi_contact_potentials: dict[str, float] = {}
     for contact in payload["contacts"]:
         region = _contact_region(payload, contact["location"])
         circuit_driven = is_circuit_study and contact["id"] == study["contact"]
@@ -786,12 +907,136 @@ def main() -> int:
                 value=contact_offsets[contact["id"]],
             )
         if region["material"] == "silicon" and contact["kind"] == "ohmic":
-            CreateSiliconPotentialOnlyContact(
-                device,
-                region["id"],
-                backend_contact,
-                is_circuit=circuit_driven,
-            )
+            if fermi_statistics:
+                region_name = region["id"]
+                if not InEdgeModelList(device, region_name, "contactcharge_edge"):
+                    CreateEdgeModel(
+                        device,
+                        region_name,
+                        "contactcharge_edge",
+                        "Permittivity*ElectricField",
+                    )
+                    CreateEdgeModelDerivatives(
+                        device,
+                        region_name,
+                        "contactcharge_edge",
+                        "Permittivity*ElectricField",
+                        "Potential",
+                    )
+                endpoint = 0 if contact["location"] == "x_min" else -1
+                net_doping = float(
+                    get_node_model_values(
+                        device=device, region=region_name, name="NetDoping"
+                    )[endpoint]
+                )
+                effective_gap = float(
+                    get_node_model_values(
+                        device=device, region=region_name, name="EffectiveBandGap"
+                    )[endpoint]
+                )
+                electrons, holes, potential = _fermi_contact_state(
+                    net_doping_cm3=net_doping,
+                    conduction_density_cm3=float(
+                        get_parameter(
+                            device=device,
+                            region=region_name,
+                            name="EffectiveDensityConduction",
+                        )
+                    ),
+                    valence_density_cm3=float(
+                        get_parameter(
+                            device=device,
+                            region=region_name,
+                            name="EffectiveDensityValence",
+                        )
+                    ),
+                    band_gap_ev=effective_gap,
+                    thermal_voltage_v=float(
+                        get_parameter(
+                            device=device, region=region_name, name="V_t"
+                        )
+                    ),
+                )
+                effective_intrinsic = float(
+                    get_node_model_values(
+                        device=device,
+                        region=region_name,
+                        name="EffectiveIntrinsicDensity",
+                    )[endpoint]
+                )
+                if net_doping >= 0:
+                    boltzmann_electrons = 0.5 * (
+                        net_doping
+                        + math.sqrt(
+                            net_doping * net_doping
+                            + 4.0 * effective_intrinsic * effective_intrinsic
+                        )
+                    )
+                else:
+                    boltzmann_holes = 0.5 * (
+                        -net_doping
+                        + math.sqrt(
+                            net_doping * net_doping
+                            + 4.0 * effective_intrinsic * effective_intrinsic
+                        )
+                    )
+                    boltzmann_electrons = (
+                        effective_intrinsic * effective_intrinsic / boltzmann_holes
+                    )
+                boltzmann_potential = float(
+                    get_parameter(device=device, region=region_name, name="V_t")
+                ) * math.log(boltzmann_electrons / effective_intrinsic)
+                carrier_contact_targets[contact["id"]] = (electrons, holes)
+                fermi_contact_potentials[contact["id"]] = potential
+                contact_equilibrium_potentials[contact["location"]] = (
+                    boltzmann_potential + contact_offsets[contact["id"]]
+                )
+                model_name = GetContactNodeModelName(backend_contact)
+                model = (
+                    f"Potential-{GetContactBiasName(backend_contact)}-"
+                    f"((1-FermiBlend)*{boltzmann_potential:.17e}+"
+                    f"FermiBlend*{potential:.17e})"
+                )
+                CreateContactNodeModel(
+                    device, backend_contact, model_name, model
+                )
+                CreateContactNodeModel(
+                    device,
+                    backend_contact,
+                    f"{model_name}:Potential",
+                    "1",
+                )
+                if circuit_driven:
+                    CreateContactNodeModelDerivative(
+                        device,
+                        backend_contact,
+                        model_name,
+                        model,
+                        GetContactBiasName(backend_contact),
+                    )
+                    contact_equation(
+                        device=device,
+                        contact=backend_contact,
+                        name="PotentialEquation",
+                        node_model=model_name,
+                        edge_charge_model="contactcharge_edge",
+                        circuit_node=GetContactBiasName(backend_contact),
+                    )
+                else:
+                    contact_equation(
+                        device=device,
+                        contact=backend_contact,
+                        name="PotentialEquation",
+                        node_model=model_name,
+                        edge_charge_model="contactcharge_edge",
+                    )
+            else:
+                CreateSiliconPotentialOnlyContact(
+                    device,
+                    region["id"],
+                    backend_contact,
+                    is_circuit=circuit_driven,
+                )
         elif (
             region["material"] in {"silicon_dioxide", "generic_dielectric"}
             and contact["kind"] in {"ideal_gate", "metal_work_function"}
@@ -842,6 +1087,35 @@ def main() -> int:
                     )
         else:
             raise ValueError("contact kind is incompatible with adjacent material")
+    if fermi_statistics and {
+        "x_min",
+        "x_max",
+    }.issubset(contact_equilibrium_potentials):
+        stack_start = float(regions[0]["x0_cm"])
+        stack_stop = float(regions[-1]["x1_cm"])
+        start_potential = contact_equilibrium_potentials["x_min"]
+        stop_potential = contact_equilibrium_potentials["x_max"]
+        for region in regions:
+            if region["material"] != "silicon":
+                continue
+            positions = list(
+                get_node_model_values(
+                    device=device, region=region["id"], name="x"
+                )
+            )
+            values = [
+                start_potential
+                + (position - stack_start)
+                / (stack_stop - stack_start)
+                * (stop_potential - start_potential)
+                for position in positions
+            ]
+            set_node_values(
+                device=device,
+                region=region["id"],
+                name="Potential",
+                values=values,
+            )
     for interface, _left, _right in interface_names:
         CreateSiliconOxideInterface(device, interface)
 
@@ -925,6 +1199,93 @@ def main() -> int:
     solver_events.append(
         {"phase": "poisson_initialization", "outcome": "converged", "attempt": 1}
     )
+    if fermi_statistics:
+        for continuation_step in range(1, 50):
+            blend = continuation_step / 50.0
+            set_parameter(device=device, name="FermiBlend", value=blend)
+            solve(
+                type="dc",
+                absolute_error=float(solver["electrostatic_absolute_error"]),
+                relative_error=float(solver["relative_error"]),
+                maximum_iterations=int(solver["maximum_iterations"]),
+            )
+            solver_events.append(
+                {
+                    "phase": "fermi_statistics_continuation",
+                    "outcome": "converged",
+                    "attempt": continuation_step,
+                    "blend": blend,
+                }
+            )
+        for region in regions:
+            if region["material"] != "silicon":
+                continue
+            name = region["id"]
+            electron_eta = (
+                "(Potential-0.5*EffectiveBandGap-"
+                "0.5*V_t*log(EffectiveDensityConduction/"
+                "EffectiveDensityValence))/V_t"
+            )
+            hole_eta = (
+                "(-Potential-0.5*EffectiveBandGap+"
+                "0.5*V_t*log(EffectiveDensityConduction/"
+                "EffectiveDensityValence))/V_t"
+            )
+            intrinsic_electrons = (
+                f"EffectiveDensityConduction*Fermi({electron_eta})"
+            )
+            intrinsic_holes = f"EffectiveDensityValence*Fermi({hole_eta})"
+            CreateNodeModel(device, name, "IntrinsicElectrons", intrinsic_electrons)
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "IntrinsicElectrons",
+                intrinsic_electrons,
+                "Potential",
+            )
+            CreateNodeModel(device, name, "IntrinsicHoles", intrinsic_holes)
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "IntrinsicHoles",
+                intrinsic_holes,
+                "Potential",
+            )
+        for contact in payload["contacts"]:
+            if contact["id"] not in fermi_contact_potentials:
+                continue
+            backend_contact = _backend_contact_id(contact)
+            model_name = GetContactNodeModelName(backend_contact)
+            model = (
+                f"Potential-{GetContactBiasName(backend_contact)}-"
+                f"{fermi_contact_potentials[contact['id']]:.17e}"
+            )
+            CreateContactNodeModel(device, backend_contact, model_name, model)
+            CreateContactNodeModel(
+                device, backend_contact, f"{model_name}:Potential", "1"
+            )
+            if is_circuit_study and contact["id"] == study.get("contact"):
+                CreateContactNodeModelDerivative(
+                    device,
+                    backend_contact,
+                    model_name,
+                    model,
+                    GetContactBiasName(backend_contact),
+                )
+        solve(
+            type="dc",
+            absolute_error=float(solver["electrostatic_absolute_error"]),
+            relative_error=float(solver["relative_error"]),
+            maximum_iterations=int(solver["maximum_iterations"]),
+        )
+        solver_events.append(
+            {
+                "phase": "fermi_statistics_finalization",
+                "outcome": "converged",
+                "attempt": 50,
+                "blend": 1.0,
+            }
+        )
 
     drift_diffusion = {
         "electron_continuity",
@@ -1068,17 +1429,51 @@ def main() -> int:
             CreateNodeModel(device, name, "IntrinsicEnergy", intrinsic_energy)
             CreateNodeModel(device, name, "ConductionBandEnergy", conduction_band)
             CreateNodeModel(device, name, "ValenceBandEnergy", valence_band)
+            electron_quasi_fermi = (
+                "ConductionBandEnergy+V_t*InvFermi("
+                "Electrons/EffectiveDensityConduction)"
+                if fermi_statistics
+                else (
+                    "ConductionBandEnergy+V_t*"
+                    "log(Electrons/EffectiveDensityConduction)"
+                )
+            )
+            hole_quasi_fermi = (
+                "ValenceBandEnergy-V_t*InvFermi("
+                "Holes/EffectiveDensityValence)"
+                if fermi_statistics
+                else (
+                    "ValenceBandEnergy-V_t*"
+                    "log(Holes/EffectiveDensityValence)"
+                )
+            )
             CreateNodeModel(
                 device,
                 name,
                 "ElectronQuasiFermiEnergy",
-                "ConductionBandEnergy+V_t*log(Electrons/EffectiveDensityConduction)",
+                electron_quasi_fermi,
+            )
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "ElectronQuasiFermiEnergy",
+                electron_quasi_fermi,
+                "Potential",
+                "Electrons",
             )
             CreateNodeModel(
                 device,
                 name,
                 "HoleQuasiFermiEnergy",
-                "ValenceBandEnergy-V_t*log(Holes/EffectiveDensityValence)",
+                hole_quasi_fermi,
+            )
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "HoleQuasiFermiEnergy",
+                hole_quasi_fermi,
+                "Potential",
+                "Holes",
             )
             CreateNodeModel(
                 device,
@@ -1086,19 +1481,104 @@ def main() -> int:
                 "FermiLevelEnergy",
                 "0.5*(ElectronQuasiFermiEnergy+HoleQuasiFermiEnergy)",
             )
+            if fermi_statistics:
+                edge_from_node_model(
+                    device=device, region=name, node_model="BandGapNarrowing"
+                )
+                electron_energy_n0 = (
+                    "(-Potential@n0+0.5*(BandGap-BandGapNarrowing@n0)+"
+                    "0.5*V_t*log(EffectiveDensityConduction/"
+                    "EffectiveDensityValence)+V_t*InvFermi("
+                    "Electrons@n0/EffectiveDensityConduction))"
+                )
+                electron_energy_n1 = electron_energy_n0.replace("@n0", "@n1")
+                hole_energy_n0 = (
+                    "(-Potential@n0-0.5*(BandGap-BandGapNarrowing@n0)+"
+                    "0.5*V_t*log(EffectiveDensityConduction/"
+                    "EffectiveDensityValence)-V_t*InvFermi("
+                    "Holes@n0/EffectiveDensityValence))"
+                )
+                hole_energy_n1 = hole_energy_n0.replace("@n0", "@n1")
+                electron_current = (
+                    f"ElectronCharge*{electron_mobility_model}*"
+                    "0.5*(Electrons@n0+Electrons@n1)*EdgeInverseLength*"
+                    f"(({electron_energy_n1})-({electron_energy_n0}))"
+                )
+                hole_current = (
+                    f"ElectronCharge*{hole_mobility_model}*"
+                    "0.5*(Holes@n0+Holes@n1)*EdgeInverseLength*"
+                    f"(({hole_energy_n1})-({hole_energy_n0}))"
+                )
+                CreateEdgeModel(device, name, "ElectronCurrent", electron_current)
+                for variable in ("Potential", "Electrons", "Holes"):
+                    CreateEdgeModelDerivatives(
+                        device,
+                        name,
+                        "ElectronCurrent",
+                        electron_current,
+                        variable,
+                    )
+                CreateEdgeModel(device, name, "HoleCurrent", hole_current)
+                for variable in ("Potential", "Electrons", "Holes"):
+                    CreateEdgeModelDerivatives(
+                        device,
+                        name,
+                        "HoleCurrent",
+                        hole_current,
+                        variable,
+                    )
         for contact in payload["contacts"]:
             if contact["kind"] == "insulating":
                 continue
             region = _contact_region(payload, contact["location"])
             if region["material"] == "silicon" and contact["kind"] == "ohmic":
-                CreateSiliconDriftDiffusionAtContact(
-                    device,
-                    region["id"],
-                    _backend_contact_id(contact),
-                    is_circuit=(
-                        is_circuit_study and contact["id"] == study["contact"]
-                    ),
-                )
+                if fermi_statistics:
+                    backend_contact = _backend_contact_id(contact)
+                    electrons, holes = carrier_contact_targets[contact["id"]]
+                    for variable, equation_name, target in (
+                        (
+                            "Electrons",
+                            "ElectronContinuityEquation",
+                            electrons,
+                        ),
+                        ("Holes", "HoleContinuityEquation", holes),
+                    ):
+                        model_name = f"{backend_contact}_{variable.lower()}_fermi"
+                        model = f"{variable}-{target:.17e}"
+                        CreateContactNodeModel(
+                            device, backend_contact, model_name, model
+                        )
+                        CreateContactNodeModel(
+                            device,
+                            backend_contact,
+                            f"{model_name}:{variable}",
+                            "1",
+                        )
+                        options: dict[str, Any] = {
+                            "device": device,
+                            "contact": backend_contact,
+                            "name": equation_name,
+                            "node_model": model_name,
+                            "edge_current_model": (
+                                "ElectronCurrent"
+                                if variable == "Electrons"
+                                else "HoleCurrent"
+                            ),
+                        }
+                        if is_circuit_study and contact["id"] == study["contact"]:
+                            options["circuit_node"] = GetContactBiasName(
+                                backend_contact
+                            )
+                        contact_equation(**options)
+                else:
+                    CreateSiliconDriftDiffusionAtContact(
+                        device,
+                        region["id"],
+                        _backend_contact_id(contact),
+                        is_circuit=(
+                            is_circuit_study and contact["id"] == study["contact"]
+                        ),
+                    )
         for interface, left, right in interface_names:
             if left["material"] == right["material"] == "silicon":
                 for variable, equation_name in (

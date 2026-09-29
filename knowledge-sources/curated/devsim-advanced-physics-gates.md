@@ -4,15 +4,7 @@ This note records why several requested capabilities remain disabled in the one-
 
 ## Coupled Fermi-Dirac transport
 
-The pinned DEVSIM source commit is `43b41ca845184c47e22b72d144db7e7db8509377`, corresponding to the supported 2.9.1 runtime. Its symbolic engine exposes `Fermi`, `InvFermi`, and their derivatives. The official `testing/Fermi1.py` verifies those scalar functions and a Fermi intrinsic-density expression. The packaged `python_packages/fermi_physics.py` contains comments describing work still needed, including the relation between Fermi energy and potential. It does not provide carrier equations, contact equations, initialization, or a coupled transport benchmark.
-
-Therefore `fermi` remains a research gate. Enabling it would require reviewed carrier-density and energy relations, generalized current discretization and derivatives, statistics-specific contacts, initialization, nondegenerate-limit tests, charge-neutrality tests, and a degenerate transport benchmark.
-
-Primary sources:
-
-- https://github.com/devsim/devsim/blob/43b41ca845184c47e22b72d144db7e7db8509377/testing/Fermi1.py
-- https://github.com/devsim/devsim/blob/43b41ca845184c47e22b72d144db7e7db8509377/python_packages/fermi_physics.py
-- https://github.com/devsim/devsim/blob/43b41ca845184c47e22b72d144db7e7db8509377/src/MathEval/Fermi.cc
+This gate is closed for the reviewed one-dimensional silicon drift-diffusion envelope. The implemented equations, discretization, provenance, and measured acceptance boundaries are recorded in `devsim-fermi-transport.md`. Requests outside that verified envelope are not silently converted to Boltzmann statistics.
 
 ## Philips surface mobility in a one-dimensional adapter
 
