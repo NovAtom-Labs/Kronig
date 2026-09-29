@@ -7,6 +7,12 @@ from tcad_agent.capabilities.models import (
     CapabilityStatus,
 )
 from tcad_agent.domain.models import DCStudy, ExperimentSpec
+from tcad_agent.domain.studies import (
+    DCPointsStudy,
+    FrequencyStudy,
+    ParameterStudy,
+    TemperatureStudy,
+)
 
 
 class CapabilityService:
@@ -73,6 +79,10 @@ class CapabilityService:
                 (spec.study.stop.to("V") - spec.study.start.to("V"))
                 / spec.study.step.to("V")
             ) + 1
+        elif isinstance(spec.study, (DCPointsStudy, TemperatureStudy, ParameterStudy)):
+            bias_points = len(spec.study.values)
+        elif isinstance(spec.study, FrequencyStudy):
+            bias_points = spec.study.points
         self._check_limit(
             issues,
             "study.bias_points",

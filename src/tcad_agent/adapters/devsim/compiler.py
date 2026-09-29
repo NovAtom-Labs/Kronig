@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from itertools import pairwise
 from pathlib import Path
 
 from tcad_agent.adapters.devsim import runtime
@@ -283,6 +284,54 @@ class DevsimAdapter:
             )
             for index, point in enumerate(data["bias_points"])
         )
+        if operating_points:
+            bias_values = tuple(point.coordinates["bias"] for point in operating_points)
+            axes["bias"] = ScientificAxis(
+                id="bias",
+                kind=AxisKind.BIAS,
+                label="Applied bias",
+                unit="V",
+                values=bias_values,
+            )
+            for terminal in data["terminals"]:
+                currents = tuple(
+                    point.terminal_currents_a_per_m2.get(terminal, 0.0)
+                    for point in operating_points
+                )
+                charges = tuple(
+                    point.terminal_charges_c_per_m2.get(terminal, 0.0)
+                    for point in operating_points
+                )
+                datasets[f"terminal_current__{terminal}"] = Dataset(
+                    id=f"terminal_current__{terminal}",
+                    label=f"Terminal current at {terminal}",
+                    unit="A/m^2",
+                    axes=("bias",),
+                    shape=(len(bias_values),),
+                    centering=DatasetCentering.OPERATING_POINT,
+                    values=currents,
+                )
+                datasets[f"terminal_charge__{terminal}"] = Dataset(
+                    id=f"terminal_charge__{terminal}",
+                    label=f"Terminal charge at {terminal}",
+                    unit="C/m^2",
+                    axes=("bias",),
+                    shape=(len(bias_values),),
+                    centering=DatasetCentering.OPERATING_POINT,
+                    values=charges,
+                )
+                capacitance = self._finite_difference(bias_values, charges)
+                if capacitance is not None:
+                    datasets[f"capacitance__{terminal}"] = Dataset(
+                        id=f"capacitance__{terminal}",
+                        label=f"Quasi-static capacitance at {terminal}",
+                        unit="F/m^2",
+                        axes=("bias",),
+                        shape=(len(bias_values),),
+                        centering=DatasetCentering.OPERATING_POINT,
+                        values=capacitance,
+                        source=f"derived:dQdV:terminal_charge__{terminal}",
+                    )
         return CanonicalResult(
             backend="devsim",
             simulator_version=data["simulator_version"],
@@ -295,3 +344,28 @@ class DevsimAdapter:
             operating_points=operating_points,
             native_result_path=native.result_path,
         )
+
+    @staticmethod
+    def _finite_difference(
+        coordinates: tuple[float, ...], values: tuple[float, ...]
+    ) -> tuple[float, ...] | None:
+        deltas = tuple(right - left for left, right in pairwise(coordinates))
+        if (
+            len(coordinates) < 2
+            or any(delta == 0 for delta in deltas)
+            or not (all(delta > 0 for delta in deltas) or all(delta < 0 for delta in deltas))
+        ):
+            return None
+        derivatives: list[float] = []
+        for index in range(len(values)):
+            if index == 0:
+                left, right = 0, 1
+            elif index == len(values) - 1:
+                left, right = index - 1, index
+            else:
+                left, right = index - 1, index + 1
+            derivatives.append(
+                (values[right] - values[left])
+                / (coordinates[right] - coordinates[left])
+            )
+        return tuple(derivatives)

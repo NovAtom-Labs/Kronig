@@ -303,14 +303,83 @@ def main() -> int:
 
     requested_contact = payload["study"].get("contact")
     points: list[dict[str, Any]] = []
-    for bias in _bias_points(payload["study"]):
+    current_bias = 0.0
+    for requested_bias in _bias_points(payload["study"]):
+        bias = requested_bias
+        converged = True
+        attempts = 1
+        message = None
         if requested_contact is not None:
             set_parameter(
                 device=device,
                 name=GetContactBiasName(requested_contact),
                 value=bias,
             )
-            solve(type="dc", absolute_error=1e10, relative_error=1e-10, maximum_iterations=80)
+            try:
+                solve(
+                    type="dc",
+                    absolute_error=1e10,
+                    relative_error=1e-10,
+                    maximum_iterations=80,
+                )
+            except Exception:
+                converged = False
+                study = payload["study"]
+                if study.get("strategy") == "adaptive":
+                    left = current_bias
+                    right = requested_bias
+                    for _retry in range(study.get("maximum_retries", 0)):
+                        midpoint = left + (right - left) / 2
+                        if abs(midpoint - left) < study.get("minimum_step_v", 0.0):
+                            break
+                        set_parameter(
+                            device=device,
+                            name=GetContactBiasName(requested_contact),
+                            value=midpoint,
+                        )
+                        try:
+                            solve(
+                                type="dc",
+                                absolute_error=1e10,
+                                relative_error=1e-10,
+                                maximum_iterations=80,
+                            )
+                        except Exception:
+                            right = midpoint
+                            continue
+                        left = midpoint
+                        set_parameter(
+                            device=device,
+                            name=GetContactBiasName(requested_contact),
+                            value=requested_bias,
+                        )
+                        attempts += 1
+                        try:
+                            solve(
+                                type="dc",
+                                absolute_error=1e10,
+                                relative_error=1e-10,
+                                maximum_iterations=80,
+                            )
+                        except Exception:
+                            continue
+                        converged = True
+                        break
+                if not converged:
+                    message = "nonlinear solve did not converge"
+                    set_parameter(
+                        device=device,
+                        name=GetContactBiasName(requested_contact),
+                        value=current_bias,
+                    )
+                    solve(
+                        type="dc",
+                        absolute_error=1e10,
+                        relative_error=1e-10,
+                        maximum_iterations=80,
+                    )
+        if converged:
+            current_bias = requested_bias
         currents: dict[str, float] = {}
         charges: dict[str, float] = {}
         for contact in payload["contacts"]:
@@ -335,10 +404,11 @@ def main() -> int:
         points.append(
             {
                 "bias_v": bias,
-                "converged": True,
+                "converged": converged,
                 "currents_a_per_cm2": currents,
                 "charges_c_per_cm2": charges,
-                "attempts": 1,
+                "attempts": attempts,
+                "message": message,
             }
         )
 
