@@ -58,6 +58,9 @@ class DCPointsStudy(_StudyModel):
     kind: Literal["dc_points"]
     contact: str
     values: tuple[QuantityValue, ...] = Field(min_length=1, max_length=10000)
+    strategy: Literal["fixed", "adaptive"] = "fixed"
+    minimum_step: QuantityValue | None = None
+    maximum_retries: int = Field(default=6, ge=0, le=32)
 
     @field_validator("values")
     @classmethod
@@ -65,6 +68,22 @@ class DCPointsStudy(_StudyModel):
         cls, values: tuple[QuantityValue, ...]
     ) -> tuple[QuantityValue, ...]:
         return tuple(value.require("V", "voltage") for value in values)
+
+    @field_validator("minimum_step")
+    @classmethod
+    def require_voltage_step(
+        cls, value: QuantityValue | None
+    ) -> QuantityValue | None:
+        return value.require("V", "voltage") if value is not None else None
+
+    @model_validator(mode="after")
+    def require_bounded_recovery(self) -> Self:
+        if self.strategy == "adaptive":
+            if self.minimum_step is None or self.minimum_step.to("V") <= 0:
+                raise ValueError("adaptive DC points require a positive minimum_step")
+        elif self.minimum_step is not None:
+            raise ValueError("fixed DC points cannot define minimum_step")
+        return self
 
 
 class ACStudy(_StudyModel):

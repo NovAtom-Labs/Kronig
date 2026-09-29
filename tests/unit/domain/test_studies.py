@@ -58,6 +58,22 @@ def test_exact_dc_points_preserve_researcher_order() -> None:
     assert [value.to("V") for value in expand_study_points(study)] == [0.0, 2.0, -2.0]
 
 
+def test_exact_dc_points_can_request_bounded_adaptive_continuation() -> None:
+    study = STUDY.validate_python(
+        {
+            "kind": "dc_points",
+            "contact": "left",
+            "values": ["0 V", "2 V", "0 V", "-2 V"],
+            "strategy": "adaptive",
+            "minimum_step": "10 mV",
+            "maximum_retries": 12,
+        }
+    )
+
+    assert study.strategy == "adaptive"
+    assert study.minimum_step.to("V") == pytest.approx(0.01)
+
+
 def test_frequency_expansion_is_logarithmic_and_bounded() -> None:
     study = STUDY.validate_python(
         {

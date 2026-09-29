@@ -182,6 +182,13 @@ class DevsimAdapter:
                 "kind": "dc_points",
                 "contact": study.contact,
                 "biases_v": tuple(value.to("V") for value in study.values),
+                "strategy": study.strategy,
+                "minimum_step_v": (
+                    study.minimum_step.to("V")
+                    if study.minimum_step is not None
+                    else None
+                ),
+                "maximum_retries": study.maximum_retries,
             }
         if isinstance(study, ACStudy):
             return {
@@ -310,6 +317,7 @@ class DevsimAdapter:
                     shape=(len(bias_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=currents,
+                    validity=tuple(point.state == "converged" for point in operating_points),
                 )
                 datasets[f"terminal_charge__{terminal}"] = Dataset(
                     id=f"terminal_charge__{terminal}",
@@ -319,8 +327,13 @@ class DevsimAdapter:
                     shape=(len(bias_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=charges,
+                    validity=tuple(point.state == "converged" for point in operating_points),
                 )
-                capacitance = self._finite_difference(bias_values, charges)
+                capacitance = (
+                    self._finite_difference(bias_values, charges)
+                    if all(point.state == "converged" for point in operating_points)
+                    else None
+                )
                 if capacitance is not None:
                     datasets[f"capacitance__{terminal}"] = Dataset(
                         id=f"capacitance__{terminal}",
@@ -331,6 +344,41 @@ class DevsimAdapter:
                         centering=DatasetCentering.OPERATING_POINT,
                         values=capacitance,
                         source=f"derived:dQdV:terminal_charge__{terminal}",
+                    )
+            if len(operating_points) > 1:
+                for name, sweep in data.get("field_sweeps", {}).items():
+                    final_field = fields.get(name)
+                    axis_id = f"position__{name}"
+                    if final_field is None or axis_id not in axes:
+                        continue
+                    position_count = len(final_field.positions_m)
+                    native_values = tuple(float(value) for value in sweep["values"])
+                    expected = len(operating_points) * position_count
+                    if len(native_values) != expected:
+                        raise ValueError(
+                            f"native field sweep shape does not match operating points: {name}"
+                        )
+                    normalized_values: list[float] = []
+                    for index in range(len(operating_points)):
+                        start = index * position_count
+                        stop = start + position_count
+                        _positions, values, unit = normalize_native_field(
+                            {
+                                "positions_cm": sweep["positions_cm"],
+                                "values": native_values[start:stop],
+                                "unit": sweep["unit"],
+                            }
+                        )
+                        normalized_values.extend(values)
+                    datasets[name] = Dataset(
+                        id=name,
+                        label=name.replace("_", " ").title(),
+                        unit=unit,
+                        axes=("bias", axis_id),
+                        shape=(len(operating_points), position_count),
+                        centering=DatasetCentering(sweep.get("centering", "node")),
+                        values=tuple(normalized_values),
+                        validity=tuple(bool(value) for value in sweep["validity"]),
                     )
         return CanonicalResult(
             backend="devsim",

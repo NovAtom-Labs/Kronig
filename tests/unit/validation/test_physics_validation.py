@@ -96,3 +96,47 @@ def test_inconsistent_electric_field_fails_physics_validation() -> None:
     report = ValidationEngine().validate(test_result)
 
     assert report.checks_by_id["electric-field-potential-gradient"].status == "failed"
+
+
+def test_bias_indexed_fields_validate_each_converged_profile() -> None:
+    result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        axes={
+            "bias": ScientificAxis(
+                id="bias", kind="bias", label="Bias", unit="V", values=(0.0, 1.0)
+            ),
+            "x_node": ScientificAxis(
+                id="x_node", kind="position", label="Position", unit="m", values=(0.0, 1.0, 2.0)
+            ),
+            "x_edge": ScientificAxis(
+                id="x_edge", kind="position", label="Position", unit="m", values=(0.5, 1.5)
+            ),
+        },
+        datasets={
+            "potential": Dataset(
+                id="potential",
+                label="Potential",
+                unit="V",
+                axes=("bias", "x_node"),
+                shape=(2, 3),
+                values=(0.0, 1.0, 3.0, 0.0, 9.0, 9.0),
+                validity=(True, True, True, False, False, False),
+            ),
+            "electric_field": Dataset(
+                id="electric_field",
+                label="Electric field",
+                unit="V/m",
+                axes=("bias", "x_edge"),
+                shape=(2, 2),
+                centering="edge",
+                values=(-1.0, -2.0, 8.0, 8.0),
+                validity=(True, True, False, False),
+            ),
+        },
+    )
+
+    report = ValidationEngine().validate(result)
+
+    assert report.checks_by_id["electric-field-potential-gradient"].status == "passed"

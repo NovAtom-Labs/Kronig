@@ -63,6 +63,9 @@ Print the report with:
 ```
 
 The current one-dimensional compiler reports terminal current density in `A/m^2`. It does not infer a device area or total current.
+Multi-point DC studies retain a bias axis for terminal responses and every requested spatial
+observable. The final single profile remains available for backward compatibility, while the
+axis-aware datasets drive operating-point selection, profile comparison, and failed-point gaps.
 
 ## Build and query local knowledge
 

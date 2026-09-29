@@ -109,7 +109,7 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | DEVSIM | Local deterministic compilation, execution, normalization, validation, reporting, and evidence bundles |
 | Sentaurus | Deterministic command compilation, source maps, signed remote protocol, canonical result contract, and conformance rules |
 | Knowledge | Manifest-gated retrieval over pinned official DEVSIM documentation and source plus source-grounded portable TCAD guides, with review state, backend/version filters, hashes, and citations |
-| Results | Dataset-driven metrics, curves, profile families, heatmaps, complex-response views, operating points, validation, provenance, and CSV export |
+| Results | Dataset-driven metrics, curves, bias-indexed profile families, heatmaps, complex-response views, operating points, validation, provenance, zoom, pan, crosshair inspection, and CSV or SVG export |
 | Provenance | Source versions, hashes, compiler identity, simulator identity, validation records, and atomic bundle manifests |
 
 ### Backend boundary
@@ -158,6 +158,7 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 - No automated calibration against fabrication measurements.
 - The reviewed DEVSIM adapter returns mobility and SRH recombination, but does not yet cover metal work functions, Schottky contacts, Fermi statistics, Auger, band-gap narrowing, or band-edge and Fermi-level profiles.
 - AC, frequency-domain, transient, temperature, and generic parameter studies exist in the portable contract but remain disabled in the DEVSIM manifest until runtime extraction and reference benchmarks pass.
+- DC sweeps retain every requested terminal operating point plus bias-indexed spatial profiles. Failed solves remain explicit and are masked as gaps in the scientific viewer.
 - Licensed Sentaurus execution remains unavailable until a separate host, exact simulator version, extractor, signing keys, quotas, and conformance cases are configured and verified.
 - Windows and macOS can warn about unsigned alpha packages.
 - Updates are manual for this alpha.

@@ -58,7 +58,7 @@
   function zoomViewport(viewport, center, factor) {
     const minimum = Number(viewport.minimum);
     const maximum = Number(viewport.maximum);
-    const boundedFactor = Math.min(1, Math.max(0.01, Number(factor)));
+    const boundedFactor = Math.min(10, Math.max(0.01, Number(factor)));
     const boundedCenter = Math.min(maximum, Math.max(minimum, Number(center)));
     const left = (boundedCenter - minimum) * boundedFactor;
     const right = (maximum - boundedCenter) * boundedFactor;
@@ -72,6 +72,23 @@
     };
   }
 
+  function clampViewport(viewport, extent) {
+    const extentMinimum = Number(extent.minimum);
+    const extentMaximum = Number(extent.maximum);
+    const extentWidth = extentMaximum - extentMinimum;
+    const width = Number(viewport.maximum) - Number(viewport.minimum);
+    if (!(width > 0) || width >= extentWidth) {
+      return {minimum: extentMinimum, maximum: extentMaximum};
+    }
+    if (Number(viewport.minimum) < extentMinimum) {
+      return {minimum: extentMinimum, maximum: extentMinimum + width};
+    }
+    if (Number(viewport.maximum) > extentMaximum) {
+      return {minimum: extentMaximum - width, maximum: extentMaximum};
+    }
+    return {minimum: Number(viewport.minimum), maximum: Number(viewport.maximum)};
+  }
+
   function csvCell(value) {
     const text = String(value ?? "");
     return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -83,6 +100,7 @@
   }
 
   globalThis.AgentKronigScientificChart = {
+    clampViewport,
     complexResponse,
     heatmapCells,
     logTransform,

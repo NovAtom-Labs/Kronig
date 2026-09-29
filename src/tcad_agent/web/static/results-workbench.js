@@ -54,6 +54,12 @@
           || imaginary.length !== values.length
           || imaginary.some((value) => !Number.isFinite(Number(value))))
       ) return [];
+      const validity = dataset.validity;
+      if (
+        validity !== null
+        && validity !== undefined
+        && (!Array.isArray(validity) || validity.length !== values.length)
+      ) return [];
       const kinds = resolvedAxes.map((axis) => String(axis.kind || "index"));
       let plotKind = "table";
       if (axisIds.length === 0) plotKind = "metric";
@@ -73,6 +79,7 @@
         shape,
         values,
         imaginaryValues: imaginary ? imaginary.map(Number) : null,
+        validity: validity ? validity.map(Boolean) : null,
         centering: String(dataset.centering || "node"),
         source: String(dataset.source || "simulator"),
         plotKind,
@@ -87,6 +94,7 @@
         name: dataset.name,
         positions: dataset.axes[0].values,
         values: dataset.values,
+        validity: dataset.validity,
         unit: dataset.unit,
       }];
     });
@@ -149,6 +157,7 @@
       return {
         axis: dataset.axes[0],
         values,
+        validity: dataset.validity,
         valueUnit: complexMode === "phase" ? "°" : dataset.unit,
         label: dataset.label,
       };
@@ -162,15 +171,18 @@
       Math.max(0, Number(sliceIndex) || 0),
     );
     const profile = [];
+    const validity = [];
     for (let position = 0; position < dataset.shape[positionIndex]; position += 1) {
       const flatIndex = positionIndex === 1
         ? boundedSlice * dataset.shape[1] + position
         : position * dataset.shape[1] + boundedSlice;
       profile.push(values[flatIndex]);
+      validity.push(dataset.validity ? dataset.validity[flatIndex] : true);
     }
     return {
       axis: dataset.axes[positionIndex],
       values: profile,
+      validity,
       valueUnit: dataset.unit,
       label: dataset.label,
       sliceAxis: dataset.axes[otherIndex],
@@ -202,6 +214,18 @@
     if (absolute >= 1e-6) return `${formatNumber(meters * 1e6)} µm`;
     if (absolute >= 1e-9) return `${formatNumber(meters * 1e9)} nm`;
     return `${formatNumber(meters)} m`;
+  }
+
+  function axisValueLabel(value, axis) {
+    if (axis?.kind === "position") return positionLabel(value);
+    return `${formatNumber(value)}${axis?.unit && axis.unit !== "1" ? ` ${axis.unit}` : ""}`;
+  }
+
+  function regionMarkers(payload) {
+    return (payload?.experiment?.regions || []).slice(0, -1).flatMap((region) => {
+      const value = Number(region.x1?.magnitude_si);
+      return Number.isFinite(value) ? [{value, label: region.id}] : [];
+    });
   }
 
   function element(tag, className = "", text = "") {
@@ -280,24 +304,52 @@
     return grid;
   }
 
-  function drawFieldChart(svg, tooltip, field, logarithmic = false) {
+  function drawFieldChart(
+    svg,
+    tooltip,
+    field,
+    logarithmic = false,
+    viewport = null,
+    onViewportChange = null,
+    markers = [],
+  ) {
     svg.replaceChildren();
     tooltip.classList.add("hidden");
     const points = field.positions.map((position, index) => ({
       position,
       value: field.values[index],
+      valid: field.validity ? Boolean(field.validity[index]) : true,
     }));
     let useLog = logarithmic;
-    if (useLog && points.some((point) => point.value <= 0)) useLog = false;
+    if (useLog && points.some((point) => point.valid && point.value <= 0)) useLog = false;
     const plotted = points.map((point) => ({
       ...point,
       plotted: useLog ? Math.log10(point.value) : point.value,
     }));
-    const xMinimum = Math.min(...plotted.map((point) => point.position));
-    const xMaximum = Math.max(...plotted.map((point) => point.position));
-    let yMinimum = Math.min(...plotted.map((point) => point.plotted));
-    let yMaximum = Math.max(...plotted.map((point) => point.plotted));
-    if (xMinimum === xMaximum || yMinimum === yMaximum) {
+    const validPlotted = plotted.filter((point) => point.valid);
+    const candidates = validPlotted.length ? validPlotted : plotted;
+    const fullExtent = {
+      minimum: Math.min(...candidates.map((point) => point.position)),
+      maximum: Math.max(...candidates.map((point) => point.position)),
+    };
+    const currentViewport = globalThis.AgentKronigScientificChart?.clampViewport(
+      viewport || fullExtent,
+      fullExtent,
+    ) || fullExtent;
+    let xMinimum = currentViewport.minimum;
+    let xMaximum = currentViewport.maximum;
+    if (xMinimum === xMaximum) {
+      const padding = Math.abs(xMinimum || 1) * 0.05;
+      xMinimum -= padding;
+      xMaximum += padding;
+    }
+    const withinViewport = candidates.filter(
+      (point) => point.position >= xMinimum && point.position <= xMaximum,
+    );
+    const displayed = withinViewport.length ? withinViewport : candidates;
+    let yMinimum = Math.min(...displayed.map((point) => point.plotted));
+    let yMaximum = Math.max(...displayed.map((point) => point.plotted));
+    if (yMinimum === yMaximum) {
       const padding = Math.abs(yMinimum || 1) * 0.05;
       yMinimum -= padding;
       yMaximum += padding;
@@ -312,19 +364,32 @@
       svg.append(
         svgNode("line", {x1: xCoordinate, y1: dimensions.top, x2: xCoordinate, y2: dimensions.top + dimensions.height, class: "result-chart-grid"}),
         svgNode("line", {x1: dimensions.left, y1: yCoordinate, x2: dimensions.left + dimensions.width, y2: yCoordinate, class: "result-chart-grid"}),
-        svgNode("text", {x: xCoordinate, y: dimensions.top + dimensions.height + 25, class: "result-chart-tick", "text-anchor": "middle"}, positionLabel(xMinimum + (xMaximum - xMinimum) * fraction)),
+        svgNode("text", {x: xCoordinate, y: dimensions.top + dimensions.height + 25, class: "result-chart-tick", "text-anchor": "middle"}, axisValueLabel(xMinimum + (xMaximum - xMinimum) * fraction, field.axis)),
         svgNode("text", {x: dimensions.left - 12, y: yCoordinate + 4, class: "result-chart-tick", "text-anchor": "end"}, formatNumber(yMinimum + (yMaximum - yMinimum) * fraction)),
       );
     }
+    const segments = globalThis.AgentKronigScientificChart?.segmentSeries(
+      plotted.map((point) => point.position),
+      plotted.map((point) => point.plotted),
+      plotted.map(
+        (point) => point.valid && point.position >= xMinimum && point.position <= xMaximum,
+      ),
+    ) || [];
     svg.append(
       svgNode("line", {x1: dimensions.left, y1: dimensions.top + dimensions.height, x2: dimensions.left + dimensions.width, y2: dimensions.top + dimensions.height, class: "result-chart-axis"}),
       svgNode("line", {x1: dimensions.left, y1: dimensions.top, x2: dimensions.left, y2: dimensions.top + dimensions.height, class: "result-chart-axis"}),
-      svgNode("path", {
-        d: plotted.map((point, index) => `${index ? "L" : "M"} ${x(point.position)} ${y(point.plotted)}`).join(" "),
-        class: "result-chart-line",
-      }),
       svgNode("text", {x: 18, y: 160, transform: "rotate(-90 18 160)", class: "result-chart-label", "text-anchor": "middle"}, useLog ? `log₁₀(${field.unit})` : field.unit),
     );
+    markers.filter((marker) => marker.value > xMinimum && marker.value < xMaximum).forEach(
+      (marker) => svg.append(
+        svgNode("line", {x1: x(marker.value), y1: dimensions.top, x2: x(marker.value), y2: dimensions.top + dimensions.height, class: "result-chart-interface"}),
+        svgNode("text", {x: x(marker.value) + 4, y: dimensions.top + 12, class: "result-chart-tick"}, marker.label),
+      ),
+    );
+    segments.forEach((segment) => svg.append(svgNode("path", {
+      d: segment.map((point, index) => `${index ? "L" : "M"} ${x(point.x)} ${y(point.value)}`).join(" "),
+      class: "result-chart-line",
+    })));
     const crosshair = svgNode("line", {class: "result-chart-crosshair hidden"});
     const marker = svgNode("circle", {r: 4, class: "result-chart-marker hidden"});
     const hitArea = svgNode("rect", {x: dimensions.left, y: dimensions.top, width: dimensions.width, height: dimensions.height, class: "result-chart-hit"});
@@ -333,7 +398,11 @@
       const bounds = svg.getBoundingClientRect();
       const pointerX = ((event.clientX - bounds.left) / bounds.width) * 880;
       const target = xMinimum + ((pointerX - dimensions.left) / dimensions.width) * (xMaximum - xMinimum);
-      const nearest = plotted.reduce((best, point) => (
+      const validPoints = plotted.filter(
+        (point) => point.valid && point.position >= xMinimum && point.position <= xMaximum,
+      );
+      if (!validPoints.length) return;
+      const nearest = validPoints.reduce((best, point) => (
         Math.abs(point.position - target) < Math.abs(best.position - target) ? point : best
       ));
       const markerX = x(nearest.position);
@@ -346,7 +415,7 @@
       marker.setAttribute("cy", markerY);
       crosshair.classList.remove("hidden");
       marker.classList.remove("hidden");
-      tooltip.textContent = `${positionLabel(nearest.position)} · ${formatNumber(nearest.value)} ${field.unit}`;
+      tooltip.textContent = `${axisValueLabel(nearest.position, field.axis)} · ${formatNumber(nearest.value)} ${field.unit}`;
       tooltip.classList.remove("hidden");
     });
     hitArea.addEventListener("pointerleave", () => {
@@ -354,6 +423,43 @@
       marker.classList.add("hidden");
       tooltip.classList.add("hidden");
     });
+    hitArea.addEventListener("wheel", (event) => {
+      if (!onViewportChange || fullExtent.minimum === fullExtent.maximum) return;
+      event.preventDefault();
+      const bounds = svg.getBoundingClientRect();
+      const pointerX = ((event.clientX - bounds.left) / bounds.width) * 880;
+      const center = xMinimum
+        + ((pointerX - dimensions.left) / dimensions.width) * (xMaximum - xMinimum);
+      const factor = event.deltaY < 0 ? 0.75 : 1.35;
+      const next = globalThis.AgentKronigScientificChart.clampViewport(
+        globalThis.AgentKronigScientificChart.zoomViewport(
+          {minimum: xMinimum, maximum: xMaximum},
+          center,
+          factor,
+        ),
+        fullExtent,
+      );
+      onViewportChange(next);
+    }, {passive: false});
+    let dragStart = null;
+    hitArea.addEventListener("pointerdown", (event) => {
+      dragStart = event.clientX;
+      hitArea.setPointerCapture?.(event.pointerId);
+    });
+    hitArea.addEventListener("pointerup", (event) => {
+      if (!onViewportChange || dragStart === null) return;
+      const delta = -(event.clientX - dragStart) / Math.max(svg.getBoundingClientRect().width, 1)
+        * (xMaximum - xMinimum);
+      dragStart = null;
+      onViewportChange(globalThis.AgentKronigScientificChart.clampViewport(
+        globalThis.AgentKronigScientificChart.panViewport(
+          {minimum: xMinimum, maximum: xMaximum},
+          delta,
+        ),
+        fullExtent,
+      ));
+    });
+    hitArea.addEventListener("dblclick", () => onViewportChange?.(fullExtent));
     return useLog;
   }
 
@@ -396,13 +502,28 @@
     const tooltip = element("div", "result-chart-tooltip hidden");
     chart.append(svg, tooltip);
     section.append(chart);
+    let viewport = null;
     const redraw = () => {
       const field = fields.find((candidate) => candidate.name === select.value) || fields[0];
-      const logAccepted = drawFieldChart(svg, tooltip, field, scale.value === "log");
+      const logAccepted = drawFieldChart(
+        svg,
+        tooltip,
+        {...field, axis: {kind: "position", unit: "m"}},
+        scale.value === "log",
+        viewport,
+        (next) => {
+          viewport = next;
+          redraw();
+        },
+        regionMarkers(payload),
+      );
       if (scale.value === "log" && !logAccepted) scale.value = "linear";
       svg.setAttribute("aria-label", `${label(field.name)} across device position`);
     };
-    select.addEventListener("change", redraw);
+    select.addEventListener("change", () => {
+      viewport = null;
+      redraw();
+    });
     scale.addEventListener("change", redraw);
     redraw();
     return section;
@@ -480,7 +601,9 @@
     });
     const exportCsv = element("button", "result-export", "CSV");
     exportCsv.type = "button";
-    controls.append(select, slice, mode, scale, exportCsv);
+    const exportSvg = element("button", "result-export", "SVG");
+    exportSvg.type = "button";
+    controls.append(select, slice, mode, scale, exportCsv, exportSvg);
     section.append(controls);
     const chartRoot = element("div", "result-chart");
     const svg = svgNode("svg", {viewBox: "0 0 880 330", role: "img"});
@@ -488,6 +611,7 @@
     chartRoot.append(svg, tooltip);
     section.append(chartRoot);
 
+    let viewport = null;
     const redraw = () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       mode.classList.toggle("hidden", dataset.plotKind !== "complex_response");
@@ -512,14 +636,31 @@
         const field = {
           positions: series.axis.values,
           values: series.values,
+          validity: series.validity,
           unit: series.valueUnit,
+          axis: series.axis,
         };
-        const logAccepted = drawFieldChart(svg, tooltip, field, scale.value === "log");
+        const logAccepted = drawFieldChart(
+          svg,
+          tooltip,
+          field,
+          scale.value === "log",
+          viewport,
+          (next) => {
+            viewport = next;
+            redraw();
+          },
+          series.axis.kind === "position" ? regionMarkers(payload) : [],
+        );
         if (scale.value === "log" && !logAccepted) scale.value = "linear";
       }
       svg.setAttribute("aria-label", `${dataset.label} scientific plot`);
     };
-    [select, slice, mode, scale].forEach((control) => control.addEventListener("change", redraw));
+    select.addEventListener("change", () => {
+      viewport = null;
+      redraw();
+    });
+    [slice, mode, scale].forEach((control) => control.addEventListener("change", redraw));
     exportCsv.addEventListener("click", () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       const series = seriesForDataset(dataset, slice.value, mode.value);
@@ -531,6 +672,11 @@
         `${dataset.label} (${series.valueUnit})`,
       );
       triggerDownload(`${dataset.id}.csv`, content, "text/csv;charset=utf-8");
+    });
+    exportSvg.addEventListener("click", () => {
+      const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
+      const source = new XMLSerializer().serializeToString(svg);
+      triggerDownload(`${dataset.id}.svg`, source, "image/svg+xml;charset=utf-8");
     });
     redraw();
     return section;

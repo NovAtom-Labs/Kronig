@@ -91,8 +91,8 @@ const datasetPayload = {
       frequency: {id: "frequency", kind: "frequency", label: "Frequency", unit: "Hz", values: [1e3, 1e4]},
     },
     datasets: {
-      current: {id: "current", label: "Current", unit: "A/m^2", axes: ["bias"], shape: [3], values: [-1, 0, 1]},
-      potential_map: {id: "potential_map", label: "Potential map", unit: "V", axes: ["bias", "position"], shape: [3, 2], values: [0, 1, 1, 2, 2, 3]},
+      current: {id: "current", label: "Current", unit: "A/m^2", axes: ["bias"], shape: [3], values: [-1, 0, 1], validity: [true, false, true]},
+      potential_map: {id: "potential_map", label: "Potential map", unit: "V", axes: ["bias", "position"], shape: [3, 2], values: [0, 1, 1, 2, 2, 3], validity: [true, true, false, false, true, true]},
       admittance: {id: "admittance", label: "Admittance", unit: "S/m^2", axes: ["frequency"], shape: [2], values: [1, 2], imaginary_values: [3, 4]},
       peak: {id: "peak", label: "Peak", unit: "V/m", axes: [], shape: [], centering: "scalar", values: [7]},
     },
@@ -106,6 +106,7 @@ assertEqual(datasets[2].plotKind, "complex_response", "complex rank-one data is 
 assertEqual(datasets[3].plotKind, "metric", "rank-zero data is a metric");
 const profile = results.seriesForDataset(datasets[1], 1);
 assertEqual(profile.values.join(","), "1,2", "profile selection slices a generic rank-two dataset");
+assertEqual(profile.validity.join(","), "false,false", "profile selection preserves failed-point masks");
 assertEqual(profile.sliceAxis.kind, "bias", "the non-position axis controls profile selection");
 assertEqual(
   results.datasetOptions({result: {axes: {}, datasets: {broken: {id: "broken", label: "Broken", unit: "V", axes: ["missing"], shape: [2], values: [1, 2]}}}}).length,

@@ -59,6 +59,9 @@ class Dataset(_ResultModel):
     imaginary_values: tuple[float, ...] | None = Field(
         default=None, min_length=1, max_length=4_000_000
     )
+    validity: tuple[bool, ...] | None = Field(
+        default=None, min_length=1, max_length=4_000_000
+    )
     source: str = Field(default="simulator", min_length=1, max_length=240)
 
     @field_validator("shape")
@@ -77,6 +80,8 @@ class Dataset(_ResultModel):
             raise ValueError("dataset shape does not match the value count")
         if self.imaginary_values is not None and len(self.imaginary_values) != expected:
             raise ValueError("imaginary values must match the dataset shape")
+        if self.validity is not None and len(self.validity) != expected:
+            raise ValueError("validity mask must match the dataset shape")
         if not all(math.isfinite(value) for value in self.values):
             raise ValueError("dataset real values must be finite")
         if self.imaginary_values is not None and not all(

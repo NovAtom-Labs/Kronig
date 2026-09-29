@@ -301,8 +301,124 @@ def main() -> int:
                     )
         solve(type="dc", absolute_error=1e10, relative_error=1e-6, maximum_iterations=80)
 
+    requested = set(payload["observables"])
+
+    def extract_fields() -> dict[str, dict[str, Any]]:
+        fields: dict[str, dict[str, Any]] = {}
+        for region in regions:
+            name = region["id"]
+            node_positions = list(
+                get_node_model_values(device=device, region=name, name="x")
+            )
+            edge_positions = [
+                (left + right) / 2 for left, right in pairwise(node_positions)
+            ]
+            if "potential" in requested:
+                _append_field(
+                    fields,
+                    "potential",
+                    node_positions,
+                    list(
+                        get_node_model_values(
+                            device=device, region=name, name="Potential"
+                        )
+                    ),
+                    "V",
+                    "node",
+                )
+            if "electric_field" in requested:
+                _append_field(
+                    fields,
+                    "electric_field",
+                    edge_positions,
+                    list(
+                        get_edge_model_values(
+                            device=device, region=name, name="ElectricField"
+                        )
+                    ),
+                    "V/cm",
+                    "edge",
+                )
+            if region["material"] != "silicon":
+                continue
+            model_outputs = {
+                "electron_density": ("Electrons", "cm^-3", "node"),
+                "hole_density": ("Holes", "cm^-3", "node"),
+                "recombination_rate": ("USRH", "cm^-3/s", "node"),
+                "electron_current_density": ("ElectronCurrent", "A/cm^2", "edge"),
+                "hole_current_density": ("HoleCurrent", "A/cm^2", "edge"),
+            }
+            for output, (model, unit, centering) in model_outputs.items():
+                if output not in requested or not drift_diffusion:
+                    continue
+                positions = node_positions if centering == "node" else edge_positions
+                getter = (
+                    get_node_model_values
+                    if centering == "node"
+                    else get_edge_model_values
+                )
+                _append_field(
+                    fields,
+                    output,
+                    positions,
+                    list(getter(device=device, region=name, name=model)),
+                    unit,
+                    centering,
+                )
+            doping = list(
+                get_node_model_values(device=device, region=name, name="NetDoping")
+            )
+            _append_field(
+                fields, "net_doping", node_positions, doping, "cm^-3", "node"
+            )
+            if drift_diffusion:
+                electrons = list(
+                    get_node_model_values(
+                        device=device, region=name, name="Electrons"
+                    )
+                )
+                holes = list(
+                    get_node_model_values(device=device, region=name, name="Holes")
+                )
+                if "charge_density" in requested:
+                    charge = float(
+                        get_parameter(
+                            device=device, region=name, name="ElectronCharge"
+                        )
+                    )
+                    values = [
+                        charge * (p - n + dop)
+                        for p, n, dop in zip(holes, electrons, doping, strict=True)
+                    ]
+                    _append_field(
+                        fields,
+                        "charge_density",
+                        node_positions,
+                        values,
+                        "C/cm^3",
+                        "node",
+                    )
+                for output, parameter in (
+                    ("electron_mobility", "mu_n"),
+                    ("hole_mobility", "mu_p"),
+                ):
+                    if output in requested:
+                        mobility = float(
+                            get_parameter(device=device, region=name, name=parameter)
+                        )
+                        _append_field(
+                            fields,
+                            output,
+                            node_positions,
+                            [mobility] * len(node_positions),
+                            "cm^2/V/s",
+                            "node",
+                        )
+        return fields
+
     requested_contact = payload["study"].get("contact")
     points: list[dict[str, Any]] = []
+    field_samples: list[dict[str, Any]] = []
     current_bias = 0.0
     for requested_bias in _bias_points(payload["study"]):
         bias = requested_bias
@@ -411,108 +527,30 @@ def main() -> int:
                 "message": message,
             }
         )
+        field_samples.append({"valid": converged, "fields": extract_fields()})
 
-    requested = set(payload["observables"])
-    fields: dict[str, dict[str, Any]] = {}
-    for region in regions:
-        name = region["id"]
-        node_positions = list(
-            get_node_model_values(device=device, region=name, name="x")
-        )
-        edge_positions = [(left + right) / 2 for left, right in pairwise(node_positions)]
-        if "potential" in requested:
-            _append_field(
-                fields,
-                "potential",
-                node_positions,
-                list(
-                    get_node_model_values(device=device, region=name, name="Potential")
-                ),
-                "V",
-                "node",
-            )
-        if "electric_field" in requested:
-            _append_field(
-                fields,
-                "electric_field",
-                edge_positions,
-                list(
-                    get_edge_model_values(
-                        device=device, region=name, name="ElectricField"
-                    )
-                ),
-                "V/cm",
-                "edge",
-            )
-        if region["material"] != "silicon":
-            continue
-        model_outputs = {
-            "electron_density": ("Electrons", "cm^-3", "node"),
-            "hole_density": ("Holes", "cm^-3", "node"),
-            "recombination_rate": ("USRH", "cm^-3/s", "node"),
-            "electron_current_density": ("ElectronCurrent", "A/cm^2", "edge"),
-            "hole_current_density": ("HoleCurrent", "A/cm^2", "edge"),
-        }
-        for output, (model, unit, centering) in model_outputs.items():
-            if output not in requested or not drift_diffusion:
-                continue
-            positions = node_positions if centering == "node" else edge_positions
-            getter = (
-                get_node_model_values
-                if centering == "node"
-                else get_edge_model_values
-            )
-            _append_field(
-                fields,
-                output,
-                positions,
-                list(getter(device=device, region=name, name=model)),
-                unit,
-                centering,
-            )
-        doping = list(
-            get_node_model_values(device=device, region=name, name="NetDoping")
-        )
-        _append_field(fields, "net_doping", node_positions, doping, "cm^-3", "node")
-        if drift_diffusion:
-            electrons = list(
-                get_node_model_values(device=device, region=name, name="Electrons")
-            )
-            holes = list(
-                get_node_model_values(device=device, region=name, name="Holes")
-            )
-            if "charge_density" in requested:
-                charge = float(
-                    get_parameter(device=device, region=name, name="ElectronCharge")
-                )
-                values = [
-                    charge * (p - n + dop)
-                    for p, n, dop in zip(holes, electrons, doping, strict=True)
-                ]
-                _append_field(
-                    fields,
-                    "charge_density",
-                    node_positions,
-                    values,
-                    "C/cm^3",
-                    "node",
-                )
-            for output, parameter in (
-                ("electron_mobility", "mu_n"),
-                ("hole_mobility", "mu_p"),
+    fields = extract_fields()
+    field_sweeps: dict[str, dict[str, Any]] = {}
+    for name, field in fields.items():
+        values: list[float] = []
+        validity: list[bool] = []
+        for sample in field_samples:
+            sampled_field = sample["fields"].get(name)
+            if (
+                sampled_field is None
+                or sampled_field["positions_cm"] != field["positions_cm"]
+                or len(sampled_field["values"]) != len(field["values"])
             ):
-                if output in requested:
-                    mobility = float(
-                        get_parameter(device=device, region=name, name=parameter)
-                    )
-                    _append_field(
-                        fields,
-                        output,
-                        node_positions,
-                        [mobility] * len(node_positions),
-                        "cm^2/V/s",
-                        "node",
-                    )
+                raise ValueError(f"field topology changed during study: {name}")
+            values.extend(sampled_field["values"])
+            validity.extend([bool(sample["valid"])] * len(sampled_field["values"]))
+        field_sweeps[name] = {
+            "positions_cm": field["positions_cm"],
+            "values": values,
+            "validity": validity,
+            "unit": field["unit"],
+            "centering": field["centering"],
+        }
 
     result = {
         "schema_version": "2.0",
@@ -521,6 +559,7 @@ def main() -> int:
         "terminals": [contact["id"] for contact in payload["contacts"]],
         "bias_points": points,
         "fields": fields,
+        "field_sweeps": field_sweeps,
     }
     Path("native_result.json").write_text(json.dumps(result, sort_keys=True, indent=2))
     return 0

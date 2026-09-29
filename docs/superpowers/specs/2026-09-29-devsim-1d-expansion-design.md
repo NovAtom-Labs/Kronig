@@ -146,4 +146,3 @@ Opt-in live Bedrock evaluations use the real preprocessing service, clarificatio
 ## Explicit boundary
 
 This expansion excludes two-dimensional and three-dimensional geometry, process simulation, optical, thermal and mechanical coupling, hydrodynamic and ballistic transport, general quantum transport, arbitrary researcher equations, model-generated DEVSIM source, unreviewed material parameters, and claims of Sentaurus equivalence without cross-backend evidence.
-

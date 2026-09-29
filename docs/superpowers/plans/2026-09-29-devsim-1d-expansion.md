@@ -240,4 +240,3 @@
 - [ ] Run real DEVSIM reference cases and opt-in live Bedrock acceptance.
 - [ ] Review the complete branch against the spec, repair Critical and Important findings test-first, and rerun everything.
 - [ ] Record exact capabilities, test evidence, remaining scientific boundaries and branch state without pushing remotely.
-

@@ -33,6 +33,12 @@ assertEqual(zoomed.maximum, 7.5, "zoom changes range deterministically");
 const panned = chart.panViewport(zoomed, 1);
 assertEqual(panned.minimum, 3.5, "pan moves the viewport in data units");
 assertEqual(panned.maximum, 8.5, "pan preserves viewport width");
+const clamped = chart.clampViewport({minimum: -3, maximum: 3}, {minimum: 0, maximum: 10});
+assertEqual(clamped.minimum, 0, "panning is clamped at the dataset boundary");
+assertEqual(clamped.maximum, 6, "clamping preserves the visible width");
+const reset = chart.clampViewport({minimum: -5, maximum: 15}, {minimum: 0, maximum: 10});
+assertEqual(reset.minimum, 0, "an oversized viewport resets to the full extent");
+assertEqual(reset.maximum, 10, "an oversized viewport cannot exceed the full extent");
 
 assertEqual(
   chart.toCsv([{x: 0, value: 1}, {x: 2, value: 3}], "Bias (V)", "Current (A/m^2)"),

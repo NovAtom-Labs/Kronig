@@ -62,6 +62,33 @@ def test_complex_dataset_requires_matching_imaginary_values() -> None:
         )
 
 
+def test_dataset_validity_mask_matches_storage_shape() -> None:
+    dataset = Dataset(
+        id="potential_sweep",
+        label="Potential sweep",
+        unit="V",
+        axes=("bias", "position"),
+        shape=(2, 2),
+        centering=DatasetCentering.NODE,
+        values=(0.0, 0.1, 0.2, 0.3),
+        validity=(True, True, False, False),
+    )
+
+    assert dataset.validity == (True, True, False, False)
+
+    with pytest.raises(ValidationError, match="validity mask"):
+        Dataset(
+            id="bad_mask",
+            label="Bad mask",
+            unit="V",
+            axes=("bias", "position"),
+            shape=(2, 2),
+            centering=DatasetCentering.NODE,
+            values=(0.0, 0.1, 0.2, 0.3),
+            validity=(True, False),
+        )
+
+
 def test_result_rejects_unknown_axis_and_axis_length_mismatch() -> None:
     with pytest.raises(ValidationError, match="unknown axes"):
         CanonicalResult(
