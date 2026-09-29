@@ -2,7 +2,10 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from tcad_agent.bundles.models import BundleInputs
+from tcad_agent.bundles.reader import BundleIntegrityError, BundleReader
 from tcad_agent.bundles.writer import BundleWriter
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.events.ledger import EventLedger
@@ -113,3 +116,24 @@ def test_bundle_manifest_hashes_every_artifact_and_report_uses_structured_values
     plot = (bundle.root / "results" / "field-plots.svg").read_text()
     assert "<svg" in plot
     assert "electron_density" in plot
+
+
+def test_bundle_reader_verifies_and_loads_axis_aware_results(
+    tmp_path: Path, valid_spec: ExperimentSpec
+) -> None:
+    bundle = BundleWriter(tmp_path / "bundles").write(bundle_inputs(tmp_path, valid_spec))
+
+    verified = BundleReader().read(bundle.root)
+
+    assert verified.result.datasets["potential"].unit == "V"
+    assert verified.result.axes["position__potential"].kind == "position"
+
+
+def test_bundle_reader_rejects_tampered_canonical_data(
+    tmp_path: Path, valid_spec: ExperimentSpec
+) -> None:
+    bundle = BundleWriter(tmp_path / "bundles").write(bundle_inputs(tmp_path, valid_spec))
+    (bundle.root / "results" / "canonical.json").write_text("{}\n")
+
+    with pytest.raises(BundleIntegrityError, match="mismatch"):
+        BundleReader().read(bundle.root)

@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 
 from tcad_agent.domain.models import EquilibriumStudy, ExperimentSpec, ProfileSpecies
+from tcad_agent.domain.profiles import ConstantProfile
 
 _BOLTZMANN_OVER_CHARGE_V_PER_K = 8.617333262145e-5
 _SILICON_INTRINSIC_DENSITY_CM3_AT_300_K = 1.0e10
@@ -34,10 +35,13 @@ def built_in_potential_reference(
     acceptors = [
         profile
         for profile in spec.profiles
-        if profile.species is ProfileSpecies.ACCEPTOR
+        if isinstance(profile, ConstantProfile)
+        and profile.species is ProfileSpecies.ACCEPTOR
     ]
     donors = [
-        profile for profile in spec.profiles if profile.species is ProfileSpecies.DONOR
+        profile
+        for profile in spec.profiles
+        if isinstance(profile, ConstantProfile) and profile.species is ProfileSpecies.DONOR
     ]
     if len(acceptors) != 1 or len(donors) != 1:
         return None
