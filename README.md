@@ -102,14 +102,14 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Workspace | Native three-pane repository, file, chat, activity, and changes interface |
 | Agent runtime | Process-scoped OpenHands execution, repository file tools, bounded terminal commands, tasks, approvals, and delegated agents |
 | Intent preparation | Same-model structured preparation, bounded repository and TCAD context, adaptive clarification, deterministic compilation, and provenance hashes |
-| Scientific contract | Strict one-dimensional `ExperimentSpec` with dimensional quantities and unknown-field rejection |
-| Geometry | Ordered, contiguous silicon regions described as data, without named-device branches |
-| Doping | Constant donor and acceptor profiles |
-| Studies | Equilibrium and bounded DC sweeps |
+| Scientific contract | Strict simulator-neutral `ExperimentSpec` with dimensional quantities, typed axes and datasets, and unknown-field rejection |
+| Geometry | Up to 32 ordered, contiguous silicon or silicon-dioxide regions described as data, without named-device branches |
+| Doping | Constant, linear, Gaussian, error-function, and tabulated donor or acceptor profiles |
+| Studies | Equilibrium, exact-point DC, bounded range DC, adaptive continuation, terminal charge, and quasi-static capacitance density |
 | DEVSIM | Local deterministic compilation, execution, normalization, validation, reporting, and evidence bundles |
 | Sentaurus | Deterministic command compilation, source maps, signed remote protocol, canonical result contract, and conformance rules |
 | Knowledge | Manifest-gated retrieval over pinned official DEVSIM documentation and source plus source-grounded portable TCAD guides, with review state, backend/version filters, hashes, and citations |
-| Results | Interactive spatial fields, metrics, samples, validation checks, structure details, and evidence downloads |
+| Results | Dataset-driven metrics, curves, profile families, heatmaps, complex-response views, operating points, validation, provenance, and CSV export |
 | Provenance | Source versions, hashes, compiler identity, simulator identity, validation records, and atomic bundle manifests |
 
 ### Backend boundary
@@ -118,14 +118,14 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | --- | --- | --- |
 | Execution | Local and packaged | Disabled until a licensed host passes integration checks |
 | Dimension | 1D | 1D |
-| Material | Silicon | Silicon |
+| Material | Silicon and silicon dioxide | Silicon |
 | Regions | Up to 32 ordered regions | Up to 32 ordered regions |
-| Contacts | Two endpoint ohmic contacts | Endpoint ohmic or explicit metal work-function contacts |
+| Contacts | Endpoint ohmic contacts and oxide-side ideal gates | Endpoint ohmic or explicit metal work-function contacts |
 | Statistics | Boltzmann | Boltzmann or Fermi |
 | Mobility | Constant | Constant and reviewed Sentaurus mappings |
 | Recombination | SRH | SRH and Auger |
 | Band-gap narrowing | Unsupported | Supported by the adapter contract |
-| Studies | Equilibrium and DC sweep, up to 10 points | Equilibrium and DC sweep, up to 10 points |
+| Studies | Equilibrium, exact or ranged DC, adaptive recovery, and quasi-static charge or C-V, up to 10 requested points | Equilibrium and DC sweep, up to 10 points |
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
 
@@ -152,11 +152,12 @@ contact behavior, temperature, or sweep endpoints from typical values.
 
 This alpha is for workflow evaluation and small exploratory drift-diffusion studies. It is not a calibrated fabrication prediction system.
 
-- One spatial dimension, silicon only, constant doping profiles, and two endpoint contacts.
+- One spatial dimension, silicon and silicon dioxide, reviewed analytic profile primitives, and endpoint contacts.
 - No arbitrary model-written simulator syntax.
 - No process simulation, transient analysis, AC, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or circuit co-simulation.
 - No automated calibration against fabrication measurements.
-- DEVSIM does not cover metal work functions, Fermi statistics, Auger, band-gap narrowing, band diagrams, mobility output, or recombination output in the reviewed local adapter.
+- The reviewed DEVSIM adapter returns mobility and SRH recombination, but does not yet cover metal work functions, Schottky contacts, Fermi statistics, Auger, band-gap narrowing, or band-edge and Fermi-level profiles.
+- AC, frequency-domain, transient, temperature, and generic parameter studies exist in the portable contract but remain disabled in the DEVSIM manifest until runtime extraction and reference benchmarks pass.
 - Licensed Sentaurus execution remains unavailable until a separate host, exact simulator version, extractor, signing keys, quotas, and conformance cases are configured and verified.
 - Windows and macOS can warn about unsigned alpha packages.
 - Updates are manual for this alpha.
@@ -193,7 +194,7 @@ Completed experiment bundles open in the center pane as a Results Workbench. Sel
 
 When a foreground agent run creates or modifies a canonical result, Agent Kronig finds it through that run's immutable Changes manifest and opens the workbench automatically. Ordinary JSON files continue to use the generic file viewer.
 
-The workbench reads only verified `ExperimentSpec`, `CanonicalResult`, `ValidationReport`, and `BundleManifest` artifacts. DEVSIM and Sentaurus therefore share the same interface after their adapters normalize native results. The current renderer supports one-dimensional canonical field series. Direct TDR or PLT extraction and future two-dimensional mesh data remain responsibilities of the Sentaurus exporter and canonical schema, not the UI.
+The workbench reads only verified `ExperimentSpec`, `CanonicalResult`, `ValidationReport`, and `BundleManifest` artifacts. DEVSIM and Sentaurus therefore share the same interface after their adapters normalize native results. It discovers scalar metrics, curves, profile families, heatmaps, and complex responses from canonical axes, shape, unit, and centering. Direct TDR or PLT extraction remains a responsibility of the Sentaurus exporter and canonical schema, not the UI.
 
 Every simulator adapter implements the same conceptual boundary:
 
@@ -237,10 +238,11 @@ git diff --check
 
 Live Bedrock and licensed Sentaurus tests are opt-in. Ordinary local verification does not require either service.
 
-The synthetic scientific suite exercises natural researcher prompts across two, three,
-and four-region structures, equilibrium and DC studies, local and web evidence,
-real DEVSIM execution, immutable provenance, deterministic validation, and graphable
-Results Workbench fields:
+The synthetic scientific suite exercises complete, incomplete, ambiguous, contradictory,
+and unsupported natural researcher prompts. Real DEVSIM coverage spans mixed silicon and oxide
+compositions, analytic profiles, equilibrium, exact and adaptive DC, terminal charge,
+quasi-static capacitance, immutable provenance, deterministic validation, and graphable
+canonical datasets:
 
 ```bash
 .venv/bin/pytest -q \
@@ -254,7 +256,10 @@ same desktop agent runtime:
 
 ```bash
 set -a && source .env && set +a
-.venv/bin/pytest -q tests/e2e/test_live_unified_backend.py --run-live-bedrock
+.venv/bin/pytest -q \
+  tests/e2e/test_live_unified_backend.py \
+  tests/e2e/test_live_expanded_devsim.py \
+  --run-live-bedrock
 ```
 
 ## Project documents

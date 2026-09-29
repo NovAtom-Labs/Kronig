@@ -44,6 +44,21 @@ questions:
     backend: portable
     version: "0.1"
     required_source_ids: [novatom-curated-tcad-foundation-0.1]
+  - id: devsim-quasistatic-capacitance-boundary
+    query: When may contact charge be differentiated into quasi-static capacitance per unit area?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
+  - id: devsim-work-function-refusal
+    query: May an aluminum work function contact be silently replaced by an ohmic contact?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
+  - id: devsim-failed-operating-point
+    query: What evidence must remain when an exact requested voltage does not converge?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
   - id: sentaurus-boundary
     query: Generate a Sentaurus contact block for the pilot version.
     backend: sentaurus

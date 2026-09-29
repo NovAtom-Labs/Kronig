@@ -67,16 +67,17 @@ The current one-dimensional compiler reports terminal current density in `A/m^2`
 ## Build and query local knowledge
 
 ```bash
-.venv/bin/tcad-agent knowledge build \
-  --manifest knowledge-sources/manifests/sources.yaml \
-  --root /absolute/path/to/approved/knowledge
+.venv/bin/python scripts/rebuild_knowledge_index.py --project-root .
 
 .venv/bin/tcad-agent knowledge search "ohmic drift diffusion contact" \
   --backend devsim \
   --version 2.9.1
 ```
 
-The index is immutable. Delete an obsolete generated index only when intentionally rebuilding from a newly reviewed manifest. The index directory is ignored by Git.
+The rebuild script resolves authorized product guides from this repository and the separately
+pinned public DEVSIM source and documentation checkouts from the parent NovAtom Labs directory.
+It builds a staged immutable index and atomically replaces the generated local index only after
+ingestion succeeds. The index directory is ignored by Git and is packaged separately for releases.
 
 ## Failure handling
 

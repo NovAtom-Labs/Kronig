@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from tcad_agent.evaluations.scientific_cases import (
     ScientificEvaluationCase,
     ScientificEvaluationSuite,
+    ScientificIntakeSuite,
     score_scientific_case,
 )
 from tcad_agent.ide.results import WorkspaceResultReader
@@ -17,6 +18,7 @@ from tcad_agent.knowledge.models import (
 
 ROOT = Path(__file__).parents[3]
 SUITE = ROOT / "evaluations" / "scientific" / "cases.yaml"
+INTAKE_SUITE = ROOT / "evaluations" / "scientific" / "intake_cases.yaml"
 
 
 def test_scientific_suite_contains_varied_researcher_prompts_and_viewer_contracts() -> None:
@@ -89,6 +91,28 @@ cases:
 
     with pytest.raises(ValidationError, match="unique"):
         ScientificEvaluationSuite.from_file(path)
+
+
+def test_intake_suite_covers_complete_ambiguous_unsupported_and_varied_requests() -> None:
+    suite = ScientificIntakeSuite.from_file(INTAKE_SUITE)
+
+    assert len(suite.cases) >= 5
+    assert {case.expected_status for case in suite.cases} >= {
+        "ready",
+        "clarification",
+        "blocked",
+    }
+    assert any(case.expected_study == "dc_points" for case in suite.cases)
+    assert any(case.expected_study == "dc" for case in suite.cases)
+    assert any("unit" in case.required_concepts for case in suite.cases)
+    assert any("unsupported_physics" in case.required_concepts for case in suite.cases)
+    for case in suite.cases:
+        prompt = suite.read_prompt(case.id)
+        assert len(prompt.split()) >= 20
+        assert "ExperimentSpec" not in prompt
+        assert "canonical" not in prompt.lower()
+        assert "adapter" not in prompt.lower()
+        assert case.maximum_questions <= 7
 
 
 def test_scientific_score_requires_evidence_validation_and_viewer_ready_fields(

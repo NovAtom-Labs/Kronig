@@ -73,3 +73,9 @@ def test_system_policy_distinguishes_researcher_inputs_from_expert_defaults() ->
     assert "researcher-owned" in policy
     assert "capability catalog" in policy.lower()
     assert "Do not ask for expert" in policy
+    assert "ambiguous units" in policy.lower()
+    assert "absolute capacitance" in policy.lower()
+    assert "reuse prior parameters" in policy.lower()
+    assert "failed operating points" in policy.lower()
+    assert "simulator or backend explicitly named" in policy.lower()
+    assert "interface coupling" in policy.lower()

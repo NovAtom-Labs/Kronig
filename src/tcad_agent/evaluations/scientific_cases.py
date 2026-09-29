@@ -92,6 +92,58 @@ class ScientificEvaluationScore(StrictModel):
     checks: dict[str, bool]
 
 
+class ScientificIntakeCase(StrictModel):
+    """Natural researcher request with externally observable preparation criteria."""
+
+    id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9-]*$")
+    title: str = Field(min_length=1)
+    prompt_file: str = Field(min_length=1)
+    expected_status: Literal["ready", "clarification", "blocked"]
+    expected_study: Literal[
+        "equilibrium", "dc", "dc_points", "ac", "frequency", "transient"
+    ] | None = None
+    required_concepts: tuple[str, ...] = Field(min_length=1)
+    forbidden_inventions: tuple[str, ...] = ()
+    maximum_questions: int = Field(default=7, ge=1, le=7)
+
+
+class ScientificIntakeSuite(StrictModel):
+    schema_version: Literal["1.0"]
+    purpose: str = Field(min_length=1)
+    cases: tuple[ScientificIntakeCase, ...]
+
+    _source_path: Path | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def require_unique_case_ids(self) -> Self:
+        identifiers = [case.id for case in self.cases]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("scientific intake case IDs must be unique")
+        return self
+
+    @classmethod
+    def from_file(cls, path: Path) -> Self:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        suite = cls.model_validate(payload)
+        object.__setattr__(suite, "_source_path", path.resolve())
+        return suite
+
+    def require_case(self, case_id: str) -> ScientificIntakeCase:
+        for case in self.cases:
+            if case.id == case_id:
+                return case
+        raise KeyError(f"unknown scientific intake case: {case_id}")
+
+    def read_prompt(self, case_id: str) -> str:
+        if self._source_path is None:
+            raise RuntimeError("scientific intake suite was not loaded from a file")
+        relative = self.require_case(case_id).prompt_file
+        target = (self._source_path.parent / relative).resolve()
+        if not target.is_file():
+            raise FileNotFoundError(f"scientific intake prompt not found: {target}")
+        return target.read_text(encoding="utf-8")
+
+
 def _matches_domain(url: str, domains: tuple[str, ...]) -> bool:
     host = (urlparse(url).hostname or "").lower().rstrip(".")
     return any(

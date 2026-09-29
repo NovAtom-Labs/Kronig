@@ -37,6 +37,7 @@ class OpenHandsPreparationModel:
 
     _expert_prefixes = (
         "expert.",
+        "interfaces.",
         "physics.",
         "mesh.",
         "numerics.",
@@ -54,6 +55,7 @@ class OpenHandsPreparationModel:
         "diagnostic",
         "field_relation",
         "field-relation",
+        "interface",
         "mesh",
         "model",
         "numerics",
@@ -158,6 +160,11 @@ class OpenHandsPreparationModel:
                                     text=(
                                         "The decision failed deterministic validation. "
                                         "Return only corrected JSON matching decision_schema. "
+                                        "Reapply authority rules: facts explicitly stated by "
+                                        "the researcher, including a named simulator, use "
+                                        "researcher origin; reviewed interface and numerical "
+                                        "choices may use evidence origin; scientific fields "
+                                        "never use platform_default. "
                                         "Validation errors: "
                                         + json.dumps(details, sort_keys=True, default=str)
                                     )
@@ -246,8 +253,20 @@ class OpenHandsPreparationModel:
             "concentrations, contacts, applied conditions, study bounds, fixed parameters, "
             "or deliverables. If one of those is essential and absent, return clarification. "
             "Use the capability catalog as the authoritative bounded backend scope. "
+            "A simulator or backend explicitly named by the researcher is researcher-origin "
+            "intent, not an evidence-origin expert choice. "
             "Ask about missing required researcher-owned inputs. Do not ask for expert "
             "or platform-owned inputs when reviewed evidence or defaults authorize them. "
+            "Clarify ambiguous units, an unspecified driven contact or sweep schedule, "
+            "absolute capacitance without device area, AC response without frequency, "
+            "and requests to reuse prior parameters when those parameters are absent from "
+            "the current message and repository. Never reinterpret a dimension because a "
+            "different unit seems more typical. Preserve exact requested operating-point "
+            "order and require failed operating points to remain visible. "
+            "A material adjacency does not require the researcher to choose simulator "
+            "interface equations. When the capability catalog and reviewed evidence support "
+            "the required interface coupling, record it as an evidence-origin expert choice, "
+            "never as a platform default. "
             "Ask only questions that materially affect correctness or feasibility, normally "
             "three to five and never more than seven. Each question must state what decision "
             "it controls. Do not ask questions when the request is already executable. "

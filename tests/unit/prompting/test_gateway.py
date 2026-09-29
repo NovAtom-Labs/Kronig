@@ -10,7 +10,7 @@ from tcad_agent.prompting.gateway import (
     ModelResponseError,
     OpenHandsPreparationModel,
 )
-from tcad_agent.prompting.models import WorkspaceContext
+from tcad_agent.prompting.models import EvidenceExcerpt, WorkspaceContext
 
 
 class ScriptedLLM:
@@ -163,3 +163,53 @@ def test_gateway_allows_platform_to_choose_an_output_file_format() -> None:
 
     assert decision.intent is not None
     assert decision.intent.fields[0].path == "outputs.file_format"
+
+
+def test_gateway_allows_reviewed_evidence_to_choose_interface_coupling() -> None:
+    response = json.dumps(
+        {
+            "status": "ready",
+            "summary": "The material adjacency is complete.",
+            "questions": [],
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Run the requested layered simulation.",
+                "fields": [
+                    {
+                        "path": "interfaces.oxide_silicon.coupling",
+                        "value": "continuity",
+                        "origin": "evidence",
+                        "rationale": "The reviewed backend guide supports this coupling.",
+                        "evidence_refs": ["guide:interfaces"],
+                    }
+                ],
+                "exclusions": [],
+                "deliverables": [],
+                "validation_expectations": [],
+                "unresolved_noncritical": [],
+                "unresolved_critical": [],
+            },
+            "unresolved_critical": [],
+            "warnings": [],
+            "runtime_research_needed": False,
+            "runtime_research_reason": None,
+        }
+    )
+    evidence = EvidenceExcerpt(
+        id="guide:interfaces",
+        title="Reviewed guide",
+        url="internal://guide",
+        version="1",
+        content_hash="a" * 64,
+        reviewed=True,
+        content="Continuity coupling is supported.",
+    )
+
+    decision = OpenHandsPreparationModel(ScriptedLLM([response])).prepare(
+        original_prompt="Model the stated oxide and silicon layers.",
+        answers=(),
+        workspace=workspace(),
+        evidence=(evidence,),
+    )
+
+    assert decision.status == "ready"

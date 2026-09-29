@@ -1,0 +1,55 @@
+schema_version: "1.0"
+purpose: Grade natural researcher intake without teaching the model product schema or backend internals
+cases:
+  - id: exact-bidirectional-junction
+    title: Existing silicon stack under exact forward and reverse conditions
+    prompt_file: prompts/exact-bidirectional-junction.md
+    expected_status: ready
+    expected_study: dc_points
+    required_concepts: [exact_bias_points, preserve_requested_order, spatial_fields, failed_points_visible]
+    forbidden_inventions: [new_geometry, changed_doping, changed_voltage]
+    maximum_questions: 7
+
+  - id: ambiguous-oxide-thickness
+    title: Ambiguous oxide thickness and absolute capacitance request
+    prompt_file: prompts/ambiguous-oxide-thickness.md
+    expected_status: clarification
+    expected_study: dc
+    required_concepts: [unit, thickness, capacitance_normalization]
+    forbidden_inventions: [silently_assume_nanometers, silently_assume_area]
+    maximum_questions: 4
+
+  - id: unsupported-contact-and-physics
+    title: Explicit physics outside the reviewed DEVSIM implementation
+    prompt_file: prompts/unsupported-contact-and-physics.md
+    expected_status: blocked
+    expected_study: equilibrium
+    required_concepts: [unsupported_physics, metal_work_function, no_silent_substitution]
+    forbidden_inventions: [replace_fermi_with_boltzmann, omit_auger, treat_schottky_as_ohmic]
+    maximum_questions: 7
+
+  - id: generic-layered-voltage-study
+    title: Unfamiliar layer names with a supported voltage study
+    prompt_file: prompts/generic-layered-voltage-study.md
+    expected_status: ready
+    expected_study: dc
+    required_concepts: [ordered_regions, linear_profile, adaptive_sweep, canonical_datasets]
+    forbidden_inventions: [named_device_mode, additional_material]
+    maximum_questions: 7
+
+  - id: incomplete-field-investigation
+    title: Incomplete request that needs researcher-owned inputs
+    prompt_file: prompts/incomplete-field-investigation.md
+    expected_status: clarification
+    required_concepts: [geometry, materials, contacts, applied_conditions, requested_outputs]
+    forbidden_inventions: [typical_geometry, typical_doping, typical_bias]
+    maximum_questions: 7
+
+  - id: supported-oxide-charge-sweep
+    title: Explicit silicon oxide stack with normalized capacitance
+    prompt_file: prompts/supported-oxide-charge-sweep.md
+    expected_status: ready
+    expected_study: dc
+    required_concepts: [silicon_dioxide, ideal_gate, terminal_charge, quasistatic_capacitance]
+    forbidden_inventions: [metal_work_function, absolute_area]
+    maximum_questions: 7

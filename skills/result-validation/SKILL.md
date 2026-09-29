@@ -40,7 +40,9 @@ Before comparing DEVSIM and Sentaurus, align geometry, material parameters, stat
 
 ## Status rules
 
-Call `validate_result`. The overall state is the worst mandatory check. A failed mandatory check forces a failed bundle even if the simulator returns zero. Warnings remain visible and must be explained. A waiver requires a versioned validation configuration and named human approval.
+`execute_experiment` already runs deterministic validation and seals `validation/report.json` into the immutable bundle. Read that report and the canonical result; do not pass the bundle envelope to `validate_result`, and do not rerun the experiment to validate it. Call `validate_result` only when you already hold an actual standalone `CanonicalResult` object that has not passed through `execute_experiment`.
+
+The overall state is the worst mandatory check. A failed mandatory check forces a failed bundle even if the simulator returns zero. Preserve failed bundles as evidence while reporting the successful attempt separately. Warnings remain visible and must be explained. A waiver requires a versioned validation configuration and named human approval.
 
 ## Interpretation boundary
 

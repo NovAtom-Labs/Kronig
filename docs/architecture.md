@@ -136,7 +136,7 @@ The bundle `report.md` is a compact evidence summary generated for every run. A 
 
 The desktop workspace treats `results/canonical.json` as the entry point for a scientific result. A workspace-scoped reader derives the bundle root, loads `experiment.json`, `validation/report.json`, and `manifest.json`, validates all four typed contracts, and verifies manifest byte counts and SHA-256 values before returning a result view.
 
-The center-pane workbench consumes only that verified view. It derives metrics from canonical fields and bias points, displays configured structure from `ExperimentSpec`, and presents checks from `ValidationReport`. It never extracts numeric claims from logs, reports, chat text, or native simulator files.
+The center-pane workbench consumes only that verified view. It derives metrics from canonical datasets and operating points, displays configured structure from `ExperimentSpec`, and presents checks from `ValidationReport`. It never extracts numeric claims from logs, reports, chat text, or native simulator files.
 
 ```text
 DEVSIM native result  -> DEVSIM adapter  -> CanonicalResult -> Results Workbench
@@ -145,7 +145,7 @@ Sentaurus export      -> Sentaurus adapter -> CanonicalResult -> Results Workben
 
 The browser recognizes only repository-relative paths ending in `results/canonical.json`. A completed foreground agent run may auto-open a result only when that exact path is present as a created, modified, or renamed artifact in the run's immutable change manifest. Other JSON files remain generic repository files.
 
-The current canonical field contract and renderer are one-dimensional. Direct binary TDR or PLT parsing stays on the licensed Sentaurus side. Two-dimensional visualization requires a future canonical mesh contract and is not inferred from one-dimensional samples.
+The renderer discovers views from canonical axis kind, shape, unit, centering, and complex values. It supports scalar metrics, one-dimensional curves, operating-point profile families, generic rank-two heatmaps, complex magnitude and phase, failed-point gaps, and CSV export without naming a device. Direct binary TDR or PLT parsing stays on the licensed Sentaurus side. Spatial two-dimensional visualization requires a future canonical mesh contract and is not inferred from one-dimensional samples.
 
 ## Agent boundary
 
@@ -239,18 +239,24 @@ Proprietary Sentaurus documents must remain on the licensed machine or another a
 
 ## Scientific evaluation contract
 
-`evaluations/scientific/cases.yaml` defines natural-language research cases without
+`evaluations/scientific/cases.yaml` defines executable natural-language research cases without
 encoding simulator commands in the prompts. The scorer checks backend, generic region
 composition, study type, local and public evidence, required canonical fields,
 validation checks, graphability, and immutable provenance. Integration tests execute
 the same simulator-neutral specs through real DEVSIM and reopen the bundles through the
 same verified reader used by the Results Workbench.
 
-Opt-in live Bedrock evaluations check two distinct behaviors: a complete researcher
-prompt must become a schema-valid supported `ExperimentSpec`, while a prompt missing
-essential doping concentrations must produce actionable clarification questions rather
-than guessed values. The live repository-agent evaluation then exercises file editing,
-terminal validation, approvals, delegated review, and deterministic grading end to end.
+`evaluations/scientific/intake_cases.yaml` separately grades complete, incomplete, ambiguous,
+contradictory, and unsupported researcher requests. It covers exact bidirectional voltage
+points, a dimensionally suspicious oxide thickness, a supported normalized C-V request,
+advanced contact and physics refusal, and unfamiliar layer names. These cases are evaluation
+data only. Product behavior remains driven by the capability catalog and portable concepts.
+
+Opt-in live Bedrock evaluations require complete supported prompts to compile without
+ceremonial questions, ambiguous or incomplete prompts to request only consequential
+researcher-owned inputs, and unsupported contact or physics requirements to be blocked without
+substitution. The live repository-agent evaluation then exercises file editing, terminal
+validation, approvals, real DEVSIM execution, bundle verification, and deterministic grading.
 
 ## Adding scope without hardcoding devices
 
@@ -267,4 +273,10 @@ Do not add named-device branches. If a new structure is expressible with existin
 
 ## Current boundary
 
-The foundation is intentionally one-dimensional and silicon-first. It is suitable for validating the architecture and automating small exploratory drift-diffusion studies. It is not a calibrated process or device-design authority. Two-dimensional geometry, arbitrary profiles, heteromaterials, advanced transport, process simulation, optical coupling, thermal coupling, and pilot access control require later scoped work.
+The foundation is intentionally one-dimensional and silicon-first, with reviewed silicon-dioxide
+electrostatics. It supports generic analytic doping profiles, equilibrium and bounded DC,
+adaptive recovery, terminal charge, and quasi-static capacitance per unit area. It is suitable
+for exploratory drift-diffusion studies, not calibrated fabrication prediction. Two-dimensional
+geometry, heteromaterials beyond the reviewed set, metal work-function and Schottky boundaries,
+advanced carrier statistics and transport, AC and transient runtime paths, process simulation,
+optical coupling, thermal coupling, and pilot access control require later reviewed work.

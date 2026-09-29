@@ -32,7 +32,9 @@ Before changing an adapter mapping, search the reviewed `DEVSIM Manual`, the pin
 
 ## Compilation workflow
 
-Require a validated specification, a supported capability decision, and execution approval. Call `compile_experiment` with backend `devsim`. Preserve generated files, compiler version, input digest, runtime digest, and the exact simulator version. Execute only the returned entrypoint with an explicit budget.
+Require a validated specification, a supported capability decision, and execution approval. Call `prepare_experiment` with backend `devsim`, then pass the returned `prepared` object and its exact `plan_digest` to `execute_experiment` unchanged. The execution tool owns compilation, the bounded simulator process, canonical normalization, validation, and immutable bundle creation. Do not construct or modify the prepared object, do not run generated entrypoints directly, and do not execute the same approved plan again merely to inspect or validate it.
+
+`execute_experiment` returns a bundle envelope containing its run ID, final state, and root. It is not a `CanonicalResult`. Read `results/canonical.json` when numeric inspection is needed and `validation/report.json` for the already completed deterministic validation. Preserve generated files, compiler version, input digest, runtime digest, and the exact simulator version.
 
 ## Units and signs
 

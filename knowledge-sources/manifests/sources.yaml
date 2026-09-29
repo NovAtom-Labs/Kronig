@@ -10,6 +10,17 @@ sources:
     version: "0.1"
     reviewed: false
     local_path: knowledge-sources/curated
+  - id: novatom-devsim-1d-engineering-guide-0.2
+    title: Agent Kronig simulator-neutral one-dimensional DEVSIM engineering guide
+    url: internal://knowledge/novatom-devsim-1d-engineering-guide-0.2
+    license: NovAtom internal-use
+    access: restricted
+    trust: secondary
+    backend: devsim
+    version: "0.2"
+    compatible_versions: ["2.9.1"]
+    reviewed: false
+    local_path: knowledge-sources/curated/devsim-one-dimensional-studies.md
   - id: devsim-source-2.9.1
     title: DEVSIM source and examples
     url: https://github.com/devsim/devsim/tree/43b41ca845184c47e22b72d144db7e7db8509377
@@ -31,6 +42,15 @@ sources:
     compatible_versions: ["2.9.1"]
     reviewed: true
     local_path: devsim/documentation/pydoc
+  - id: devsim-upstream-release-2.11.0-rc5
+    title: DEVSIM upstream release 2.11.0.rc5
+    url: https://github.com/devsim/devsim/releases/tag/v2.11.0.rc5
+    license: Apache-2.0
+    access: public
+    trust: primary
+    backend: devsim
+    version: "2.11.0.rc5"
+    reviewed: false
   - id: sentaurus-licensed-documentation
     title: Synopsys Sentaurus Device documentation
     url: licensed-machine-only

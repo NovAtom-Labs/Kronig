@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from uuid import UUID
@@ -9,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from tcad_agent.agent.runtime import OpenHandsRuntimeFactory, llm_from_environment
 from tcad_agent.agent.supervisor import AgentSupervisor
+from tcad_agent.capabilities.descriptors import CapabilityCatalog
+from tcad_agent.capabilities.models import CapabilityManifest
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
 from tcad_agent.ide.models import PermissionCategory, RunState, is_run_grantable
@@ -52,6 +55,9 @@ def preparation(llm) -> PromptPreparationService:
         ),
         compiler=PromptCompiler(),
         capability_hashes=capability_hashes(PROJECT_ROOT / "src/tcad_agent"),
+        capability_catalog=CapabilityCatalog.from_manifest(
+            CapabilityManifest.from_backend("devsim")
+        ),
     )
 
 
@@ -205,8 +211,14 @@ def test_live_compiled_request_runs_devsim_and_opens_graphable_results(
     preparation_record = store.get_prompt_preparation(run_id)
     assert preparation_record.compiled_request is not None
     results = tuple(repository.glob("runs/*/results/canonical.json"))
-    assert len(results) == 1
-    relative = results[0].relative_to(repository).as_posix()
+    completed = tuple(
+        result
+        for result in results
+        if json.loads((result.parent.parent / "manifest.json").read_text())["state"]
+        == "completed"
+    )
+    assert len(completed) == 1
+    relative = completed[0].relative_to(repository).as_posix()
     response = web.get(
         f"/api/workspaces/{workspace['id']}/results", params={"path": relative}
     )

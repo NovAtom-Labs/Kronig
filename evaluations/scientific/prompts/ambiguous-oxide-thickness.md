@@ -1,0 +1,1 @@
+Build a one-dimensional metal, SiO2, silicon structure at 300 K. The SiO2 thickness is 10 m, the silicon is 1 µm thick with uniform boron at 10^16 cm^-3, and the metal work function is 4.1 eV. Sweep the control contact from -5 V to +5 V and give me the absolute C-V curve. Please check anything in my request that looks dimensionally unusual before running it.

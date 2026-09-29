@@ -1,0 +1,1 @@
+Investigate where the strongest electric field occurs in my layered semiconductor sample and how it changes when I bias it. I want enough evidence to decide whether the field peak is physical or a numerical artifact, but I have not described the layer dimensions, materials, doping, contacts, voltage range, or which terminal is driven yet.
