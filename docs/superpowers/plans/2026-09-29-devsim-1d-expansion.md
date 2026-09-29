@@ -10,6 +10,23 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-29-devsim-1d-expansion-design.md`
 
+## Execution outcome
+
+Implemented and verified in this branch: typed evidence-gated capabilities; generic silicon and
+silicon-dioxide region stacks; constant, linear, Gaussian, error-function, and tabulated profiles;
+reviewed ohmic and ideal-gate contacts; equilibrium, exact-point, fixed-range, adaptive, and
+bidirectional DC execution; terminal current and charge; quasi-static capacitance density;
+bias-indexed spatial observables with failed-point masks; deterministic validation; a generic
+interactive Results Workbench; curated local knowledge; natural-language evaluation cases; and
+live Bedrock intake and agent workflows.
+
+The portable contract also defines AC, frequency, transient, temperature, and parameter studies.
+They remain deliberately disabled in the DEVSIM capability manifest because their runtime
+extraction and reference benchmarks are not complete. Metal work-function and Schottky contacts,
+Fermi statistics, Auger recombination, band-gap narrowing, fixed interface charge, and band or
+Fermi-level extraction are also refused by the reviewed DEVSIM adapter. These are recorded as
+scientific gates, not silently approximated features.
+
 ## Global Constraints
 
 - `ExperimentSpec` is the simulator-neutral product contract.
