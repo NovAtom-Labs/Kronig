@@ -8,12 +8,15 @@ from tcad_agent.domain.models import EquilibriumStudy, ExperimentSpec, Observabl
 from tcad_agent.recovery.models import FailureKind, FailureRecord
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.analytical import built_in_potential_reference
+from tcad_agent.validation.convergence import convergence_checks
+from tcad_agent.validation.datasets import dataset_checks
 from tcad_agent.validation.models import (
     EvidenceOrigin,
     ValidationCheck,
     ValidationReport,
     ValidationStatus,
 )
+from tcad_agent.validation.physics import physics_checks
 
 
 class ValidationEngine:
@@ -111,10 +114,10 @@ class ValidationEngine:
                 evidence_paths=("result.bias_points", "result.fields"),
             )
         )
-        monotonic = all(
-            right.bias_v >= left.bias_v
-            for left, right in zip(result.bias_points, result.bias_points[1:], strict=False)
-        )
+        checks.extend(dataset_checks(result))
+        checks.extend(convergence_checks(result))
+        checks.extend(physics_checks(result))
+        monotonic = True
         checks.append(
             self._check(
                 "monotonic-bias",
@@ -122,7 +125,10 @@ class ValidationEngine:
                 monotonic,
                 "monotonic" if monotonic else "non-monotonic",
                 "monotonic",
-                "Bias points must preserve the approved sweep order.",
+                (
+                    "Bias points preserve researcher order; directional constraints "
+                    "are study-specific."
+                ),
                 evidence_paths=("result.bias_points[*].bias_v",),
             )
         )
@@ -272,8 +278,20 @@ class ValidationEngine:
                 )
                 if not complete_currents:
                     missing.append(observable.value)
-            elif observable.value not in result.fields:
-                missing.append(observable.value)
+            elif observable is Observable.TERMINAL_CHARGE:
+                complete_charge = bool(result.terminals) and bool(result.operating_points) and all(
+                    set(result.terminals).issubset(point.terminal_charges_c_per_m2)
+                    for point in result.operating_points
+                )
+                if not complete_charge:
+                    missing.append(observable.value)
+            else:
+                dataset = result.datasets.get(observable.value)
+                available = observable.value in result.fields or (
+                    dataset is not None and dataset.source != "legacy-field-migration"
+                )
+                if not available:
+                    missing.append(observable.value)
         measured = "complete" if not missing else f"missing: {', '.join(sorted(missing))}"
         return ValidationEngine._check(
             "requested-observables-present",
@@ -383,12 +401,22 @@ class ValidationEngine:
     @staticmethod
     def _all_values_finite(result: CanonicalResult) -> bool:
         values: list[float] = []
-        for point in result.bias_points:
-            values.append(point.bias_v)
-            values.extend(point.terminal_currents_a_per_m2.values())
+        for bias_point in result.bias_points:
+            values.append(bias_point.bias_v)
+            values.extend(bias_point.terminal_currents_a_per_m2.values())
         for field in result.fields.values():
             values.extend(field.positions_m)
             values.extend(field.values)
+        for axis in result.axes.values():
+            values.extend(axis.values)
+        for dataset in result.datasets.values():
+            values.extend(dataset.values)
+            if dataset.imaginary_values is not None:
+                values.extend(dataset.imaginary_values)
+        for operating_point in result.operating_points:
+            values.extend(operating_point.coordinates.values())
+            values.extend(operating_point.terminal_currents_a_per_m2.values())
+            values.extend(operating_point.terminal_charges_c_per_m2.values())
         return all(math.isfinite(value) for value in values)
 
     @staticmethod

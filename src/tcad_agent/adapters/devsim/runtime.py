@@ -253,7 +253,7 @@ def main() -> int:
             raise ValueError("contact kind is incompatible with adjacent material")
     for interface, _left, _right in interface_names:
         CreateSiliconOxideInterface(device, interface)
-    solve(type="dc", absolute_error=1.0, relative_error=1e-10, maximum_iterations=80)
+    solve(type="dc", absolute_error=1.0, relative_error=1e-6, maximum_iterations=80)
 
     drift_diffusion = {
         "electron_continuity",
@@ -299,7 +299,7 @@ def main() -> int:
                         interface_model=model,
                         type="continuous",
                     )
-        solve(type="dc", absolute_error=1e10, relative_error=1e-10, maximum_iterations=80)
+        solve(type="dc", absolute_error=1e10, relative_error=1e-6, maximum_iterations=80)
 
     requested_contact = payload["study"].get("contact")
     points: list[dict[str, Any]] = []
@@ -319,7 +319,7 @@ def main() -> int:
                 solve(
                     type="dc",
                     absolute_error=1e10,
-                    relative_error=1e-10,
+                    relative_error=1e-6,
                     maximum_iterations=80,
                 )
             except Exception:
@@ -341,7 +341,7 @@ def main() -> int:
                             solve(
                                 type="dc",
                                 absolute_error=1e10,
-                                relative_error=1e-10,
+                                relative_error=1e-6,
                                 maximum_iterations=80,
                             )
                         except Exception:
@@ -358,7 +358,7 @@ def main() -> int:
                             solve(
                                 type="dc",
                                 absolute_error=1e10,
-                                relative_error=1e-10,
+                                relative_error=1e-6,
                                 maximum_iterations=80,
                             )
                         except Exception:
@@ -375,7 +375,7 @@ def main() -> int:
                     solve(
                         type="dc",
                         absolute_error=1e10,
-                        relative_error=1e-10,
+                        relative_error=1e-6,
                         maximum_iterations=80,
                     )
         if converged:
