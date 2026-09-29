@@ -5,18 +5,32 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from tcad_agent.domain.interfaces import Interface1D
+from tcad_agent.domain.profiles import ConstantProfile, Profile1D, ProfileSpecies
+from tcad_agent.domain.studies import DCStudy, EquilibriumStudy, Study1D
 from tcad_agent.domain.units import QuantityValue
+
+__all__ = [
+    "ConstantProfile",
+    "Contact",
+    "ContactKind",
+    "ContactLocation",
+    "DCStudy",
+    "Equation",
+    "EquilibriumStudy",
+    "ExperimentSpec",
+    "Observable",
+    "PhysicsSelection",
+    "ProfileSpecies",
+    "Region1D",
+    "StrictModel",
+]
 
 
 class StrictModel(BaseModel):
     """Immutable model that rejects unrecognized researcher intent."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
-
-
-class ProfileSpecies(StrEnum):
-    DONOR = "donor"
-    ACCEPTOR = "acceptor"
 
 
 class ContactLocation(StrEnum):
@@ -77,21 +91,6 @@ class Region1D(StrictModel):
         return self
 
 
-class ConstantProfile(StrictModel):
-    kind: Literal["constant"]
-    region: str
-    species: ProfileSpecies
-    value: QuantityValue
-
-    @field_validator("value")
-    @classmethod
-    def require_concentration(cls, value: QuantityValue) -> QuantityValue:
-        value.require("1 / m**3", "inverse-volume concentration")
-        if value.to("1 / m**3") < 0:
-            raise ValueError("concentration must be nonnegative")
-        return value
-
-
 class Contact(StrictModel):
     id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_-]*$")
     location: ContactLocation
@@ -138,45 +137,16 @@ class PhysicsSelection(StrictModel):
         return self
 
 
-class EquilibriumStudy(StrictModel):
-    kind: Literal["equilibrium"]
-
-
-class DCStudy(StrictModel):
-    kind: Literal["dc"]
-    contact: str
-    start: QuantityValue
-    stop: QuantityValue
-    step: QuantityValue
-
-    @field_validator("start", "stop", "step")
-    @classmethod
-    def require_voltage(cls, value: QuantityValue) -> QuantityValue:
-        return value.require("V", "voltage")
-
-    @model_validator(mode="after")
-    def require_bounded_sweep(self) -> Self:
-        start = self.start.to("V")
-        stop = self.stop.to("V")
-        step = self.step.to("V")
-        if step <= 0:
-            raise ValueError("DC step must be positive")
-        if stop < start:
-            raise ValueError("DC stop must be greater than or equal to start")
-        if ((stop - start) / step) + 1 > 10_000:
-            raise ValueError("DC sweep exceeds 10000 points")
-        return self
-
-
 class ExperimentSpec(StrictModel):
     schema_version: Literal["1.0"]
     name: str = Field(min_length=1)
     dimension: Literal[1]
     regions: tuple[Region1D, ...]
-    profiles: tuple[ConstantProfile, ...]
+    interfaces: tuple[Interface1D, ...] = ()
+    profiles: tuple[Profile1D, ...]
     contacts: tuple[Contact, ...]
     physics: PhysicsSelection
-    study: EquilibriumStudy | DCStudy
+    study: Study1D
     observables: tuple[Observable, ...]
     metadata: dict[str, str] = Field(default_factory=dict)
 
@@ -190,6 +160,28 @@ class ExperimentSpec(StrictModel):
         for left, right in zip(self.regions, self.regions[1:], strict=False):
             if abs(left.x1.to("m") - right.x0.to("m")) > 1e-15:
                 raise ValueError("regions must be ordered and contiguous")
+        interface_ids = [interface.id for interface in self.interfaces]
+        if len(interface_ids) != len(set(interface_ids)):
+            raise ValueError("interface IDs must be unique")
+        expected_boundaries = {
+            (left.id, right.id)
+            for left, right in zip(self.regions, self.regions[1:], strict=False)
+            if left.material != right.material
+        }
+        actual_boundaries = {
+            (interface.left_region, interface.right_region)
+            for interface in self.interfaces
+        }
+        all_adjacent = {
+            (left.id, right.id)
+            for left, right in zip(self.regions, self.regions[1:], strict=False)
+        }
+        invalid_boundaries = actual_boundaries - all_adjacent
+        if invalid_boundaries:
+            raise ValueError("interfaces must reference adjacent ordered regions")
+        missing_boundaries = expected_boundaries - actual_boundaries
+        if missing_boundaries:
+            raise ValueError("every material boundary requires an interface record")
         unknown_regions = {profile.region for profile in self.profiles} - set(region_ids)
         if unknown_regions:
             raise ValueError(f"profiles reference unknown regions: {sorted(unknown_regions)}")
@@ -199,8 +191,9 @@ class ExperimentSpec(StrictModel):
         locations = [contact.location for contact in self.contacts]
         if len(locations) != len(set(locations)):
             raise ValueError("contact locations must be unique")
-        if isinstance(self.study, DCStudy) and self.study.contact not in contact_ids:
-            raise ValueError("DC study references an unknown contact")
+        study_contact = getattr(self.study, "contact", None)
+        if study_contact is not None and study_contact not in contact_ids:
+            raise ValueError("study references an unknown contact")
         if not self.observables:
             raise ValueError("at least one observable is required")
         return self
