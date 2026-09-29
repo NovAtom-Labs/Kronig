@@ -546,6 +546,14 @@ class DevsimAdapter:
                 shape=(len(values),),
                 centering=DatasetCentering(field.get("centering", "node")),
                 values=values,
+                metadata=(
+                    {
+                        "discretization": "continuum edge-centered diagnostic",
+                        "reference_current": "native solved carrier current",
+                    }
+                    if name == "current_decomposition_residual"
+                    else {}
+                ),
             )
         study_axis = data.get("study_axis")
         if study_axis is None:

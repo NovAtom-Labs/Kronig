@@ -346,6 +346,28 @@ class CapabilityService:
             tuple(str(observable) for observable in spec.observables),
             manifest.observables,
         )
+        decomposition_outputs = {
+            "electron_drift_current_density",
+            "electron_diffusion_current_density",
+            "hole_drift_current_density",
+            "hole_diffusion_current_density",
+            "current_decomposition_residual",
+        }
+        if decomposition_outputs.intersection(
+            str(observable) for observable in spec.observables
+        ) and "fermi" in spec.physics.models:
+            issues.append(
+                CapabilityIssue(
+                    path="observables",
+                    code="incompatible_observable_model",
+                    message=(
+                        "drift-diffusion decomposition is currently benchmarked with "
+                        "Boltzmann carrier statistics"
+                    ),
+                    requested="current_decomposition:fermi",
+                    supported=("boltzmann",),
+                )
+            )
         self._check_limit(
             issues,
             "regions",

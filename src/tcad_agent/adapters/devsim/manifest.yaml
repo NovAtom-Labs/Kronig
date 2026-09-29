@@ -30,6 +30,11 @@ observables:
   - hole_quasi_fermi_level
   - electron_current_density
   - hole_current_density
+  - electron_drift_current_density
+  - electron_diffusion_current_density
+  - hole_drift_current_density
+  - hole_diffusion_current_density
+  - current_decomposition_residual
   - electron_mobility
   - hole_mobility
   - recombination_rate

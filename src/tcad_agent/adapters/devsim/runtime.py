@@ -1727,6 +1727,45 @@ def main() -> int:
                         hole_current_expression,
                         variable,
                     )
+            if not fermi_statistics:
+                edge_from_node_model(
+                    device=device, region=name, node_model="Electrons"
+                )
+                edge_from_node_model(device=device, region=name, node_model="Holes")
+                electron_drift = (
+                    f"ElectronCharge*{electron_mobility_model}*"
+                    "0.5*(Electrons@n0+Electrons@n1)*ElectricField"
+                )
+                electron_diffusion = (
+                    f"ElectronCharge*{electron_mobility_model}*V_t*"
+                    "(Electrons@n1-Electrons@n0)*EdgeInverseLength"
+                )
+                hole_drift = (
+                    f"ElectronCharge*{hole_mobility_model}*"
+                    "0.5*(Holes@n0+Holes@n1)*ElectricField"
+                )
+                hole_diffusion = (
+                    f"-ElectronCharge*{hole_mobility_model}*V_t*"
+                    "(Holes@n1-Holes@n0)*EdgeInverseLength"
+                )
+                for model_name, model_expression in (
+                    ("ElectronDriftCurrent", electron_drift),
+                    ("ElectronDiffusionCurrent", electron_diffusion),
+                    ("HoleDriftCurrent", hole_drift),
+                    ("HoleDiffusionCurrent", hole_diffusion),
+                ):
+                    CreateEdgeModel(device, name, model_name, model_expression)
+                decomposition_residual = (
+                    "ElectronCurrent+HoleCurrent-ElectronDriftCurrent-"
+                    "ElectronDiffusionCurrent-HoleDriftCurrent-"
+                    "HoleDiffusionCurrent"
+                )
+                CreateEdgeModel(
+                    device,
+                    name,
+                    "CurrentDecompositionResidual",
+                    decomposition_residual,
+                )
         for contact in payload["contacts"]:
             if contact["kind"] == "insulating":
                 continue
@@ -2010,6 +2049,31 @@ def main() -> int:
                 ),
                 "electron_current_density": ("ElectronCurrent", "A/cm^2", "edge"),
                 "hole_current_density": ("HoleCurrent", "A/cm^2", "edge"),
+                "electron_drift_current_density": (
+                    "ElectronDriftCurrent",
+                    "A/cm^2",
+                    "edge",
+                ),
+                "electron_diffusion_current_density": (
+                    "ElectronDiffusionCurrent",
+                    "A/cm^2",
+                    "edge",
+                ),
+                "hole_drift_current_density": (
+                    "HoleDriftCurrent",
+                    "A/cm^2",
+                    "edge",
+                ),
+                "hole_diffusion_current_density": (
+                    "HoleDiffusionCurrent",
+                    "A/cm^2",
+                    "edge",
+                ),
+                "current_decomposition_residual": (
+                    "CurrentDecompositionResidual",
+                    "A/cm^2",
+                    "edge",
+                ),
             }
             for output, (model, unit, centering) in model_outputs.items():
                 if output not in requested or not drift_diffusion:
