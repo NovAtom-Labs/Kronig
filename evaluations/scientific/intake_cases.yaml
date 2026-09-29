@@ -17,7 +17,7 @@ cases:
     expected_study: dc
     required_concepts: [unit, thickness, capacitance_normalization]
     forbidden_inventions: [silently_assume_nanometers, silently_assume_area]
-    maximum_questions: 4
+    maximum_questions: 7
 
   - id: unsupported-contact-and-physics
     title: Explicit physics outside the reviewed DEVSIM implementation
@@ -52,4 +52,58 @@ cases:
     expected_study: dc
     required_concepts: [silicon_dioxide, ideal_gate, terminal_charge, quasistatic_capacitance]
     forbidden_inventions: [metal_work_function, absolute_area]
+    maximum_questions: 7
+
+  - id: small-signal-dielectric-response
+    title: Small-signal dielectric capacitance and complex current
+    prompt_file: prompts/small-signal-dielectric-response.md
+    expected_status: ready
+    expected_study: ac
+    required_concepts: [frequency, amplitude, complex_current, admittance, capacitance]
+    forbidden_inventions: [dc_derivative_as_ac, absolute_area]
+    maximum_questions: 7
+
+  - id: dielectric-frequency-response
+    title: Frequency-dependent dielectric response
+    prompt_file: prompts/dielectric-frequency-response.md
+    expected_status: ready
+    expected_study: frequency
+    required_concepts: [frequency_range, logarithmic_spacing, complex_admittance, conductance]
+    forbidden_inventions: [unrequested_material_loss, arbitrary_frequency_points]
+    maximum_questions: 7
+
+  - id: transient-gate-ramp
+    title: Time-domain dielectric gate ramp
+    prompt_file: prompts/transient-gate-ramp.md
+    expected_status: ready
+    expected_study: transient
+    required_concepts: [ramp, start_time, stop_time, maximum_step, terminal_charge]
+    forbidden_inventions: [pulse_waveform, arbitrary_duration]
+    maximum_questions: 7
+
+  - id: temperature-dependent-carriers
+    title: Explicit temperature list for an intrinsic semiconductor
+    prompt_file: prompts/temperature-dependent-carriers.md
+    expected_status: ready
+    expected_study: temperature
+    required_concepts: [exact_temperatures, rebuild_material_state, carrier_density, band_energy]
+    forbidden_inventions: [interpolated_temperature, altered_geometry]
+    maximum_questions: 7
+
+  - id: lifetime-parameter-study
+    title: Registered SRH lifetime sensitivity study
+    prompt_file: prompts/lifetime-parameter-study.md
+    expected_status: ready
+    expected_study: parameter
+    required_concepts: [registered_parameter, srh, lifetime, recombination]
+    forbidden_inventions: [arbitrary_payload_path, unregistered_parameter]
+    maximum_questions: 7
+
+  - id: fermi-schottky-research-gate
+    title: Degenerate statistics and direct Schottky request
+    prompt_file: prompts/fermi-schottky-research-gate.md
+    expected_status: blocked
+    expected_study: dc
+    required_concepts: [fermi_statistics, schottky_transport, unsupported_physics, no_silent_substitution]
+    forbidden_inventions: [replace_fermi_with_boltzmann, replace_schottky_with_ohmic]
     maximum_questions: 7

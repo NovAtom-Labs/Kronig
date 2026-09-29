@@ -47,6 +47,21 @@ def test_invalid_dimensional_input_returns_json_serializable_tool_error(
     assert response.code == "invalid_spec"
     encoded = response.model_dump_json()
     assert json.loads(encoded)["data"]["errors"]
+    assert response.data["schema_operation"] == "describe_spec"
+
+
+def test_describe_spec_returns_the_authoritative_experiment_contract(
+    tmp_path: Path,
+) -> None:
+    response = build_tools(tmp_path).describe_spec()
+
+    assert response.status == "ok"
+    assert response.code == "experiment_spec_schema"
+    schema = response.data["schema"]
+    assert schema["title"] == "ExperimentSpec"
+    assert "regions" in schema["properties"]
+    assert "study" in schema["properties"]
+    assert response.data["usage"]["payload_shape"] == "direct ExperimentSpec object"
 
 
 def test_sentaurus_prepares_without_configured_remote(tmp_path: Path) -> None:

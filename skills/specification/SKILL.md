@@ -13,7 +13,12 @@ The `ExperimentSpec` is the scientific contract. Describe geometry, materials, p
 2. Extract only facts stated by the researcher. Preserve every supplied unit.
 3. Separate required facts from optional refinements. Ask only when a missing choice changes the physical problem, backend capability, or interpretation.
 4. Use `search_knowledge` for physics terminology, model scope, or simulator behavior that is not encoded in a registry. Do not use retrieval to invent missing intent.
-5. Normalize into `ExperimentSpec`, call `validate_spec`, then call capability checking.
+5. Call `describe_spec` before constructing an unfamiliar `ExperimentSpec`. Use the
+   returned authoritative JSON Schema rather than guessing field names or payload nesting.
+6. Normalize into `ExperimentSpec`, pass that object directly to `validate_spec`, then call
+   `prepare_experiment`. Never wrap the object under a `spec` key.
+7. If validation returns `invalid_spec`, follow its field-level errors and
+   `schema_operation` hint. Do not delegate schema discovery to a shell subagent.
 
 ## What must be explicit
 

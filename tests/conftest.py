@@ -43,15 +43,16 @@ def result_bundle_factory(valid_spec: ExperimentSpec):
             simulator_version="2.10.0",
             status="completed",
             terminals=("left", "right"),
-            bias_points=(
+            bias_points=tuple(
                 BiasPoint(
-                    bias_v=0.0,
+                    bias_v=bias,
                     converged=True,
                     terminal_currents_a_per_m2={
                         "left": 2.0e-16,
                         "right": -2.0e-16,
                     },
-                ),
+                )
+                for bias in (0.0, 0.1, 0.2)
             ),
             fields={
                 "potential": FieldSeries(

@@ -21,7 +21,16 @@ class ScientificEvaluationCase(StrictModel):
     prompt_file: str = Field(min_length=1)
     spec_file: str = Field(min_length=1)
     backend: Literal["devsim", "sentaurus"]
-    study_kind: Literal["equilibrium", "dc"]
+    study_kind: Literal[
+        "equilibrium",
+        "dc",
+        "dc_points",
+        "ac",
+        "frequency",
+        "transient",
+        "temperature",
+        "parameter",
+    ]
     region_count: int = Field(ge=1)
     web_research_required: bool = False
     web_query: str | None = None
@@ -100,7 +109,14 @@ class ScientificIntakeCase(StrictModel):
     prompt_file: str = Field(min_length=1)
     expected_status: Literal["ready", "clarification", "blocked"]
     expected_study: Literal[
-        "equilibrium", "dc", "dc_points", "ac", "frequency", "transient"
+        "equilibrium",
+        "dc",
+        "dc_points",
+        "ac",
+        "frequency",
+        "transient",
+        "temperature",
+        "parameter",
     ] | None = None
     required_concepts: tuple[str, ...] = Field(min_length=1)
     forbidden_inventions: tuple[str, ...] = ()

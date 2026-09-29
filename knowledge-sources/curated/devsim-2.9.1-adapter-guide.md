@@ -8,15 +8,15 @@ The installed runtime reports DEVSIM 2.9.1. The local Apache-2.0 source checkout
 
 ## Deterministic compilation
 
-The current adapter compiles one-dimensional silicon regions into a line mesh. Researcher lengths normalize to SI and convert to centimeters only inside the adapter. Constant donor values contribute positive signed net doping, while constant acceptor values contribute negative signed net doping. Multiple profiles in one region add algebraically.
+The current adapter compiles ordered one-dimensional silicon and dielectric regions into a line mesh. Researcher lengths normalize to SI and convert to centimeters only inside the adapter. Constant, piecewise, linear, Gaussian, error-function, and tabulated donor or acceptor profiles contribute to signed net doping. Multiple profiles in one region add algebraically. Fixed bulk and interface charge use separate typed inputs.
 
 The adapter emits `input.json` plus a pinned runtime script. Their SHA-256 digests become `input_digest` and `runtime_digest`. Conversation text does not enter either generated file.
 
 ## Solver sequence
 
-The runtime constructs the mesh and silicon device, applies material and mobility parameters, creates potential and carrier models, creates contact equations, solves initial electrostatics, then solves coupled drift-diffusion. A DC study advances through the exact compiled bias list.
+The runtime constructs the mesh, applies registered material and model parameters, creates electrostatic equations in every region, and creates carrier equations only in compatible semiconductor regions. It solves initial electrostatics before the coupled drift-diffusion system. DC, AC, frequency, transient, temperature, and registered parameter studies each follow a bounded typed schedule.
 
-The native result records simulator version, terminal IDs, convergence state, terminal current density in amperes per square centimeter, and requested field data. The normalizer converts current density to amperes per square meter, coordinates to meters, and carrier density to inverse cubic meters.
+The native result records simulator version, terminal IDs, convergence state, requested fields, native model names, region and interface identities, model parameter-set identity, and parameter sources. The normalizer converts all supported native centimeter units into canonical SI datasets while retaining node, edge, contact, interface, and operating-point centering.
 
 ## Useful pinned-source retrieval areas
 
@@ -27,9 +27,9 @@ The native result records simulator version, terminal IDs, convergence state, te
 
 Search results are evidence for adapter development, not permission to copy arbitrary examples into execution. The deterministic compiler remains the only path to runnable input.
 
-## Known foundation limits
+## Reviewed boundary
 
-The current adapter is not a general DEVSIM frontend. It supports the published manifest only: one dimension, silicon, constant profiles, ohmic end contacts, equilibrium or short DC sweeps, and the listed drift-diffusion models and observables. Unsupported DEVSIM features must be added through the portable contract and tests, not injected as raw Python.
+The adapter is not a general DEVSIM frontend. It supports only the versioned capability manifest and deterministic allowlisted runtime. Direct semiconductor Schottky transport, Fermi-Dirac drift diffusion, surface mobility, interface traps, transient pulses, arbitrary PDEs, arbitrary material values, and arbitrary generated DEVSIM source are refused. A new feature must enter through the portable contract, registry, normalizer, validator, and a passing reference benchmark.
 
 ## Source basis
 

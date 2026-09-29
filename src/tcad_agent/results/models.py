@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, JsonValue, model_validator
 
 from tcad_agent.domain.models import StrictModel
 from tcad_agent.results.datasets import Dataset, ScientificAxis
@@ -13,6 +13,8 @@ class BiasPoint(StrictModel):
     bias_v: float
     converged: bool
     terminal_currents_a_per_m2: dict[str, float]
+    terminal_electron_currents_a_per_m2: dict[str, float] = Field(default_factory=dict)
+    terminal_hole_currents_a_per_m2: dict[str, float] = Field(default_factory=dict)
 
 
 class FieldSeries(StrictModel):
@@ -32,6 +34,8 @@ class OperatingPoint(StrictModel):
     state: Literal["converged", "failed", "skipped"]
     coordinates: dict[str, float] = Field(default_factory=dict)
     terminal_currents_a_per_m2: dict[str, float] = Field(default_factory=dict)
+    terminal_electron_currents_a_per_m2: dict[str, float] = Field(default_factory=dict)
+    terminal_hole_currents_a_per_m2: dict[str, float] = Field(default_factory=dict)
     terminal_charges_c_per_m2: dict[str, float] = Field(default_factory=dict)
     attempts: int = Field(default=1, ge=0)
     message: str | None = None
@@ -50,6 +54,8 @@ class CanonicalResult(StrictModel):
     operating_points: tuple[OperatingPoint, ...] = ()
     native_result_path: Path | None = None
     error: str | None = None
+    sign_convention: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod

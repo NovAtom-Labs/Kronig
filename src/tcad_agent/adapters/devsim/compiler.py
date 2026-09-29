@@ -6,9 +6,15 @@ import hashlib
 import json
 from itertools import pairwise
 from pathlib import Path
+from typing import cast
 
 from tcad_agent.adapters.devsim import runtime
 from tcad_agent.adapters.devsim.extract import normalize_native_field
+from tcad_agent.adapters.devsim.models.materials import (
+    SILICON_PARAMETER_SET_ID,
+    SILICON_PARAMETER_SOURCES,
+    SILICON_PARAMETERS,
+)
 from tcad_agent.adapters.devsim.payload import DevsimPayload
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
 from tcad_agent.capabilities.service import CapabilityService
@@ -17,8 +23,10 @@ from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.domain.profiles import (
     ConstantProfile,
     ErrorFunctionProfile,
+    FixedChargeProfile,
     GaussianProfile,
     LinearProfile,
+    PiecewiseConstantProfile,
     TabulatedProfile,
 )
 from tcad_agent.domain.studies import (
@@ -32,6 +40,7 @@ from tcad_agent.domain.studies import (
     TransientStudy,
     expand_study_points,
 )
+from tcad_agent.physics.parameters import REGISTERED_PARAMETERS
 from tcad_agent.results.datasets import AxisKind, Dataset, DatasetCentering, ScientificAxis
 from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries, OperatingPoint
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
@@ -78,7 +87,7 @@ class DevsimAdapter:
         )
 
     def _payload(self, spec: ExperimentSpec) -> DevsimPayload:
-        regions = [
+        regions: list[dict[str, object]] = [
             {
                 "id": region.id,
                 "material": region.material,
@@ -88,6 +97,17 @@ class DevsimAdapter:
                     region.mesh_spacing.to("cm")
                     if region.mesh_spacing is not None
                     else max((region.x1.to("cm") - region.x0.to("cm")) / 50.0, 1e-9)
+                ),
+                "relative_permittivity": region.relative_permittivity,
+                "minimum_mesh_spacing_cm": (
+                    region.minimum_mesh_spacing.to("cm")
+                    if region.minimum_mesh_spacing is not None
+                    else None
+                ),
+                "maximum_mesh_spacing_cm": (
+                    region.maximum_mesh_spacing.to("cm")
+                    if region.maximum_mesh_spacing is not None
+                    else None
                 ),
             }
             for region in spec.regions
@@ -102,6 +122,11 @@ class DevsimAdapter:
                     if interface.fixed_charge_density is not None
                     else None
                 ),
+                "mesh_spacing_cm": (
+                    interface.mesh_spacing.to("cm")
+                    if interface.mesh_spacing is not None
+                    else None
+                ),
             }
             for interface in spec.interfaces
         ]
@@ -110,8 +135,11 @@ class DevsimAdapter:
             common: dict[str, object] = {
                 "kind": profile.kind,
                 "region": profile.region,
-                "species": str(profile.species),
             }
+            if isinstance(profile, FixedChargeProfile):
+                common["density_c_cm3"] = profile.density.to("C/cm^3")
+            else:
+                common["species"] = str(profile.species)
             if isinstance(profile, ConstantProfile):
                 common["value_cm3"] = profile.value.to("cm^-3")
             elif isinstance(profile, LinearProfile):
@@ -130,36 +158,172 @@ class DevsimAdapter:
                 common["positions_cm"] = tuple(value.to("cm") for value in profile.positions)
                 common["values_cm3"] = tuple(value.to("cm^-3") for value in profile.values)
                 common["interpolation"] = profile.interpolation
+            elif isinstance(profile, PiecewiseConstantProfile):
+                common["boundaries_cm"] = tuple(
+                    value.to("cm") for value in profile.boundaries
+                )
+                common["values_cm3"] = tuple(
+                    value.to("cm^-3") for value in profile.values
+                )
             profiles.append(common)
         contacts = [
             {
                 "id": contact.id,
+                "backend_id": f"contact_{index}",
                 "location": str(contact.location),
                 "kind": str(contact.kind),
                 "work_function_ev": (
                     contact.work_function.to("eV") if contact.work_function is not None else None
                 ),
+                "voltage_offset_v": contact.voltage_offset.to("V"),
+                "area_m2": (
+                    contact.area.to("m^2") if contact.area is not None else None
+                ),
             }
-            for contact in spec.contacts
+            for index, contact in enumerate(spec.contacts)
         ]
         study = self._study_payload(spec)
+        parameters = spec.physics.parameters
+        material_parameters = dict(SILICON_PARAMETERS)
+        overrides = {
+            "electron_lifetime_s": (
+                parameters.electron_lifetime.to("s")
+                if parameters.electron_lifetime is not None
+                else None
+            ),
+            "hole_lifetime_s": (
+                parameters.hole_lifetime.to("s")
+                if parameters.hole_lifetime is not None
+                else None
+            ),
+            "auger_electron_cm6_s": (
+                parameters.auger_electron_coefficient.to("cm^6/s")
+                if parameters.auger_electron_coefficient is not None
+                else None
+            ),
+            "auger_hole_cm6_s": (
+                parameters.auger_hole_coefficient.to("cm^6/s")
+                if parameters.auger_hole_coefficient is not None
+                else None
+            ),
+            "bgn_reference_energy_ev": (
+                parameters.bgn_reference_energy.to("eV")
+                if parameters.bgn_reference_energy is not None
+                else None
+            ),
+            "bgn_reference_density_cm3": (
+                parameters.bgn_reference_density.to("cm^-3")
+                if parameters.bgn_reference_density is not None
+                else None
+            ),
+        }
+        material_parameters.update(
+            {key: value for key, value in overrides.items() if value is not None}
+        )
+        mesh_anchors = self._mesh_anchor_payloads(spec, regions)
         return DevsimPayload.model_validate(
             {
                 "schema_version": "2.0",
                 "experiment_name": spec.name,
                 "regions": regions,
                 "interfaces": interfaces,
+                "mesh_anchors": mesh_anchors,
                 "profiles": profiles,
                 "contacts": contacts,
                 "physics": {
                     "equations": [str(value) for value in spec.physics.equations],
                     "models": list(spec.physics.models),
                     "temperature_k": spec.physics.temperature.to("K"),
+                    "parameter_set_id": SILICON_PARAMETER_SET_ID,
+                    "parameter_sources": SILICON_PARAMETER_SOURCES,
+                    **material_parameters,
                 },
+                "sign_convention": spec.sign_convention.model_dump(mode="json"),
+                "solver": spec.solver.model_dump(mode="json"),
                 "study": study,
                 "observables": [str(value) for value in spec.observables],
             }
         )
+
+    @staticmethod
+    def _mesh_anchor_payloads(
+        spec: ExperimentSpec,
+        regions: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """Merge explicit anchors with profile landmarks using bounded spacing.
+
+        Landmark discovery depends only on typed profile geometry. It does not infer
+        a device type or alter the approved physical profile.
+        """
+
+        compiled_regions = {str(region["id"]): region for region in regions}
+        anchors: dict[float, dict[str, object]] = {}
+
+        def add(position_cm: float, spacing_cm: float, source: str) -> None:
+            existing = anchors.get(position_cm)
+            if existing is None or spacing_cm < cast(float, existing["spacing_cm"]):
+                anchors[position_cm] = {
+                    "position_cm": position_cm,
+                    "spacing_cm": spacing_cm,
+                    "source": source,
+                }
+
+        for anchor in spec.mesh_anchors:
+            add(anchor.position.to("cm"), anchor.spacing.to("cm"), "user")
+
+        def bounded_spacing(region: dict[str, object], candidate: float) -> float:
+            target = min(candidate, cast(float, region["mesh_spacing_cm"]))
+            minimum = region.get("minimum_mesh_spacing_cm")
+            maximum = region.get("maximum_mesh_spacing_cm")
+            if minimum is not None:
+                target = max(target, cast(float, minimum))
+            if maximum is not None:
+                target = min(target, cast(float, maximum))
+            return target
+
+        for profile in spec.profiles:
+            region = compiled_regions[profile.region]
+            if isinstance(profile, GaussianProfile):
+                add(
+                    profile.center.to("cm"),
+                    bounded_spacing(
+                        region,
+                        profile.standard_deviation.to("cm") / 4.0,
+                    ),
+                    "profile:gaussian:center",
+                )
+            elif isinstance(profile, ErrorFunctionProfile):
+                add(
+                    profile.junction_position.to("cm"),
+                    bounded_spacing(
+                        region,
+                        profile.characteristic_length.to("cm") / 4.0,
+                    ),
+                    "profile:error_function:junction",
+                )
+            elif isinstance(profile, PiecewiseConstantProfile):
+                for boundary in profile.boundaries[1:-1]:
+                    add(
+                        boundary.to("cm"),
+                        bounded_spacing(
+                            region, cast(float, region["mesh_spacing_cm"])
+                        ),
+                        "profile:piecewise_constant:boundary",
+                    )
+            elif isinstance(profile, TabulatedProfile):
+                coordinates = tuple(value.to("cm") for value in profile.positions)
+                for index, position in enumerate(coordinates):
+                    neighbors = []
+                    if index:
+                        neighbors.append(position - coordinates[index - 1])
+                    if index + 1 < len(coordinates):
+                        neighbors.append(coordinates[index + 1] - position)
+                    add(
+                        position,
+                        bounded_spacing(region, min(neighbors) / 4.0),
+                        "profile:tabulated:sample",
+                    )
+        return [anchors[position] for position in sorted(anchors)]
 
     @staticmethod
     def _study_payload(spec: ExperimentSpec) -> dict[str, object]:
@@ -207,6 +371,10 @@ class DevsimAdapter:
         if isinstance(study, TransientStudy):
             return {
                 "kind": "transient",
+                "contact": study.contact,
+                "waveform": study.waveform,
+                "initial_voltage_v": study.initial_voltage.to("V"),
+                "final_voltage_v": study.final_voltage.to("V"),
                 "start_s": study.start.to("s"),
                 "stop_s": study.stop.to("s"),
                 "initial_step_s": study.initial_step.to("s"),
@@ -221,11 +389,12 @@ class DevsimAdapter:
                 "unit": "K",
             }
         if isinstance(study, ParameterStudy):
+            parameter = REGISTERED_PARAMETERS[study.parameter_path]
             return {
                 "kind": "parameter",
                 "parameter_path": study.parameter_path,
-                "values_si": tuple(value.magnitude_si for value in study.values),
-                "unit": study.values[0].si_unit,
+                "values_si": tuple(value.to(parameter.unit) for value in study.values),
+                "unit": parameter.unit,
             }
         raise TypeError(f"unsupported study: {type(study).__name__}")
 
@@ -244,6 +413,18 @@ class DevsimAdapter:
                 converged=point["converged"],
                 terminal_currents_a_per_m2={
                     name: value * 1e4 for name, value in point["currents_a_per_cm2"].items()
+                },
+                terminal_electron_currents_a_per_m2={
+                    name: value * 1e4
+                    for name, value in point.get(
+                        "electron_currents_a_per_cm2", {}
+                    ).items()
+                },
+                terminal_hole_currents_a_per_m2={
+                    name: value * 1e4
+                    for name, value in point.get(
+                        "hole_currents_a_per_cm2", {}
+                    ).items()
                 },
             )
             for point in data["bias_points"]
@@ -275,34 +456,110 @@ class DevsimAdapter:
                 centering=DatasetCentering(field.get("centering", "node")),
                 values=values,
             )
+        study_axis = data.get("study_axis")
+        if study_axis is None:
+            operating_axis_id = "bias"
+            operating_axis_kind = AxisKind.BIAS
+            operating_axis_label = "Applied bias"
+            operating_axis_unit = "V"
+            raw_operating_points = data["bias_points"]
+            coordinate_key = "bias_v"
+            native_field_sweeps = data.get("field_sweeps", {})
+        else:
+            operating_axis_id = str(study_axis["id"])
+            operating_axis_kind = AxisKind(str(study_axis["kind"]))
+            operating_axis_label = str(study_axis["label"])
+            operating_axis_unit = str(study_axis["unit"])
+            raw_operating_points = data.get("study_points", [])
+            coordinate_key = "coordinate"
+            native_field_sweeps = data.get("study_field_sweeps", {})
         operating_points = tuple(
             OperatingPoint(
                 index=index,
                 state="converged" if point["converged"] else "failed",
-                coordinates={"bias": point["bias_v"]},
+                coordinates={operating_axis_id: float(point[coordinate_key])},
                 terminal_currents_a_per_m2={
-                    name: value * 1e4 for name, value in point["currents_a_per_cm2"].items()
+                    name: value * 1e4
+                    for name, value in point["currents_a_per_cm2"].items()
+                },
+                terminal_electron_currents_a_per_m2={
+                    name: value * 1e4
+                    for name, value in point.get(
+                        "electron_currents_a_per_cm2", {}
+                    ).items()
+                },
+                terminal_hole_currents_a_per_m2={
+                    name: value * 1e4
+                    for name, value in point.get(
+                        "hole_currents_a_per_cm2", {}
+                    ).items()
                 },
                 terminal_charges_c_per_m2={
-                    name: value * 1e4 for name, value in point.get("charges_c_per_cm2", {}).items()
+                    name: value * 1e4
+                    for name, value in point.get("charges_c_per_cm2", {}).items()
                 },
                 attempts=point.get("attempts", 1),
                 message=point.get("message"),
             )
-            for index, point in enumerate(data["bias_points"])
+            for index, point in enumerate(raw_operating_points)
         )
+        contact_areas = {
+            str(name): float(value)
+            for name, value in data.get("contact_areas_m2", {}).items()
+        }
+        interface_charges = {
+            str(name): float(value) * 1e4
+            for name, value in data.get(
+                "interface_charge_densities_c_per_cm2", {}
+            ).items()
+        }
+        if (
+            "interface_charge_density" in data.get("requested_observables", ())
+            and interface_charges
+        ):
+            interface_ids = tuple(interface_charges)
+            axes["interface_index"] = ScientificAxis(
+                id="interface_index",
+                kind=AxisKind.INDEX,
+                label="Interface index",
+                unit="1",
+                values=tuple(float(index) for index in range(len(interface_ids))),
+            )
+            datasets["interface_charge_density"] = Dataset(
+                id="interface_charge_density",
+                label="Interface charge density",
+                unit="C/m^2",
+                axes=("interface_index",),
+                shape=(len(interface_ids),),
+                centering=DatasetCentering.INTERFACE,
+                values=tuple(interface_charges[name] for name in interface_ids),
+                source="configured:interfaces.fixed_charge_density",
+                metadata={
+                    "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
+                },
+            )
         if operating_points:
-            bias_values = tuple(point.coordinates["bias"] for point in operating_points)
-            axes["bias"] = ScientificAxis(
-                id="bias",
-                kind=AxisKind.BIAS,
-                label="Applied bias",
-                unit="V",
-                values=bias_values,
+            coordinate_values = tuple(
+                point.coordinates[operating_axis_id] for point in operating_points
+            )
+            axes[operating_axis_id] = ScientificAxis(
+                id=operating_axis_id,
+                kind=operating_axis_kind,
+                label=operating_axis_label,
+                unit=operating_axis_unit,
+                values=coordinate_values,
             )
             for terminal in data["terminals"]:
                 currents = tuple(
                     point.terminal_currents_a_per_m2.get(terminal, 0.0)
+                    for point in operating_points
+                )
+                electron_currents = tuple(
+                    point.terminal_electron_currents_a_per_m2.get(terminal, 0.0)
+                    for point in operating_points
+                )
+                hole_currents = tuple(
+                    point.terminal_hole_currents_a_per_m2.get(terminal, 0.0)
                     for point in operating_points
                 )
                 charges = tuple(
@@ -313,25 +570,70 @@ class DevsimAdapter:
                     id=f"terminal_current__{terminal}",
                     label=f"Terminal current at {terminal}",
                     unit="A/m^2",
-                    axes=("bias",),
-                    shape=(len(bias_values),),
+                    axes=(operating_axis_id,),
+                    shape=(len(coordinate_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=currents,
                     validity=tuple(point.state == "converged" for point in operating_points),
+                )
+                datasets[f"terminal_electron_current__{terminal}"] = Dataset(
+                    id=f"terminal_electron_current__{terminal}",
+                    label=f"Terminal electron current at {terminal}",
+                    unit="A/m^2",
+                    axes=(operating_axis_id,),
+                    shape=(len(coordinate_values),),
+                    centering=DatasetCentering.OPERATING_POINT,
+                    values=electron_currents,
+                    validity=tuple(
+                        point.state == "converged" for point in operating_points
+                    ),
+                )
+                datasets[f"terminal_hole_current__{terminal}"] = Dataset(
+                    id=f"terminal_hole_current__{terminal}",
+                    label=f"Terminal hole current at {terminal}",
+                    unit="A/m^2",
+                    axes=(operating_axis_id,),
+                    shape=(len(coordinate_values),),
+                    centering=DatasetCentering.OPERATING_POINT,
+                    values=hole_currents,
+                    validity=tuple(
+                        point.state == "converged" for point in operating_points
+                    ),
                 )
                 datasets[f"terminal_charge__{terminal}"] = Dataset(
                     id=f"terminal_charge__{terminal}",
                     label=f"Terminal charge at {terminal}",
                     unit="C/m^2",
-                    axes=("bias",),
-                    shape=(len(bias_values),),
+                    axes=(operating_axis_id,),
+                    shape=(len(coordinate_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=charges,
                     validity=tuple(point.state == "converged" for point in operating_points),
                 )
+                area = contact_areas.get(terminal)
+                if area is not None:
+                    datasets[f"absolute_terminal_current__{terminal}"] = Dataset(
+                        id=f"absolute_terminal_current__{terminal}",
+                        label=f"Absolute terminal current at {terminal}",
+                        unit="A",
+                        axes=(operating_axis_id,),
+                        shape=(len(coordinate_values),),
+                        centering=DatasetCentering.OPERATING_POINT,
+                        values=tuple(value * area for value in currents),
+                    )
+                    datasets[f"absolute_terminal_charge__{terminal}"] = Dataset(
+                        id=f"absolute_terminal_charge__{terminal}",
+                        label=f"Absolute terminal charge at {terminal}",
+                        unit="C",
+                        axes=(operating_axis_id,),
+                        shape=(len(coordinate_values),),
+                        centering=DatasetCentering.OPERATING_POINT,
+                        values=tuple(value * area for value in charges),
+                    )
                 capacitance = (
-                    self._finite_difference(bias_values, charges)
-                    if all(point.state == "converged" for point in operating_points)
+                    self._finite_difference(coordinate_values, charges)
+                    if operating_axis_id == "bias"
+                    and all(point.state == "converged" for point in operating_points)
                     else None
                 )
                 if capacitance is not None:
@@ -339,14 +641,25 @@ class DevsimAdapter:
                         id=f"capacitance__{terminal}",
                         label=f"Quasi-static capacitance at {terminal}",
                         unit="F/m^2",
-                        axes=("bias",),
-                        shape=(len(bias_values),),
+                        axes=(operating_axis_id,),
+                        shape=(len(coordinate_values),),
                         centering=DatasetCentering.OPERATING_POINT,
                         values=capacitance,
                         source=f"derived:dQdV:terminal_charge__{terminal}",
                     )
+                    if area is not None:
+                        datasets[f"absolute_capacitance__{terminal}"] = Dataset(
+                            id=f"absolute_capacitance__{terminal}",
+                            label=f"Absolute quasi-static capacitance at {terminal}",
+                            unit="F",
+                            axes=(operating_axis_id,),
+                            shape=(len(coordinate_values),),
+                            centering=DatasetCentering.OPERATING_POINT,
+                            values=tuple(value * area for value in capacitance),
+                            source=f"derived:area:capacitance__{terminal}",
+                        )
             if len(operating_points) > 1:
-                for name, sweep in data.get("field_sweeps", {}).items():
+                for name, sweep in native_field_sweeps.items():
                     final_field = fields.get(name)
                     axis_id = f"position__{name}"
                     if final_field is None or axis_id not in axes:
@@ -374,12 +687,106 @@ class DevsimAdapter:
                         id=name,
                         label=name.replace("_", " ").title(),
                         unit=unit,
-                        axes=("bias", axis_id),
+                        axes=(operating_axis_id, axis_id),
                         shape=(len(operating_points), position_count),
                         centering=DatasetCentering(sweep.get("centering", "node")),
                         values=tuple(normalized_values),
                         validity=tuple(bool(value) for value in sweep["validity"]),
                     )
+        frequency_points = data.get("frequency_points", [])
+        if frequency_points:
+            frequencies = tuple(
+                float(point["frequency_hz"]) for point in frequency_points
+            )
+            axes["frequency"] = ScientificAxis(
+                id="frequency",
+                kind=AxisKind.FREQUENCY,
+                label="Frequency",
+                unit="Hz",
+                values=frequencies,
+            )
+            driven_contact = str(data["ac_contact"])
+            real = tuple(
+                float(point["admittance_real_s_per_cm2"]) * 1e4
+                for point in frequency_points
+            )
+            imaginary = tuple(
+                float(point["admittance_imag_s_per_cm2"]) * 1e4
+                for point in frequency_points
+            )
+            current_real = tuple(
+                float(point["current_real_a_per_cm2"]) * 1e4
+                for point in frequency_points
+            )
+            current_imaginary = tuple(
+                float(point["current_imag_a_per_cm2"]) * 1e4
+                for point in frequency_points
+            )
+            conductance = tuple(
+                float(point["conductance_s_per_cm2"]) * 1e4
+                for point in frequency_points
+            )
+            capacitance = tuple(
+                float(point["capacitance_f_per_cm2"]) * 1e4
+                for point in frequency_points
+            )
+            datasets[f"complex_admittance__{driven_contact}"] = Dataset(
+                id=f"complex_admittance__{driven_contact}",
+                label=f"Complex admittance at {driven_contact}",
+                unit="S/m^2",
+                axes=("frequency",),
+                shape=(len(frequencies),),
+                centering=DatasetCentering.CONTACT,
+                values=real,
+                imaginary_values=imaginary,
+                source="simulator:small-signal-ac",
+            )
+            datasets[f"complex_current_response__{driven_contact}"] = Dataset(
+                id=f"complex_current_response__{driven_contact}",
+                label=f"Complex current response at {driven_contact}",
+                unit="A/m^2",
+                axes=("frequency",),
+                shape=(len(frequencies),),
+                centering=DatasetCentering.CONTACT,
+                values=current_real,
+                imaginary_values=current_imaginary,
+                source="simulator:small-signal-ac-current",
+            )
+            datasets[f"ac_conductance__{driven_contact}"] = Dataset(
+                id=f"ac_conductance__{driven_contact}",
+                label=f"AC conductance at {driven_contact}",
+                unit="S/m^2",
+                axes=("frequency",),
+                shape=(len(frequencies),),
+                centering=DatasetCentering.CONTACT,
+                values=conductance,
+                source=f"derived:real:complex_admittance__{driven_contact}",
+            )
+            datasets[f"ac_capacitance__{driven_contact}"] = Dataset(
+                id=f"ac_capacitance__{driven_contact}",
+                label=f"Small-signal capacitance at {driven_contact}",
+                unit="F/m^2",
+                axes=("frequency",),
+                shape=(len(frequencies),),
+                centering=DatasetCentering.CONTACT,
+                values=capacitance,
+                source=(
+                    "derived:imaginary_over_omega:"
+                    f"complex_admittance__{driven_contact}"
+                ),
+            )
+            area = contact_areas.get(driven_contact)
+            if area is not None:
+                datasets[f"absolute_ac_capacitance__{driven_contact}"] = Dataset(
+                    id=f"absolute_ac_capacitance__{driven_contact}",
+                    label=f"Absolute small-signal capacitance at {driven_contact}",
+                    unit="F",
+                    axes=("frequency",),
+                    shape=(len(frequencies),),
+                    centering=DatasetCentering.CONTACT,
+                    values=tuple(value * area for value in capacitance),
+                    source=f"derived:area:ac_capacitance__{driven_contact}",
+                )
         return CanonicalResult(
             backend="devsim",
             simulator_version=data["simulator_version"],
@@ -391,6 +798,19 @@ class DevsimAdapter:
             datasets=datasets,
             operating_points=operating_points,
             native_result_path=native.result_path,
+            sign_convention={
+                str(key): str(value)
+                for key, value in data.get("sign_convention", {}).items()
+            },
+            metadata={
+                "parameter_set_id": data.get("parameter_set_id", "unknown"),
+                "parameter_sources": data.get("parameter_sources", {}),
+                "solver_configuration": data.get("solver_configuration", {}),
+                "solver_events": data.get("solver_events", []),
+                "native_model_names": data.get("native_model_names", {}),
+                "regions": data.get("regions", []),
+                "interfaces": data.get("interfaces", []),
+            },
         )
 
     @staticmethod

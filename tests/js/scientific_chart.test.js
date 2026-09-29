@@ -17,6 +17,11 @@ assertEqual(segmented[1].length, 2, "the later valid run is preserved");
 
 assertEqual(chart.logTransform([1, 10, 100]).accepted, true, "positive values support log scale");
 assertEqual(chart.logTransform([1, 0, 100]).accepted, false, "zero rejects log scale safely");
+const signed = chart.signedLogTransform([-100, -1, 0, 1, 100]);
+assertEqual(signed.accepted, true, "signed-log accepts bipolar and zero-valued data");
+assertEqual(Math.round(signed.values[0]), -2, "signed-log preserves negative sign");
+assertEqual(signed.values[2], 0, "signed-log preserves zero");
+assertEqual(Math.round(signed.values[4]), 2, "signed-log preserves positive sign");
 
 const complex = chart.complexResponse([3, 0], [4, 1]);
 assertEqual(complex.magnitude[0], 5, "complex magnitude is derived generically");

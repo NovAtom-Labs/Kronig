@@ -15,6 +15,8 @@ class ScalarDerivation:
     value: float
     unit: str
     source_dataset: str
+    coordinate: float | None = None
+    coordinate_unit: str | None = None
 
 
 ScalarFunction = Callable[[Dataset, Mapping[str, ScientificAxis]], ScalarDerivation]
@@ -39,6 +41,9 @@ class DerivationRegistry:
                 "maximum": lambda dataset, axes: _extremum(dataset, "maximum"),
                 "endpoint_difference": _endpoint_difference,
                 "integral": _integral,
+                "average": _average,
+                "peak_magnitude": _peak_magnitude,
+                "built_in_potential": _built_in_potential,
             },
             datasets={"gradient": _gradient, "derivative": _gradient},
         )
@@ -120,6 +125,47 @@ def _integral(
         )
     )
     return ScalarDerivation("integral", value, f"{dataset.unit}*{axis.unit}", dataset.id)
+
+
+def _average(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> ScalarDerivation:
+    del axes
+    return ScalarDerivation(
+        "average",
+        sum(dataset.values) / len(dataset.values),
+        dataset.unit,
+        dataset.id,
+    )
+
+
+def _peak_magnitude(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> ScalarDerivation:
+    axis = _require_rank_one(dataset, axes)
+    index = max(range(len(dataset.values)), key=lambda item: abs(dataset.values[item]))
+    return ScalarDerivation(
+        "peak_magnitude",
+        abs(dataset.values[index]),
+        dataset.unit,
+        dataset.id,
+        coordinate=axis.values[index],
+        coordinate_unit=axis.unit,
+    )
+
+
+def _built_in_potential(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> ScalarDerivation:
+    _require_rank_one(dataset, axes)
+    if dataset.unit != "V":
+        raise ValueError("built-in potential requires a canonical voltage dataset")
+    return ScalarDerivation(
+        "built_in_potential",
+        max(dataset.values) - min(dataset.values),
+        "V",
+        dataset.id,
+    )
 
 
 def _gradient(dataset: Dataset, axes: Mapping[str, ScientificAxis]) -> Dataset:

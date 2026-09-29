@@ -30,6 +30,7 @@ class DatasetCentering(StrEnum):
     NODE = "node"
     EDGE = "edge"
     CONTACT = "contact"
+    INTERFACE = "interface"
     OPERATING_POINT = "operating_point"
 
 
@@ -63,6 +64,7 @@ class Dataset(_ResultModel):
         default=None, min_length=1, max_length=4_000_000
     )
     source: str = Field(default="simulator", min_length=1, max_length=240)
+    metadata: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("shape")
     @classmethod

@@ -33,6 +33,10 @@ STUDY = TypeAdapter(Study1D)
         },
         {
             "kind": "transient",
+            "contact": "gate",
+            "waveform": "step",
+            "initial_voltage": "0 V",
+            "final_voltage": "1 V",
             "start": "0 s",
             "stop": "1 ns",
             "initial_step": "1 ps",

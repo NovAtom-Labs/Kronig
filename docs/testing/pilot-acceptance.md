@@ -44,9 +44,11 @@ Run the scientific synthetic suite with:
 ```
 
 This suite executes real DEVSIM cases spanning equilibrium, exact and adaptive DC,
-mixed silicon and oxide regions, analytic profiles, terminal charge, quasi-static capacitance,
-local and public evidence contracts, axis-aware datasets, validation, provenance, and the
-Results Workbench reader. Intake cases also prove that prompts remain natural researcher prose.
+mixed silicon and dielectric regions, analytic profiles, fixed charge, terminal charge,
+quasi-static capacitance, AC and frequency response, transient schedules, temperature and
+registered parameter studies, local and public evidence contracts, axis-aware datasets,
+validation, provenance, and the Results Workbench reader. Intake cases also prove that prompts
+remain natural researcher prose.
 
 The live scientific prompt and full repository-agent evaluations incur Bedrock cost and
 must be requested explicitly:

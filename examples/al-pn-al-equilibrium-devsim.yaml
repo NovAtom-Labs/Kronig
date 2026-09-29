@@ -37,4 +37,4 @@ study:
 observables: [terminal_current, potential, electric_field, electron_density, hole_density]
 metadata:
   portability: explicit local approximation
-  limitation: DEVSIM does not represent the requested aluminum work function, Fermi statistics, Auger, or band-gap narrowing in the current reviewed adapter
+  limitation: This explicit approximation uses ohmic semiconductor boundaries and Boltzmann statistics, so it does not represent the requested direct aluminum Schottky transport or Fermi statistics; reviewed Auger and Slotboom BGN are available but not selected in this fixture

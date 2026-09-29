@@ -31,6 +31,10 @@ def _length(value: QuantityValue) -> QuantityValue:
     return value.require("m", "length")
 
 
+def _charge_density(value: QuantityValue) -> QuantityValue:
+    return value.require("C / m**3", "charge per volume")
+
+
 class ConstantProfile(_DomainModel):
     kind: Literal["constant"]
     region: str
@@ -38,6 +42,14 @@ class ConstantProfile(_DomainModel):
     value: QuantityValue
 
     _validate_value = field_validator("value")(_concentration)
+
+
+class FixedChargeProfile(_DomainModel):
+    kind: Literal["fixed_charge"]
+    region: str
+    density: QuantityValue
+
+    _validate_density = field_validator("density")(_charge_density)
 
 
 class LinearProfile(_DomainModel):
@@ -114,11 +126,37 @@ class TabulatedProfile(_DomainModel):
         return self
 
 
+class PiecewiseConstantProfile(_DomainModel):
+    kind: Literal["piecewise_constant"]
+    region: str
+    species: ProfileSpecies
+    boundaries: tuple[QuantityValue, ...] = Field(min_length=2, max_length=10001)
+    values: tuple[QuantityValue, ...] = Field(min_length=1, max_length=10000)
+
+    _validate_boundaries = field_validator("boundaries")(
+        lambda values: tuple(_length(value) for value in values)
+    )
+    _validate_values = field_validator("values")(
+        lambda values: tuple(_concentration(value) for value in values)
+    )
+
+    @model_validator(mode="after")
+    def validate_intervals(self) -> Self:
+        if len(self.boundaries) != len(self.values) + 1:
+            raise ValueError("piecewise-constant profile requires one value per interval")
+        coordinates = [boundary.to("m") for boundary in self.boundaries]
+        if any(right <= left for left, right in pairwise(coordinates)):
+            raise ValueError("piecewise-constant boundaries must be strictly increasing")
+        return self
+
+
 Profile1D = Annotated[
     ConstantProfile
+    | FixedChargeProfile
     | LinearProfile
     | GaussianProfile
     | ErrorFunctionProfile
-    | TabulatedProfile,
+    | TabulatedProfile
+    | PiecewiseConstantProfile,
     Field(discriminator="kind"),
 ]

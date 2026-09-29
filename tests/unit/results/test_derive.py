@@ -60,3 +60,35 @@ def test_current_balance_uses_canonical_operating_point_currents() -> None:
 
     assert balance.value == pytest.approx(1e-6)
     assert balance.unit == "A/m^2"
+
+
+def test_peak_location_average_and_builtin_potential_use_canonical_values() -> None:
+    axis = ScientificAxis(
+        id="x", kind="position", label="Position", unit="m", values=(0.0, 1.0, 2.0)
+    )
+    field = Dataset(
+        id="electric_field",
+        label="Electric field",
+        unit="V/m",
+        axes=("x",),
+        shape=(3,),
+        values=(-2.0, 5.0, -4.0),
+    )
+    potential = Dataset(
+        id="potential",
+        label="Potential",
+        unit="V",
+        axes=("x",),
+        shape=(3,),
+        values=(-0.2, 0.1, 0.7),
+    )
+    registry = DerivationRegistry.default()
+
+    peak = registry.scalar("peak_magnitude", field, {"x": axis})
+    assert peak.value == 5.0
+    assert peak.coordinate == 1.0
+    assert peak.coordinate_unit == "m"
+    assert registry.scalar("average", field, {"x": axis}).value == pytest.approx(-1 / 3)
+    assert registry.scalar("built_in_potential", potential, {"x": axis}).value == pytest.approx(
+        0.9
+    )

@@ -141,6 +141,10 @@ class FrequencyStudy(_StudyModel):
 
 class TransientStudy(_StudyModel):
     kind: Literal["transient"]
+    contact: str
+    waveform: Literal["step", "ramp"]
+    initial_voltage: QuantityValue
+    final_voltage: QuantityValue
     start: QuantityValue
     stop: QuantityValue
     initial_step: QuantityValue
@@ -151,6 +155,11 @@ class TransientStudy(_StudyModel):
     @classmethod
     def require_time(cls, value: QuantityValue) -> QuantityValue:
         return value.require("s", "time")
+
+    @field_validator("initial_voltage", "final_voltage")
+    @classmethod
+    def require_voltage(cls, value: QuantityValue) -> QuantityValue:
+        return value.require("V", "voltage")
 
     @model_validator(mode="after")
     def validate_schedule(self) -> Self:

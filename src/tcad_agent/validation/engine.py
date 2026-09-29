@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 
 from tcad_agent.domain.models import EquilibriumStudy, ExperimentSpec, Observable
+from tcad_agent.domain.profiles import FixedChargeProfile
+from tcad_agent.domain.studies import DCPointsStudy, DCStudy, expand_study_points
 from tcad_agent.recovery.models import FailureKind, FailureRecord
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.analytical import built_in_potential_reference
@@ -16,7 +18,7 @@ from tcad_agent.validation.models import (
     ValidationReport,
     ValidationStatus,
 )
-from tcad_agent.validation.physics import physics_checks
+from tcad_agent.validation.physics import band_checks, physics_checks, recombination_checks
 
 
 class ValidationEngine:
@@ -27,6 +29,8 @@ class ValidationEngine:
         equilibrium_current_atol: float = 1e-6,
         built_in_potential_rtol: float = 0.10,
         built_in_potential_atol: float = 0.02,
+        contact_charge_rtol: float = 0.03,
+        contact_charge_atol: float = 1e-10,
     ) -> None:
         tolerances = (
             current_rtol,
@@ -34,6 +38,8 @@ class ValidationEngine:
             equilibrium_current_atol,
             built_in_potential_rtol,
             built_in_potential_atol,
+            contact_charge_rtol,
+            contact_charge_atol,
         )
         if any(value < 0 for value in tolerances):
             raise ValueError("validation tolerances must be nonnegative")
@@ -42,6 +48,8 @@ class ValidationEngine:
         self.equilibrium_current_atol = equilibrium_current_atol
         self.built_in_potential_rtol = built_in_potential_rtol
         self.built_in_potential_atol = built_in_potential_atol
+        self.contact_charge_rtol = contact_charge_rtol
+        self.contact_charge_atol = contact_charge_atol
 
     def validate(
         self,
@@ -117,21 +125,9 @@ class ValidationEngine:
         checks.extend(dataset_checks(result))
         checks.extend(convergence_checks(result))
         checks.extend(physics_checks(result))
-        monotonic = True
-        checks.append(
-            self._check(
-                "monotonic-bias",
-                "numerical",
-                monotonic,
-                "monotonic" if monotonic else "non-monotonic",
-                "monotonic",
-                (
-                    "Bias points preserve researcher order; directional constraints "
-                    "are study-specific."
-                ),
-                evidence_paths=("result.bias_points[*].bias_v",),
-            )
-        )
+        checks.extend(band_checks(result))
+        checks.extend(recombination_checks(result))
+        checks.append(self._requested_study_order(result, spec))
         max_imbalance, max_limit = self._current_imbalance(result)
         checks.append(
             self._check(
@@ -163,6 +159,7 @@ class ValidationEngine:
         )
         if spec is not None:
             checks.append(self._requested_observables_check(result, spec))
+            checks.append(self._contact_charge_balance(result, spec))
         if spec is not None and isinstance(spec.study, EquilibriumStudy):
             checks.extend(self._equilibrium_checks(result, spec))
         if require_provenance:
@@ -184,6 +181,39 @@ class ValidationEngine:
         elif any(check.status == "warning" for check in checks):
             overall = "warning"
         return ValidationReport(overall=overall, checks=tuple(checks))
+
+    @staticmethod
+    def _requested_study_order(
+        result: CanonicalResult, spec: ExperimentSpec | None
+    ) -> ValidationCheck:
+        if spec is None or not isinstance(spec.study, DCStudy | DCPointsStudy):
+            return ValidationCheck(
+                id="requested-study-order",
+                level="numerical",
+                status="not_applicable",
+                message="An approved DC schedule is required for order validation.",
+                evidence_origin="configured",
+                evidence_paths=("experiment.study", "result.bias_points"),
+            )
+        expected = tuple(value.to("V") for value in expand_study_points(spec.study))
+        measured = tuple(point.bias_v for point in result.bias_points)
+        matches = len(expected) == len(measured) and all(
+            math.isclose(left, right, rel_tol=1e-12, abs_tol=1e-15)
+            for left, right in zip(expected, measured, strict=True)
+        )
+        return ValidationCheck(
+            id="requested-study-order",
+            level="numerical",
+            status="passed" if matches else "failed",
+            measured_value=str(measured),
+            limit=str(expected),
+            message=(
+                "Returned DC points must preserve the exact approved order, including "
+                "reverse or bidirectional schedules."
+            ),
+            evidence_origin="derived",
+            evidence_paths=("experiment.study", "result.bias_points[*].bias_v"),
+        )
 
     def classify_failures(
         self,
@@ -285,6 +315,17 @@ class ValidationEngine:
                 )
                 if not complete_charge:
                     missing.append(observable.value)
+            elif observable in {
+                Observable.TERMINAL_ELECTRON_CURRENT,
+                Observable.TERMINAL_HOLE_CURRENT,
+            }:
+                prefix = f"{observable.value}__"
+                complete_components = bool(result.terminals) and all(
+                    f"{prefix}{terminal}" in result.datasets
+                    for terminal in result.terminals
+                )
+                if not complete_components:
+                    missing.append(observable.value)
             else:
                 dataset = result.datasets.get(observable.value)
                 available = observable.value in result.fields or (
@@ -384,6 +425,77 @@ class ValidationEngine:
             )
         )
         return tuple(checks)
+
+    def _contact_charge_balance(
+        self,
+        result: CanonicalResult,
+        spec: ExperimentSpec,
+    ) -> ValidationCheck:
+        if any(region.material == "silicon" for region in spec.regions):
+            return ValidationCheck(
+                id="contact-charge-balance",
+                level="physical",
+                status="not_applicable",
+                message=(
+                    "Bulk semiconductor charge requires a volume integral before "
+                    "terminal charge balance can be evaluated."
+                ),
+                evidence_origin="configured",
+                evidence_paths=("experiment.regions",),
+            )
+        if not result.operating_points or any(
+            not point.terminal_charges_c_per_m2 for point in result.operating_points
+        ):
+            return ValidationCheck(
+                id="contact-charge-balance",
+                level="physical",
+                status="not_applicable",
+                message="Canonical terminal-charge values are unavailable.",
+                evidence_paths=("result.operating_points",),
+            )
+        elementary_charge = 1.602176634e-19
+        configured_sheet_charge = elementary_charge * sum(
+            interface.fixed_charge_density.to("m^-2")
+            for interface in spec.interfaces
+            if interface.fixed_charge_density is not None
+        )
+        regions = {region.id: region for region in spec.regions}
+        configured_sheet_charge += sum(
+            profile.density.to("C/m^3")
+            * (
+                regions[profile.region].x1.to("m")
+                - regions[profile.region].x0.to("m")
+            )
+            for profile in spec.profiles
+            if isinstance(profile, FixedChargeProfile)
+        )
+        errors = tuple(
+            abs(
+                sum(point.terminal_charges_c_per_m2.values())
+                - configured_sheet_charge
+            )
+            for point in result.operating_points
+            if point.state == "converged"
+        )
+        maximum_error = max(errors, default=math.inf)
+        limit = self.contact_charge_atol + self.contact_charge_rtol * abs(
+            configured_sheet_charge
+        )
+        return self._check(
+            "contact-charge-balance",
+            "physical",
+            maximum_error <= limit,
+            maximum_error,
+            limit,
+            (
+                "Terminal displacement charge must balance configured dielectric "
+                "interface sheet charge."
+            ),
+            evidence_paths=(
+                "experiment.interfaces[*].fixed_charge_density",
+                "result.operating_points[*].terminal_charges_c_per_m2",
+            ),
+        )
 
     def _current_imbalance(self, result: CanonicalResult) -> tuple[float, float]:
         worst_imbalance = 0.0

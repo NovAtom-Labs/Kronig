@@ -12,20 +12,19 @@
 
 ## Execution outcome
 
-Implemented and verified in this branch: typed evidence-gated capabilities; generic silicon and
-silicon-dioxide region stacks; constant, linear, Gaussian, error-function, and tabulated profiles;
-reviewed ohmic and ideal-gate contacts; equilibrium, exact-point, fixed-range, adaptive, and
-bidirectional DC execution; terminal current and charge; quasi-static capacitance density;
-bias-indexed spatial observables with failed-point masks; deterministic validation; a generic
-interactive Results Workbench; curated local knowledge; natural-language evaluation cases; and
-live Bedrock intake and agent workflows.
+Implemented and verified in this branch: typed evidence-gated capabilities; generic silicon,
+silicon-dioxide, and researcher-parameterized dielectric stacks; the complete registered profile
+set; fixed bulk and interface charge; ohmic, electrostatic gate, dielectric work-function, and
+insulating boundaries; equilibrium, DC, AC, frequency, transient step or ramp, temperature, and
+registered parameter studies; constant and Klaassen mobility; high-field saturation; SRH, Auger,
+and Slotboom narrowing; band and quasi-Fermi outputs; canonical complex current and admittance;
+solver configuration and event provenance; deterministic validation; and a dataset-driven Results
+Workbench with signed-log, overlays, contact markers, and CSV, SVG, or PNG export.
 
-The portable contract also defines AC, frequency, transient, temperature, and parameter studies.
-They remain deliberately disabled in the DEVSIM capability manifest because their runtime
-extraction and reference benchmarks are not complete. Metal work-function and Schottky contacts,
-Fermi statistics, Auger recombination, band-gap narrowing, fixed interface charge, and band or
-Fermi-level extraction are also refused by the reviewed DEVSIM adapter. These are recorded as
-scientific gates, not silently approximated features.
+Direct metal-semiconductor Schottky transport and coupled Fermi-Dirac drift diffusion remain
+tested research gates. Surface mobility, surface recombination, interface traps, transient pulses,
+and the remaining acceptance items recorded in
+`docs/testing/devsim-1d-expansion-acceptance.md` are not advertised without complete benchmarks.
 
 ## Global Constraints
 
@@ -252,8 +251,127 @@ scientific gates, not silently approximated features.
 - Consumes: all earlier tasks.
 - Produces: reviewed, reproducible branch ready for researcher testing.
 
-- [ ] Run Ruff, strict mypy, complete Python, JavaScript and desktop suites.
-- [ ] Run dependency synchronization, diff hygiene, credential scan and named-device branch scan.
-- [ ] Run real DEVSIM reference cases and opt-in live Bedrock acceptance.
-- [ ] Review the complete branch against the spec, repair Critical and Important findings test-first, and rerun everything.
-- [ ] Record exact capabilities, test evidence, remaining scientific boundaries and branch state without pushing remotely.
+- [x] Run Ruff, strict mypy, complete Python, JavaScript and desktop suites.
+- [x] Run dependency synchronization, diff hygiene, credential scan and named-device branch scan.
+- [x] Run real DEVSIM reference cases and opt-in live Bedrock acceptance.
+- [x] Review the complete branch against the spec, repair Critical and Important findings test-first, and rerun everything.
+- [x] Record exact capabilities, test evidence, remaining scientific boundaries and branch state without pushing remotely.
+
+### Task 10: Reviewed semiconductor energy and recombination models
+
+**Files:**
+- Modify: `src/tcad_agent/domain/models.py`
+- Modify: `src/tcad_agent/adapters/devsim/payload.py`
+- Modify: `src/tcad_agent/adapters/devsim/compiler.py`
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Modify: `src/tcad_agent/physics/registry.py`
+- Test: `tests/unit/domain/test_physics_selection.py`
+- Test: `tests/unit/adapters/test_devsim_models.py`
+- Test: `tests/integration/test_devsim_advanced_physics.py`
+
+**Interfaces:**
+- Consumes: simulator-neutral model identifiers and explicit parameter values.
+- Produces: reviewed band-energy, Fermi-level, Auger and band-gap-narrowing datasets with provenance.
+
+- [x] Write failing contract and payload tests for typed model parameters and advanced observable dependencies.
+- [x] Add reviewed silicon material-energy parameters and allowlisted model equations inside the DEVSIM adapter.
+- [x] Implement conduction-band, valence-band and equilibrium or quasi-Fermi extraction from solved canonical state.
+- [x] Implement Auger and Slotboom band-gap narrowing with explicit parameter provenance and analytic checks.
+- [x] Run real equilibrium and biased reference cases.
+
+### Task 11: Fixed interface charge and reviewed work-function boundaries
+
+**Files:**
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Modify: `src/tcad_agent/adapters/devsim/manifest.yaml`
+- Modify: `src/tcad_agent/capabilities/service.py`
+- Test: `tests/integration/test_devsim_interface_charge.py`
+- Test: `tests/integration/test_devsim_work_function.py`
+
+**Interfaces:**
+- Consumes: portable interface sheet charge and contact work function.
+- Produces: displacement-jump interface equations and metal-gate flat-band offsets without device-name branches.
+
+- [x] Write failing charge-sheet and work-function benchmark tests.
+- [x] Implement fixed interface charge with verified sign and unit conversion.
+- [x] Implement work-function electrostatic boundaries for reviewed material-contact combinations.
+- [x] Keep direct metal-semiconductor Schottky transport separately gated until its carrier boundary is benchmarked.
+- [x] Run mesh-refinement and zero-charge or zero-offset reduction checks.
+
+### Task 12: Small-signal AC and frequency-domain execution
+
+**Files:**
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Modify: `src/tcad_agent/adapters/devsim/compiler.py`
+- Modify: `src/tcad_agent/adapters/devsim/manifest.yaml`
+- Test: `tests/integration/test_devsim_ac.py`
+- Test: `tests/integration/test_devsim_frequency.py`
+
+**Interfaces:**
+- Consumes: AC and frequency study payloads.
+- Produces: complex terminal admittance, capacitance and conductance datasets indexed by frequency.
+
+- [x] Write failing official-example-shaped AC and multi-frequency tests.
+- [x] Add circuit-coupled driven contacts and bounded small-signal solves.
+- [x] Normalize complex current and admittance response into frequency-axis canonical datasets.
+- [x] Validate low-frequency agreement against quasi-static charge differentiation.
+- [x] Run real DEVSIM AC and frequency benchmarks.
+
+### Task 13: Transient, temperature and registered parameter studies
+
+**Files:**
+- Modify: `src/tcad_agent/domain/studies.py`
+- Modify: `src/tcad_agent/adapters/devsim/payload.py`
+- Modify: `src/tcad_agent/adapters/devsim/runtime.py`
+- Modify: `src/tcad_agent/adapters/devsim/compiler.py`
+- Modify: `src/tcad_agent/adapters/devsim/manifest.yaml`
+- Test: `tests/integration/test_devsim_transient.py`
+- Test: `tests/integration/test_devsim_parameter_studies.py`
+
+**Interfaces:**
+- Consumes: bounded time schedules and allowlisted sweep targets.
+- Produces: time, temperature or parameter-indexed terminal and spatial datasets.
+
+- [x] Write failing tests for explicit transient drive, temperature sweeps and registered parameter targets.
+- [x] Implement circuit-driven transient schedules with bounded steps and solver events.
+- [x] Rebuild temperature-dependent model state for every temperature point.
+- [x] Add an allowlisted parameter-target registry instead of arbitrary payload paths.
+- [x] Normalize all study axes and run real DEVSIM benchmarks.
+
+### Task 14: Degenerate statistics and Schottky transport research gate
+
+**Files:**
+- Modify only after the equations and benchmark sources are recorded under `knowledge-sources/curated/`.
+- Test: `tests/integration/test_devsim_fermi_statistics.py`
+- Test: `tests/integration/test_devsim_schottky.py`
+
+**Interfaces:**
+- Consumes: explicit contact and statistics selections.
+- Produces: full coupled Fermi drift-diffusion and thermionic Schottky boundaries only if benchmarked.
+
+- [ ] Record complete equations, derivatives, sign conventions, applicability and parameter sources.
+- [ ] Write failing analytic and reference tests before enabling either capability.
+- [ ] Implement generalized Fermi transport and Schottky carrier flux without reusing Boltzmann or ohmic approximations.
+- [ ] Enable each capability independently only after its full reference benchmark passes.
+
+### Task 15: Capability integration, prompting, viewer and final verification
+
+**Files:**
+- Modify: `src/tcad_agent/adapters/devsim/manifest.yaml`
+- Modify: `src/tcad_agent/physics/registry.py`
+- Modify: `knowledge-sources/manifests/sources.yaml`
+- Modify: `README.md`
+- Modify: `docs/architecture.md`
+- Modify tests and evaluation cases required by enabled capabilities.
+
+**Interfaces:**
+- Consumes: every newly reviewed runtime path.
+- Produces: truthful preprocessing, visualization, validation and documented researcher workflows.
+
+- [x] Project every enabled capability into prompt preparation and clarification.
+- [x] Verify generic viewer discovery for band, complex-frequency, time, temperature and parameter datasets.
+- [x] Run natural researcher prompts through live Bedrock and real DEVSIM without schema-tuned wording.
+- [x] Run Ruff, strict mypy, complete Python, JavaScript and desktop suites plus credential and device-name scans.
+- [x] Record exact enabled scope and any remaining scientific research gate without claiming approximation as support.
+
+Live verification found and repaired two additional integration defects. The preparation gateway now safely reconciles a model-mislabeled evidence origin only when the exact value is present in researcher text. The TCAD tool exposes the authoritative `ExperimentSpec` JSON Schema so the agent does not guess the portable contract or delegate schema discovery. The DEVSIM adapter also maps public contact identifiers to expression-safe internal symbols while preserving public names in canonical results.

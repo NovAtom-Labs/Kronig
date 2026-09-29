@@ -7,10 +7,47 @@ strict numeric and identifier contract produced by the adapter compiler.
 from __future__ import annotations
 
 import json
+import math
+import subprocess
 import sys
+import tempfile
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
+
+NATIVE_MODEL_NAMES = {
+    "potential": "Potential",
+    "electric_field": "ElectricField",
+    "electrostatic_flux": "PotentialEdgeFlux",
+    "fixed_charge_density": "FixedBulkCharge",
+    "electron_density": "Electrons",
+    "hole_density": "Holes",
+    "charge_density": "derived:ElectronCharge*(Holes-Electrons+NetDoping)",
+    "net_doping": "NetDoping",
+    "donor_concentration": "PhysicalDonors",
+    "acceptor_concentration": "PhysicalAcceptors",
+    "electron_current_density": "ElectronCurrent",
+    "hole_current_density": "HoleCurrent",
+    "total_current_density": "derived:ElectronCurrent+HoleCurrent",
+    "electron_mobility": "selected electron mobility model",
+    "hole_mobility": "selected hole mobility model",
+    "srh_recombination_rate": "USRH",
+    "auger_recombination_rate": "UAuger",
+    "recombination_rate": "TotalRecombination",
+    "total_recombination_rate": "TotalRecombination",
+    "electron_generation_rate": "NetCarrierGeneration",
+    "hole_generation_rate": "NetCarrierGeneration",
+    "conduction_band": "ConductionBandEnergy",
+    "valence_band": "ValenceBandEnergy",
+    "intrinsic_energy": "IntrinsicEnergy",
+    "fermi_level": "FermiLevelEnergy",
+    "electron_quasi_fermi_level": "ElectronQuasiFermiEnergy",
+    "hole_quasi_fermi_level": "HoleQuasiFermiEnergy",
+    "electron_affinity": "ElectronAffinityEnergy",
+    "band_gap": "MaterialBandGap",
+    "band_gap_narrowing": "BandGapNarrowing",
+    "effective_intrinsic_carrier_concentration": "EffectiveIntrinsicDensity",
+}
 
 
 def _boundary_tag(index: int, count: int) -> str:
@@ -21,45 +58,73 @@ def _boundary_tag(index: int, count: int) -> str:
     return f"boundary_{index}"
 
 
+def _backend_contact_id(contact: dict[str, Any]) -> str:
+    """Return an expression-safe DEVSIM identifier for a public contact id."""
+    return str(contact.get("backend_id") or contact["id"])
+
+
+def _backend_contact_for_id(payload: dict[str, Any], contact_id: str) -> str:
+    contact = next(
+        item for item in payload["contacts"] if item["id"] == contact_id
+    )
+    return _backend_contact_id(contact)
+
+
 def _profile_expression(profile: dict[str, Any], region: dict[str, Any]) -> str:
     kind = profile["kind"]
     if kind == "constant":
-        return f"{profile['value_cm3']:.17g}"
+        return f"{profile['value_cm3']:.17e}"
+    if kind == "fixed_charge":
+        return f"{profile['density_c_cm3']:.17e}"
     if kind == "linear":
         width = region["x1_cm"] - region["x0_cm"]
         delta = profile["end_value_cm3"] - profile["start_value_cm3"]
         return (
-            f"{profile['start_value_cm3']:.17g}+"
-            f"((x-{region['x0_cm']:.17g})/{width:.17g})*{delta:.17g}"
+            f"{profile['start_value_cm3']:.17e}+"
+            f"((x-{region['x0_cm']:.17e})/{width:.17e})*{delta:.17e}"
         )
     if kind == "gaussian":
         return (
-            f"{profile['peak_cm3']:.17g}*exp(-0.5*((x-"
-            f"{profile['center_cm']:.17g})/{profile['standard_deviation_cm']:.17g})^2)"
+            f"{profile['peak_cm3']:.17e}*exp(-0.5*((x-"
+            f"{profile['center_cm']:.17e})/"
+            f"{profile['standard_deviation_cm']:.17e})^2)"
         )
     if kind == "error_function":
         argument = (
-            f"((x-{profile['junction_position_cm']:.17g})/"
-            f"{profile['characteristic_length_cm']:.17g})"
+            f"((x-{profile['junction_position_cm']:.17e})/"
+            f"{profile['characteristic_length_cm']:.17e})"
         )
         fraction = f"0.5*erfc{argument}"
         if profile["orientation"] == "increasing_x":
             fraction = f"(1-({fraction}))"
-        return f"{profile['surface_value_cm3']:.17g}*({fraction})"
+        return f"{profile['surface_value_cm3']:.17e}*({fraction})"
     if kind == "tabulated":
         positions = profile["positions_cm"]
         values = profile["values_cm3"]
-        expression = f"{values[-1]:.17g}"
+        expression = f"{values[-1]:.17e}"
         for index in range(len(positions) - 2, -1, -1):
             x0, x1 = positions[index], positions[index + 1]
             y0, y1 = values[index], values[index + 1]
             if profile.get("interpolation", "linear") == "nearest":
                 boundary = (x0 + x1) / 2
-                segment = f"{y0:.17g}"
+                segment = f"{y0:.17e}"
             else:
                 boundary = x1
-                segment = f"{y0:.17g}+(x-{x0:.17g})*{((y1-y0)/(x1-x0)):.17g}"
-            expression = f"ifelse(x < {boundary:.17g}, {segment}, {expression})"
+                segment = (
+                    f"{y0:.17e}+(x-{x0:.17e})*"
+                    f"{((y1-y0)/(x1-x0)):.17e}"
+                )
+            expression = f"ifelse(x < {boundary:.17e}, {segment}, {expression})"
+        return expression
+    if kind == "piecewise_constant":
+        boundaries = profile["boundaries_cm"]
+        values = profile["values_cm3"]
+        expression = f"{values[-1]:.17e}"
+        for index in range(len(values) - 2, -1, -1):
+            expression = (
+                f"ifelse(x < {boundaries[index + 1]:.17e}, "
+                f"{values[index]:.17e}, {expression})"
+            )
         return expression
     raise ValueError(f"unsupported profile kind: {kind}")
 
@@ -89,6 +154,10 @@ def _bias_points(study: dict[str, Any]) -> list[float]:
         return [0.0]
     if study["kind"] in {"dc", "dc_points"}:
         return [float(value) for value in study["biases_v"]]
+    if study["kind"] in {"ac", "frequency"}:
+        return [0.0]
+    if study["kind"] == "transient":
+        return [float(study["initial_voltage_v"])]
     raise ValueError(f"study is not implemented by this runtime: {study['kind']}")
 
 
@@ -108,6 +177,167 @@ def _append_field(
     target["values"].extend(values)
 
 
+def _run_payload_series(
+    payload: dict[str, Any],
+    *,
+    axis_id: str,
+    axis_kind: str,
+    axis_label: str,
+    axis_unit: str,
+    payload_field: str,
+) -> int:
+    """Run a registered parameter series in isolated DEVSIM processes."""
+
+    values = [float(value) for value in payload["study"]["values_si"]]
+    child_results: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix="temperature-series-", dir=Path.cwd()) as root:
+        root_path = Path(root)
+        for index, value in enumerate(values):
+            point_path = root_path / f"point-{index:04d}"
+            point_path.mkdir()
+            child_payload = json.loads(json.dumps(payload))
+            child_payload["physics"][payload_field] = value
+            child_payload["study"] = {"kind": "equilibrium"}
+            input_path = point_path / "input.json"
+            input_path.write_text(json.dumps(child_payload, sort_keys=True, indent=2))
+            completed = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), str(input_path)],
+                cwd=point_path,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"{axis_label} point {value:g} {axis_unit} failed: "
+                    f"{completed.stderr}"
+                )
+            child_results.append(
+                json.loads((point_path / "native_result.json").read_text())
+            )
+
+    reference = child_results[0]
+    study_points: list[dict[str, Any]] = []
+    field_sweeps: dict[str, dict[str, Any]] = {}
+    solver_events: list[dict[str, Any]] = []
+    for value, child in zip(values, child_results, strict=True):
+        solver_events.extend(
+            {**event, "study_axis": axis_id, "study_coordinate": value}
+            for event in child.get("solver_events", [])
+        )
+        point = child["bias_points"][0]
+        study_points.append(
+            {
+                "coordinate": value,
+                "converged": bool(point["converged"]),
+                "currents_a_per_cm2": point["currents_a_per_cm2"],
+                "electron_currents_a_per_cm2": point.get(
+                    "electron_currents_a_per_cm2", {}
+                ),
+                "hole_currents_a_per_cm2": point.get(
+                    "hole_currents_a_per_cm2", {}
+                ),
+                "charges_c_per_cm2": point["charges_c_per_cm2"],
+                "attempts": point.get("attempts", 1),
+                "message": point.get("message"),
+            }
+        )
+        for name, field in child["fields"].items():
+            target = field_sweeps.setdefault(
+                name,
+                {
+                    "positions_cm": field["positions_cm"],
+                    "values": [],
+                    "validity": [],
+                    "unit": field["unit"],
+                    "centering": field["centering"],
+                },
+            )
+            if (
+                target["positions_cm"] != field["positions_cm"]
+                or target["unit"] != field["unit"]
+                or target["centering"] != field["centering"]
+            ):
+                raise ValueError(f"field topology changed during {axis_label}: {name}")
+            target["values"].extend(field["values"])
+            target["validity"].extend(
+                [bool(point["converged"])] * len(field["values"])
+            )
+    combined = {
+        "schema_version": "2.0",
+        "simulator_version": reference["simulator_version"],
+        "status": "completed",
+        "terminals": reference["terminals"],
+        "contact_areas_m2": reference.get("contact_areas_m2", {}),
+        "interface_charge_densities_c_per_cm2": reference.get(
+            "interface_charge_densities_c_per_cm2", {}
+        ),
+        "bias_points": [],
+        "fields": reference["fields"],
+        "field_sweeps": {},
+        "frequency_points": [],
+        "ac_contact": None,
+        "study_axis": {
+            "id": axis_id,
+            "kind": axis_kind,
+            "label": axis_label,
+            "unit": axis_unit,
+            "values": values,
+        },
+        "study_points": study_points,
+        "study_field_sweeps": field_sweeps,
+        "requested_observables": payload["observables"],
+        "sign_convention": payload["sign_convention"],
+        "parameter_set_id": reference.get("parameter_set_id"),
+        "parameter_sources": reference.get("parameter_sources", {}),
+        "solver_configuration": reference.get("solver_configuration", {}),
+        "solver_events": solver_events,
+        "native_model_names": reference.get("native_model_names", {}),
+        "regions": reference.get("regions", []),
+        "interfaces": reference.get("interfaces", []),
+    }
+    Path("native_result.json").write_text(
+        json.dumps(combined, sort_keys=True, indent=2)
+    )
+    return 0
+
+
+def _run_temperature_series(payload: dict[str, Any]) -> int:
+    return _run_payload_series(
+        payload,
+        axis_id="temperature",
+        axis_kind="temperature",
+        axis_label="Temperature",
+        axis_unit="K",
+        payload_field="temperature_k",
+    )
+
+
+def _run_parameter_series(payload: dict[str, Any]) -> int:
+    runtime_fields = {
+        "physics.parameters.electron_lifetime": "electron_lifetime_s",
+        "physics.parameters.hole_lifetime": "hole_lifetime_s",
+        "physics.parameters.auger_electron_coefficient": "auger_electron_cm6_s",
+        "physics.parameters.auger_hole_coefficient": "auger_hole_cm6_s",
+        "physics.parameters.bgn_reference_energy": "bgn_reference_energy_ev",
+        "physics.parameters.bgn_reference_density": "bgn_reference_density_cm3",
+    }
+    study = payload["study"]
+    parameter_path = str(study["parameter_path"])
+    payload_field = runtime_fields.get(parameter_path)
+    if payload_field is None:
+        raise ValueError(f"unregistered parameter sweep target: {parameter_path}")
+    return _run_payload_series(
+        payload,
+        axis_id="parameter",
+        axis_kind="parameter",
+        axis_label=parameter_path,
+        axis_unit=str(study["unit"]),
+        payload_field=payload_field,
+    )
+
+
 def main() -> int:
     import devsim  # type: ignore[import-untyped]
     from devsim import (
@@ -115,9 +345,14 @@ def main() -> int:
         add_1d_interface,
         add_1d_mesh_line,
         add_1d_region,
+        circuit_alter,
+        circuit_element,
+        contact_equation,
         create_1d_mesh,
         create_device,
+        equation,
         finalize_mesh,
+        get_circuit_node_value,
         get_contact_charge,
         get_contact_current,
         get_edge_model_values,
@@ -128,9 +363,17 @@ def main() -> int:
         set_parameter,
         solve,
     )
+    from devsim.python_packages.Klaassen import (  # type: ignore[import-untyped]
+        Klaassen_Mobility,
+        Set_Mobility_Parameters,
+    )
     from devsim.python_packages.model_create import (  # type: ignore[import-untyped]
+        CreateContactNodeModel,
+        CreateContactNodeModelDerivative,
         CreateContinuousInterfaceModel,
+        CreateEdgeModel,
         CreateNodeModel,
+        CreateNodeModelDerivative,
         CreateSolution,
     )
     from devsim.python_packages.simple_physics import (  # type: ignore[import-untyped]
@@ -142,6 +385,7 @@ def main() -> int:
         CreateSiliconPotentialOnly,
         CreateSiliconPotentialOnlyContact,
         GetContactBiasName,
+        GetContactNodeModelName,
         SetOxideParameters,
         SetSiliconParameters,
     )
@@ -150,20 +394,43 @@ def main() -> int:
     payload = json.loads(payload_path.read_text())
     if payload.get("schema_version") != "2.0":
         raise ValueError("unsupported DEVSIM payload schema")
-    if any(
-        interface.get("fixed_charge_cm2") not in {None, 0.0}
-        for interface in payload["interfaces"]
-    ):
-        raise ValueError("fixed interface charge is not reviewed in this runtime")
-    if any(
-        contact["kind"] == "metal_work_function" for contact in payload["contacts"]
-    ):
-        raise ValueError("metal work-function boundary is not reviewed in this runtime")
-
+    if payload["study"]["kind"] == "temperature":
+        return _run_temperature_series(payload)
+    if payload["study"]["kind"] == "parameter":
+        return _run_parameter_series(payload)
     device = "novatom_device"
     mesh = "novatom_mesh"
     regions = payload["regions"]
+    study = payload["study"]
+    solver_events: list[dict[str, Any]] = []
+    is_ac = study["kind"] in {"ac", "frequency"}
+    is_transient = study["kind"] == "transient"
+    is_circuit_study = is_ac or is_transient
+    circuit_source_name = "V_STUDY"
+    contact_offsets = {
+        contact["id"]: float(contact.get("voltage_offset_v", 0.0))
+        for contact in payload["contacts"]
+    }
+    study_backend_contact = (
+        _backend_contact_for_id(payload, study["contact"])
+        if study.get("contact") is not None
+        else None
+    )
+    if is_circuit_study:
+        assert study_backend_contact is not None
+        initial_value = contact_offsets[study["contact"]] + float(
+            study.get("initial_voltage_v", 0.0)
+        )
+        circuit_element(
+            name=circuit_source_name,
+            n1=GetContactBiasName(study_backend_contact),
+            n2=0,
+            value=initial_value,
+            acreal=study.get("amplitude_v", 0.0),
+            acimag=0.0,
+        )
     create_1d_mesh(mesh=mesh)
+    mesh_lines: dict[float, dict[str, Any]] = {}
     for index in range(len(regions) + 1):
         if index == 0:
             position = regions[0]["x0_cm"]
@@ -177,16 +444,45 @@ def main() -> int:
                 regions[index - 1]["mesh_spacing_cm"],
                 regions[index]["mesh_spacing_cm"],
             )
+            interface_record = next(
+                (
+                    item
+                    for item in payload["interfaces"]
+                    if item["left_region"] == regions[index - 1]["id"]
+                    and item["right_region"] == regions[index]["id"]
+                ),
+                None,
+            )
+            if interface_record is not None and interface_record.get(
+                "mesh_spacing_cm"
+            ) is not None:
+                spacing = min(spacing, float(interface_record["mesh_spacing_cm"]))
+        mesh_lines[float(position)] = {
+            "spacing": float(spacing),
+            "tag": _boundary_tag(index, len(regions)),
+        }
+    for anchor_index, anchor in enumerate(payload.get("mesh_anchors", [])):
+        position = float(anchor["position_cm"])
+        spacing = float(anchor["spacing_cm"])
+        existing = mesh_lines.get(position)
+        if existing is None:
+            mesh_lines[position] = {
+                "spacing": spacing,
+                "tag": f"mesh_anchor_{anchor_index}",
+            }
+        else:
+            existing["spacing"] = min(float(existing["spacing"]), spacing)
+    for position, line in sorted(mesh_lines.items()):
         add_1d_mesh_line(
             mesh=mesh,
             pos=position,
-            ps=spacing,
-            tag=_boundary_tag(index, len(regions)),
+            ps=float(line["spacing"]),
+            tag=str(line["tag"]),
         )
     for contact in payload["contacts"]:
         add_1d_contact(
             mesh=mesh,
-            name=contact["id"],
+            name=_backend_contact_id(contact),
             tag=contact["location"],
             material="metal",
         )
@@ -195,7 +491,11 @@ def main() -> int:
         name = _interface_name(payload, left["id"], right["id"])
         add_1d_interface(mesh=mesh, name=name, tag=_boundary_tag(index, len(regions)))
         interface_names.append((name, left, right))
-    material_names = {"silicon": "Si", "silicon_dioxide": "Ox"}
+    material_names = {
+        "silicon": "Si",
+        "silicon_dioxide": "Ox",
+        "generic_dielectric": "Ox",
+    }
     for index, region in enumerate(regions):
         add_1d_region(
             mesh=mesh,
@@ -208,52 +508,347 @@ def main() -> int:
     create_device(mesh=mesh, device=device)
 
     temperature = payload["physics"]["temperature_k"]
+    selected_models = set(payload["physics"]["models"])
     by_region: dict[str, list[dict[str, Any]]] = {
         region["id"]: [] for region in regions
     }
     for profile in payload["profiles"]:
         by_region[profile["region"]].append(profile)
+    regions_with_fixed_bulk = {
+        region_name
+        for region_name, profiles in by_region.items()
+        if any(profile["kind"] == "fixed_charge" for profile in profiles)
+    }
     for region in regions:
         name = region["id"]
+        fixed_bulk_charge = [
+            _profile_expression(profile, region)
+            for profile in by_region[name]
+            if profile["kind"] == "fixed_charge"
+        ]
+        CreateNodeModel(
+            device,
+            name,
+            "FixedBulkCharge",
+            _sum_expressions(fixed_bulk_charge),
+        )
         if region["material"] == "silicon":
             SetSiliconParameters(device, name, temperature)
-            set_parameter(device=device, region=name, name="taun", value=1e-8)
-            set_parameter(device=device, region=name, name="taup", value=1e-8)
+            thermal_voltage = 8.617333262145e-5 * temperature
+            band_gap = 1.17 - 4.73e-4 * temperature * temperature / (
+                temperature + 636.0
+            )
+            density_scale = (temperature / 300.0) ** 1.5
+            conduction_density = (
+                payload["physics"]["effective_density_conduction_cm3"]
+                * density_scale
+            )
+            valence_density = (
+                payload["physics"]["effective_density_valence_cm3"]
+                * density_scale
+            )
+            intrinsic_density = math.sqrt(
+                conduction_density * valence_density
+            ) * math.exp(-band_gap / (2.0 * thermal_voltage))
+            for parameter, value in (
+                ("ElectronAffinity", payload["physics"]["electron_affinity_ev"]),
+                ("BandGap", band_gap),
+                (
+                    "EffectiveDensityConduction",
+                    conduction_density,
+                ),
+                (
+                    "EffectiveDensityValence",
+                    valence_density,
+                ),
+                ("taun", payload["physics"]["electron_lifetime_s"]),
+                ("taup", payload["physics"]["hole_lifetime_s"]),
+                ("AugerElectron", payload["physics"]["auger_electron_cm6_s"]),
+                ("AugerHole", payload["physics"]["auger_hole_cm6_s"]),
+                (
+                    "BGNReferenceEnergy",
+                    payload["physics"]["bgn_reference_energy_ev"],
+                ),
+                (
+                    "BGNReferenceDensity",
+                    payload["physics"]["bgn_reference_density_cm3"],
+                ),
+                ("n_i", intrinsic_density),
+                ("n1", intrinsic_density),
+                ("p1", intrinsic_density),
+                ("mu_n", 400.0 * (temperature / 300.0) ** -2.42),
+                ("mu_p", 200.0 * (temperature / 300.0) ** -2.20),
+                ("vsat_e", 1.0e7),
+                ("vsat_h", 1.0e7),
+            ):
+                set_parameter(device=device, region=name, name=parameter, value=value)
             donors = [
                 _profile_expression(profile, region)
                 for profile in by_region[name]
-                if profile["species"] == "donor"
+                if profile.get("species") == "donor"
             ]
             acceptors = [
                 _profile_expression(profile, region)
                 for profile in by_region[name]
-                if profile["species"] == "acceptor"
+                if profile.get("species") == "acceptor"
             ]
-            CreateNodeModel(device, name, "Donors", _sum_expressions(donors))
-            CreateNodeModel(device, name, "Acceptors", _sum_expressions(acceptors))
-            CreateNodeModel(device, name, "NetDoping", "Donors-Acceptors")
+            CreateNodeModel(
+                device, name, "PhysicalDonors", _sum_expressions(donors)
+            )
+            CreateNodeModel(
+                device, name, "PhysicalAcceptors", _sum_expressions(acceptors)
+            )
+            if "klaassen_mobility" in selected_models:
+                # The reviewed DEVSIM Klaassen implementation divides by each
+                # dopant species. A 1 cm^-3 computational floor is used only
+                # inside the mobility model; electrostatics and reported dopant
+                # fields retain the exact researcher-defined concentrations.
+                CreateNodeModel(device, name, "Donors", "max(PhysicalDonors, 1)")
+                CreateNodeModel(
+                    device, name, "Acceptors", "max(PhysicalAcceptors, 1)"
+                )
+            else:
+                CreateNodeModel(device, name, "Donors", "PhysicalDonors")
+                CreateNodeModel(device, name, "Acceptors", "PhysicalAcceptors")
+            CreateNodeModel(
+                device,
+                name,
+                "NetDoping",
+                "PhysicalDonors-PhysicalAcceptors",
+            )
             CreateSolution(device, name, "Potential")
             CreateSiliconPotentialOnly(device, name)
+            if name in regions_with_fixed_bulk:
+                CreateNodeModel(
+                    device,
+                    name,
+                    "PotentialChargeWithBulk",
+                    "PotentialIntrinsicCharge+FixedBulkCharge",
+                )
+                CreateNodeModelDerivative(
+                    device,
+                    name,
+                    "PotentialChargeWithBulk",
+                    "PotentialIntrinsicCharge+FixedBulkCharge",
+                    "Potential",
+                )
+                equation(
+                    device=device,
+                    region=name,
+                    name="PotentialEquation",
+                    variable_name="Potential",
+                    node_model="PotentialChargeWithBulk",
+                    edge_model="PotentialEdgeFlux",
+                    variable_update="default",
+                )
+            if "slotboom_bgn" in selected_models:
+                logarithm = "log((abs(NetDoping)+1)/BGNReferenceDensity)"
+                bgn = (
+                    f"BGNReferenceEnergy*({logarithm}+"
+                    f"pow(({logarithm})^2+0.5, 0.5))"
+                )
+                CreateNodeModel(device, name, "BandGapNarrowing", bgn)
+                CreateNodeModel(
+                    device,
+                    name,
+                    "EffectiveIntrinsicDensity",
+                    "n_i*exp(BandGapNarrowing/(2*V_t))",
+                )
+                electron_expression = "EffectiveIntrinsicDensity*exp(Potential/V_t)"
+                hole_expression = "EffectiveIntrinsicDensity*exp(-Potential/V_t)"
+                CreateNodeModel(device, name, "IntrinsicElectrons", electron_expression)
+                CreateNodeModelDerivative(
+                    device, name, "IntrinsicElectrons", electron_expression, "Potential"
+                )
+                CreateNodeModel(device, name, "IntrinsicHoles", hole_expression)
+                CreateNodeModelDerivative(
+                    device, name, "IntrinsicHoles", hole_expression, "Potential"
+                )
+            else:
+                CreateNodeModel(device, name, "BandGapNarrowing", "0")
+                CreateNodeModel(device, name, "EffectiveIntrinsicDensity", "n_i")
+            CreateNodeModel(device, name, "ElectronAffinityEnergy", "ElectronAffinity")
+            CreateNodeModel(device, name, "MaterialBandGap", "BandGap")
+            CreateNodeModel(
+                device,
+                name,
+                "EffectiveBandGap",
+                "BandGap-BandGapNarrowing",
+            )
         else:
             SetOxideParameters(device, name, temperature)
+            if region["material"] == "generic_dielectric":
+                set_parameter(
+                    device=device,
+                    region=name,
+                    name="Permittivity",
+                    value=float(region["relative_permittivity"]) * 8.85e-14,
+                )
             CreateSolution(device, name, "Potential")
             CreateOxidePotentialOnly(device, name)
+            if name in regions_with_fixed_bulk:
+                equation(
+                    device=device,
+                    region=name,
+                    name="PotentialEquation",
+                    variable_name="Potential",
+                    node_model="FixedBulkCharge",
+                    edge_model="PotentialEdgeFlux",
+                    variable_update="default",
+                )
 
     for contact in payload["contacts"]:
         region = _contact_region(payload, contact["location"])
-        set_parameter(device=device, name=GetContactBiasName(contact["id"]), value=0.0)
+        circuit_driven = is_circuit_study and contact["id"] == study["contact"]
+        backend_contact = _backend_contact_id(contact)
+        if contact["kind"] == "insulating":
+            continue
+        if not circuit_driven:
+            set_parameter(
+                device=device,
+                name=GetContactBiasName(backend_contact),
+                value=contact_offsets[contact["id"]],
+            )
         if region["material"] == "silicon" and contact["kind"] == "ohmic":
-            CreateSiliconPotentialOnlyContact(device, region["id"], contact["id"])
+            CreateSiliconPotentialOnlyContact(
+                device,
+                region["id"],
+                backend_contact,
+                is_circuit=circuit_driven,
+            )
         elif (
-            region["material"] == "silicon_dioxide"
-            and contact["kind"] == "ideal_gate"
+            region["material"] in {"silicon_dioxide", "generic_dielectric"}
+            and contact["kind"] in {"ideal_gate", "metal_work_function"}
         ):
-            CreateOxideContact(device, region["id"], contact["id"])
+            CreateOxideContact(device, region["id"], backend_contact)
+            offset = 0.0
+            if contact["kind"] == "metal_work_function":
+                thermal_voltage = 8.617333262145e-5 * temperature
+                intrinsic_work_function = (
+                    payload["physics"]["electron_affinity_ev"]
+                    + 0.5 * payload["physics"]["band_gap_ev"]
+                    + 0.5
+                    * thermal_voltage
+                    * math.log(
+                        payload["physics"]["effective_density_conduction_cm3"]
+                        / payload["physics"]["effective_density_valence_cm3"]
+                    )
+                )
+                offset = intrinsic_work_function - contact["work_function_ev"]
+            if contact["kind"] == "metal_work_function" or circuit_driven:
+                model_name = GetContactNodeModelName(backend_contact)
+                model = (
+                    f"Potential-{GetContactBiasName(backend_contact)}-"
+                    f"{offset:.17g}"
+                )
+                CreateContactNodeModel(device, backend_contact, model_name, model)
+                CreateContactNodeModel(
+                    device,
+                    backend_contact,
+                    f"{model_name}:Potential",
+                    "1",
+                )
+                if circuit_driven:
+                    CreateContactNodeModelDerivative(
+                        device,
+                        backend_contact,
+                        model_name,
+                        model,
+                        GetContactBiasName(backend_contact),
+                    )
+                    contact_equation(
+                        device=device,
+                        contact=backend_contact,
+                        name="PotentialEquation",
+                        node_model=model_name,
+                        edge_charge_model="contactcharge_edge",
+                        circuit_node=GetContactBiasName(backend_contact),
+                    )
         else:
             raise ValueError("contact kind is incompatible with adjacent material")
     for interface, _left, _right in interface_names:
         CreateSiliconOxideInterface(device, interface)
-    solve(type="dc", absolute_error=1.0, relative_error=1e-6, maximum_iterations=80)
+
+    def apply_fixed_interface_charge(*, coupled_transport: bool) -> None:
+        for interface, left, _right in interface_names:
+            record = next(
+                (
+                    item
+                    for item in payload["interfaces"]
+                    if item["id"] == interface
+                ),
+                None,
+            )
+            if record is None:
+                continue
+            sheet_density = record.get("fixed_charge_cm2")
+            if sheet_density in {None, 0.0}:
+                continue
+            region = left["id"]
+            boundary = left["x1_cm"]
+            tolerance = max(left["mesh_spacing_cm"] * 1e-6, 1e-20)
+            interface_mask = (
+                f"ifelse(abs(x-{boundary:.17g}) < {tolerance:.17g}, 1, 0)"
+            )
+            CreateNodeModel(device, region, "FixedInterfaceMask", interface_mask)
+            fixed_charge = (
+                f"ElectronCharge*{float(sheet_density):.17e}/NodeVolume*"
+                "FixedInterfaceMask"
+            )
+            CreateNodeModel(
+                device, region, "FixedInterfaceChargeVolume", fixed_charge
+            )
+            base: str | None
+            if left["material"] == "silicon":
+                base = (
+                    "PotentialChargeWithBulk"
+                    if region in regions_with_fixed_bulk
+                    else (
+                        "PotentialNodeCharge"
+                        if coupled_transport
+                        else "PotentialIntrinsicCharge"
+                    )
+                )
+                update = "log_damp"
+            else:
+                base = (
+                    "FixedBulkCharge" if region in regions_with_fixed_bulk else None
+                )
+                update = "default"
+            combined = (
+                f"{base}+FixedInterfaceChargeVolume"
+                if base is not None
+                else "FixedInterfaceChargeVolume"
+            )
+            CreateNodeModel(device, region, "PotentialChargeWithInterface", combined)
+            CreateNodeModelDerivative(
+                device,
+                region,
+                "PotentialChargeWithInterface",
+                combined,
+                "Potential",
+            )
+            equation(
+                device=device,
+                region=region,
+                name="PotentialEquation",
+                variable_name="Potential",
+                node_model="PotentialChargeWithInterface",
+                edge_model="PotentialEdgeFlux",
+                variable_update=update,
+            )
+
+    apply_fixed_interface_charge(coupled_transport=False)
+    solver = payload["solver"]
+    solve(
+        type="dc",
+        absolute_error=float(solver["electrostatic_absolute_error"]),
+        relative_error=float(solver["relative_error"]),
+        maximum_iterations=int(solver["maximum_iterations"]),
+    )
+    solver_events.append(
+        {"phase": "poisson_initialization", "outcome": "converged", "attempt": 1}
+    )
 
     drift_diffusion = {
         "electron_continuity",
@@ -278,12 +873,155 @@ def main() -> int:
                 name="Holes",
                 init_from="IntrinsicHoles",
             )
-            CreateSiliconDriftDiffusion(device, name)
+            electron_mobility_model = "mu_n"
+            hole_mobility_model = "mu_p"
+            if "klaassen_mobility" in selected_models:
+                Set_Mobility_Parameters(device, name)
+                Klaassen_Mobility(device, name)
+                electron_mobility_model = "mu_bulk_e"
+                hole_mobility_model = "mu_bulk_h"
+            if "high_field_saturation" in selected_models:
+                electron_expression = (
+                    f"2*{electron_mobility_model}/"
+                    f"(1+pow(1+4*pow({electron_mobility_model}*"
+                    "abs(ElectricField)/vsat_e, 2), 0.5))"
+                )
+                hole_expression = (
+                    f"2*{hole_mobility_model}/"
+                    f"(1+pow(1+4*pow({hole_mobility_model}*"
+                    "abs(ElectricField)/vsat_h, 2), 0.5))"
+                )
+                CreateEdgeModel(
+                    device,
+                    name,
+                    "HighFieldElectronMobility",
+                    electron_expression,
+                )
+                CreateEdgeModel(
+                    device,
+                    name,
+                    "HighFieldHoleMobility",
+                    hole_expression,
+                )
+                electron_mobility_model = "HighFieldElectronMobility"
+                hole_mobility_model = "HighFieldHoleMobility"
+            CreateSiliconDriftDiffusion(
+                device,
+                name,
+                electron_mobility_model,
+                hole_mobility_model,
+            )
+            if name in regions_with_fixed_bulk:
+                potential_charge_with_bulk = "PotentialNodeCharge+FixedBulkCharge"
+                CreateNodeModel(
+                    device,
+                    name,
+                    "PotentialChargeWithBulk",
+                    potential_charge_with_bulk,
+                )
+                CreateNodeModelDerivative(
+                    device,
+                    name,
+                    "PotentialChargeWithBulk",
+                    potential_charge_with_bulk,
+                    "Potential",
+                    "Electrons",
+                    "Holes",
+                )
+                equation(
+                    device=device,
+                    region=name,
+                    name="PotentialEquation",
+                    variable_name="Potential",
+                    node_model="PotentialChargeWithBulk",
+                    edge_model="PotentialEdgeFlux",
+                    variable_update="log_damp",
+                )
+            auger_expression = "0"
+            if "auger" in selected_models:
+                auger_expression = (
+                    "(AugerElectron*Electrons+AugerHole*Holes)*"
+                    "(Electrons*Holes-EffectiveIntrinsicDensity^2)"
+                )
+            CreateNodeModel(device, name, "UAuger", auger_expression)
+            CreateNodeModelDerivative(
+                device, name, "UAuger", auger_expression, "Electrons", "Holes"
+            )
+            total_recombination = "USRH+UAuger"
+            CreateNodeModel(
+                device, name, "TotalRecombination", total_recombination
+            )
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "TotalRecombination",
+                total_recombination,
+                "Electrons",
+                "Holes",
+            )
+            CreateNodeModel(device, name, "NetCarrierGeneration", "-TotalRecombination")
+            electron_generation = "-ElectronCharge*TotalRecombination"
+            hole_generation = "ElectronCharge*TotalRecombination"
+            CreateNodeModel(device, name, "ElectronGeneration", electron_generation)
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "ElectronGeneration",
+                electron_generation,
+                "Electrons",
+                "Holes",
+            )
+            CreateNodeModel(device, name, "HoleGeneration", hole_generation)
+            CreateNodeModelDerivative(
+                device,
+                name,
+                "HoleGeneration",
+                hole_generation,
+                "Electrons",
+                "Holes",
+            )
+            intrinsic_energy = "-Potential"
+            conduction_band = (
+                "IntrinsicEnergy+0.5*(BandGap-BandGapNarrowing)+"
+                "0.5*V_t*log(EffectiveDensityConduction/EffectiveDensityValence)"
+            )
+            valence_band = (
+                "IntrinsicEnergy-0.5*(BandGap-BandGapNarrowing)+"
+                "0.5*V_t*log(EffectiveDensityConduction/EffectiveDensityValence)"
+            )
+            CreateNodeModel(device, name, "IntrinsicEnergy", intrinsic_energy)
+            CreateNodeModel(device, name, "ConductionBandEnergy", conduction_band)
+            CreateNodeModel(device, name, "ValenceBandEnergy", valence_band)
+            CreateNodeModel(
+                device,
+                name,
+                "ElectronQuasiFermiEnergy",
+                "ConductionBandEnergy+V_t*log(Electrons/EffectiveDensityConduction)",
+            )
+            CreateNodeModel(
+                device,
+                name,
+                "HoleQuasiFermiEnergy",
+                "ValenceBandEnergy-V_t*log(Holes/EffectiveDensityValence)",
+            )
+            CreateNodeModel(
+                device,
+                name,
+                "FermiLevelEnergy",
+                "0.5*(ElectronQuasiFermiEnergy+HoleQuasiFermiEnergy)",
+            )
         for contact in payload["contacts"]:
+            if contact["kind"] == "insulating":
+                continue
             region = _contact_region(payload, contact["location"])
             if region["material"] == "silicon" and contact["kind"] == "ohmic":
                 CreateSiliconDriftDiffusionAtContact(
-                    device, region["id"], contact["id"]
+                    device,
+                    region["id"],
+                    _backend_contact_id(contact),
+                    is_circuit=(
+                        is_circuit_study and contact["id"] == study["contact"]
+                    ),
                 )
         for interface, left, right in interface_names:
             if left["material"] == right["material"] == "silicon":
@@ -299,7 +1037,32 @@ def main() -> int:
                         interface_model=model,
                         type="continuous",
                     )
-        solve(type="dc", absolute_error=1e10, relative_error=1e-6, maximum_iterations=80)
+        apply_fixed_interface_charge(coupled_transport=True)
+        solve(
+            type="dc",
+            absolute_error=float(solver["carrier_absolute_error"]),
+            relative_error=float(solver["relative_error"]),
+            maximum_iterations=int(solver["maximum_iterations"]),
+        )
+        solver_events.append(
+            {"phase": "coupled_initialization", "outcome": "converged", "attempt": 1}
+        )
+    if is_transient:
+        solve(
+            type="transient_dc",
+            absolute_error=float(
+                solver[
+                    "carrier_absolute_error"
+                    if drift_diffusion
+                    else "electrostatic_absolute_error"
+                ]
+            ),
+            relative_error=float(solver["transient_initial_relative_error"]),
+            maximum_iterations=int(solver["maximum_iterations"]),
+        )
+        solver_events.append(
+            {"phase": "transient_initialization", "outcome": "converged", "attempt": 1}
+        )
 
     requested = set(payload["observables"])
 
@@ -339,12 +1102,77 @@ def main() -> int:
                     "V/cm",
                     "edge",
                 )
+            if "electrostatic_flux" in requested:
+                _append_field(
+                    fields,
+                    "electrostatic_flux",
+                    edge_positions,
+                    list(
+                        get_edge_model_values(
+                            device=device, region=name, name="PotentialEdgeFlux"
+                        )
+                    ),
+                    "C/cm^2",
+                    "edge",
+                )
+            if "fixed_charge_density" in requested:
+                _append_field(
+                    fields,
+                    "fixed_charge_density",
+                    node_positions,
+                    list(
+                        get_node_model_values(
+                            device=device, region=name, name="FixedBulkCharge"
+                        )
+                    ),
+                    "C/cm^3",
+                    "node",
+                )
             if region["material"] != "silicon":
                 continue
             model_outputs = {
                 "electron_density": ("Electrons", "cm^-3", "node"),
                 "hole_density": ("Holes", "cm^-3", "node"),
-                "recombination_rate": ("USRH", "cm^-3/s", "node"),
+                "recombination_rate": ("TotalRecombination", "cm^-3/s", "node"),
+                "srh_recombination_rate": ("USRH", "cm^-3/s", "node"),
+                "auger_recombination_rate": ("UAuger", "cm^-3/s", "node"),
+                "total_recombination_rate": (
+                    "TotalRecombination",
+                    "cm^-3/s",
+                    "node",
+                ),
+                "electron_generation_rate": (
+                    "NetCarrierGeneration",
+                    "cm^-3/s",
+                    "node",
+                ),
+                "hole_generation_rate": (
+                    "NetCarrierGeneration",
+                    "cm^-3/s",
+                    "node",
+                ),
+                "conduction_band": ("ConductionBandEnergy", "eV", "node"),
+                "valence_band": ("ValenceBandEnergy", "eV", "node"),
+                "intrinsic_energy": ("IntrinsicEnergy", "eV", "node"),
+                "electron_affinity": ("ElectronAffinityEnergy", "eV", "node"),
+                "band_gap": ("MaterialBandGap", "eV", "node"),
+                "band_gap_narrowing": ("BandGapNarrowing", "eV", "node"),
+                "effective_intrinsic_carrier_concentration": (
+                    "EffectiveIntrinsicDensity",
+                    "cm^-3",
+                    "node",
+                ),
+                "fermi_level": ("FermiLevelEnergy", "eV", "node"),
+                "electron_quasi_fermi_level": (
+                    "ElectronQuasiFermiEnergy",
+                    "eV",
+                    "node",
+                ),
+                "hole_quasi_fermi_level": (
+                    "HoleQuasiFermiEnergy",
+                    "eV",
+                    "node",
+                ),
                 "electron_current_density": ("ElectronCurrent", "A/cm^2", "edge"),
                 "hole_current_density": ("HoleCurrent", "A/cm^2", "edge"),
             }
@@ -368,9 +1196,27 @@ def main() -> int:
             doping = list(
                 get_node_model_values(device=device, region=name, name="NetDoping")
             )
-            _append_field(
-                fields, "net_doping", node_positions, doping, "cm^-3", "node"
-            )
+            if "net_doping" in requested:
+                _append_field(
+                    fields, "net_doping", node_positions, doping, "cm^-3", "node"
+                )
+            for output, native_name in (
+                ("donor_concentration", "PhysicalDonors"),
+                ("acceptor_concentration", "PhysicalAcceptors"),
+            ):
+                if output in requested:
+                    _append_field(
+                        fields,
+                        output,
+                        node_positions,
+                        list(
+                            get_node_model_values(
+                                device=device, region=name, name=native_name
+                            )
+                        ),
+                        "cm^-3",
+                        "node",
+                    )
             if drift_diffusion:
                 electrons = list(
                     get_node_model_values(
@@ -403,42 +1249,126 @@ def main() -> int:
                     ("hole_mobility", "mu_p"),
                 ):
                     if output in requested:
-                        mobility = float(
-                            get_parameter(device=device, region=name, name=parameter)
-                        )
+                        if "high_field_saturation" in selected_models:
+                            model = (
+                                "HighFieldElectronMobility"
+                                if output == "electron_mobility"
+                                else "HighFieldHoleMobility"
+                            )
+                            values = list(
+                                get_edge_model_values(
+                                    device=device, region=name, name=model
+                                )
+                            )
+                            positions = edge_positions
+                            centering = "edge"
+                        elif "klaassen_mobility" in selected_models:
+                            model = (
+                                "mu_bulk_e_Node"
+                                if output == "electron_mobility"
+                                else "mu_bulk_h_Node"
+                            )
+                            values = list(
+                                get_node_model_values(
+                                    device=device, region=name, name=model
+                                )
+                            )
+                            positions = node_positions
+                            centering = "node"
+                        else:
+                            mobility = float(
+                                get_parameter(
+                                    device=device, region=name, name=parameter
+                                )
+                            )
+                            values = [mobility] * len(node_positions)
+                            positions = node_positions
+                            centering = "node"
                         _append_field(
                             fields,
                             output,
-                            node_positions,
-                            [mobility] * len(node_positions),
+                            positions,
+                            values,
                             "cm^2/V/s",
-                            "node",
+                            centering,
                         )
+                if "total_current_density" in requested:
+                    electron_current = list(
+                        get_edge_model_values(
+                            device=device, region=name, name="ElectronCurrent"
+                        )
+                    )
+                    hole_current = list(
+                        get_edge_model_values(
+                            device=device, region=name, name="HoleCurrent"
+                        )
+                    )
+                    _append_field(
+                        fields,
+                        "total_current_density",
+                        edge_positions,
+                        [
+                            electron + hole
+                            for electron, hole in zip(
+                                electron_current, hole_current, strict=True
+                            )
+                        ],
+                        "A/cm^2",
+                        "edge",
+                    )
         return fields
 
-    requested_contact = payload["study"].get("contact")
+    requested_contact = (
+        None if is_circuit_study else payload["study"].get("contact")
+    )
     points: list[dict[str, Any]] = []
     field_samples: list[dict[str, Any]] = []
     current_bias = 0.0
+    dc_absolute_error = float(
+        solver[
+            "carrier_absolute_error"
+            if drift_diffusion
+            else "electrostatic_absolute_error"
+        ]
+    )
     for requested_bias in _bias_points(payload["study"]):
         bias = requested_bias
         converged = True
         attempts = 1
         message = None
         if requested_contact is not None:
+            assert study_backend_contact is not None
             set_parameter(
                 device=device,
-                name=GetContactBiasName(requested_contact),
-                value=bias,
+                name=GetContactBiasName(study_backend_contact),
+                value=bias + contact_offsets[requested_contact],
             )
             try:
                 solve(
                     type="dc",
-                    absolute_error=1e10,
-                    relative_error=1e-6,
-                    maximum_iterations=80,
+                    absolute_error=dc_absolute_error,
+                    relative_error=float(solver["relative_error"]),
+                    maximum_iterations=int(solver["maximum_iterations"]),
+                )
+                solver_events.append(
+                    {
+                        "phase": "requested_operating_point",
+                        "requested_bias_v": requested_bias,
+                        "attempted_bias_v": bias,
+                        "attempt": attempts,
+                        "outcome": "converged",
+                    }
                 )
             except Exception:
+                solver_events.append(
+                    {
+                        "phase": "requested_operating_point",
+                        "requested_bias_v": requested_bias,
+                        "attempted_bias_v": bias,
+                        "attempt": attempts,
+                        "outcome": "failed",
+                    }
+                )
                 converged = False
                 study = payload["study"]
                 if study.get("strategy") == "adaptive":
@@ -450,71 +1380,120 @@ def main() -> int:
                             break
                         set_parameter(
                             device=device,
-                            name=GetContactBiasName(requested_contact),
-                            value=midpoint,
+                            name=GetContactBiasName(study_backend_contact),
+                            value=midpoint + contact_offsets[requested_contact],
                         )
                         try:
                             solve(
                                 type="dc",
-                                absolute_error=1e10,
-                                relative_error=1e-6,
-                                maximum_iterations=80,
+                                absolute_error=dc_absolute_error,
+                                relative_error=float(solver["relative_error"]),
+                                maximum_iterations=int(solver["maximum_iterations"]),
                             )
                         except Exception:
+                            solver_events.append(
+                                {
+                                    "phase": "recovery_midpoint",
+                                    "requested_bias_v": requested_bias,
+                                    "attempted_bias_v": midpoint,
+                                    "attempt": attempts + 1,
+                                    "outcome": "failed",
+                                }
+                            )
                             right = midpoint
                             continue
+                        solver_events.append(
+                            {
+                                "phase": "recovery_midpoint",
+                                "requested_bias_v": requested_bias,
+                                "attempted_bias_v": midpoint,
+                                "attempt": attempts + 1,
+                                "outcome": "converged",
+                            }
+                        )
                         left = midpoint
                         set_parameter(
                             device=device,
-                            name=GetContactBiasName(requested_contact),
-                            value=requested_bias,
+                            name=GetContactBiasName(study_backend_contact),
+                            value=(
+                                requested_bias + contact_offsets[requested_contact]
+                            ),
                         )
                         attempts += 1
                         try:
                             solve(
                                 type="dc",
-                                absolute_error=1e10,
-                                relative_error=1e-6,
-                                maximum_iterations=80,
+                                absolute_error=dc_absolute_error,
+                                relative_error=float(solver["relative_error"]),
+                                maximum_iterations=int(solver["maximum_iterations"]),
                             )
                         except Exception:
+                            solver_events.append(
+                                {
+                                    "phase": "recovery_target_retry",
+                                    "requested_bias_v": requested_bias,
+                                    "attempted_bias_v": requested_bias,
+                                    "attempt": attempts,
+                                    "outcome": "failed",
+                                }
+                            )
                             continue
+                        solver_events.append(
+                            {
+                                "phase": "recovery_target_retry",
+                                "requested_bias_v": requested_bias,
+                                "attempted_bias_v": requested_bias,
+                                "attempt": attempts,
+                                "outcome": "converged",
+                            }
+                        )
                         converged = True
                         break
                 if not converged:
                     message = "nonlinear solve did not converge"
                     set_parameter(
                         device=device,
-                        name=GetContactBiasName(requested_contact),
-                        value=current_bias,
+                        name=GetContactBiasName(study_backend_contact),
+                        value=current_bias + contact_offsets[requested_contact],
                     )
                     solve(
                         type="dc",
-                        absolute_error=1e10,
-                        relative_error=1e-6,
-                        maximum_iterations=80,
+                        absolute_error=dc_absolute_error,
+                        relative_error=float(solver["relative_error"]),
+                        maximum_iterations=int(solver["maximum_iterations"]),
                     )
         if converged:
             current_bias = requested_bias
         currents: dict[str, float] = {}
+        electron_currents: dict[str, float] = {}
+        hole_currents: dict[str, float] = {}
         charges: dict[str, float] = {}
         for contact in payload["contacts"]:
+            if contact["kind"] == "insulating":
+                continue
             region = _contact_region(payload, contact["location"])
+            backend_contact = _backend_contact_id(contact)
             current = 0.0
+            electron_current = 0.0
+            hole_current = 0.0
             if drift_diffusion and region["material"] == "silicon":
-                current = get_contact_current(
+                electron_current = get_contact_current(
                     device=device,
-                    contact=contact["id"],
+                    contact=backend_contact,
                     equation="ElectronContinuityEquation",
-                ) + get_contact_current(
+                )
+                hole_current = get_contact_current(
                     device=device,
-                    contact=contact["id"],
+                    contact=backend_contact,
                     equation="HoleContinuityEquation",
                 )
+                current = electron_current + hole_current
             currents[contact["id"]] = current
+            electron_currents[contact["id"]] = electron_current
+            hole_currents[contact["id"]] = hole_current
             charges[contact["id"]] = get_contact_charge(
                 device=device,
-                contact=contact["id"],
+                contact=backend_contact,
                 equation="PotentialEquation",
             )
         points.append(
@@ -522,12 +1501,162 @@ def main() -> int:
                 "bias_v": bias,
                 "converged": converged,
                 "currents_a_per_cm2": currents,
+                "electron_currents_a_per_cm2": electron_currents,
+                "hole_currents_a_per_cm2": hole_currents,
                 "charges_c_per_cm2": charges,
                 "attempts": attempts,
                 "message": message,
             }
         )
         field_samples.append({"valid": converged, "fields": extract_fields()})
+
+    frequency_points: list[dict[str, float]] = []
+    if is_ac:
+        amplitude = float(study["amplitude_v"])
+        for frequency in study["frequencies_hz"]:
+            solve(type="ac", frequency=float(frequency))
+            solver_events.append(
+                {
+                    "phase": "small_signal_ac",
+                    "frequency_hz": float(frequency),
+                    "attempt": 1,
+                    "outcome": "converged",
+                }
+            )
+            source_current_real = float(
+                get_circuit_node_value(
+                    node=f"{circuit_source_name}.I", solution="ssac_real"
+                )
+            )
+            source_current_imag = float(
+                get_circuit_node_value(
+                    node=f"{circuit_source_name}.I", solution="ssac_imag"
+                )
+            )
+            admittance_real = -source_current_real / amplitude
+            admittance_imag = -source_current_imag / amplitude
+            frequency_points.append(
+                {
+                    "frequency_hz": float(frequency),
+                    "current_real_a_per_cm2": -source_current_real,
+                    "current_imag_a_per_cm2": -source_current_imag,
+                    "admittance_real_s_per_cm2": admittance_real,
+                    "admittance_imag_s_per_cm2": admittance_imag,
+                    "conductance_s_per_cm2": admittance_real,
+                    "capacitance_f_per_cm2": admittance_imag
+                    / (2.0 * math.pi * float(frequency)),
+                }
+            )
+
+    transient_points: list[dict[str, Any]] = []
+    transient_field_samples: list[dict[str, Any]] = []
+    if is_transient:
+        current_time = float(study["start_s"])
+        stop_time = float(study["stop_s"])
+        time_step = float(study["initial_step_s"])
+        maximum_step = float(study["maximum_step_s"])
+        steps = 0
+        while current_time < stop_time and steps < int(study["maximum_steps"]):
+            step = min(time_step, maximum_step, stop_time - current_time)
+            next_time = current_time + step
+            if study["waveform"] == "step":
+                source_voltage = float(study["final_voltage_v"])
+            else:
+                fraction = (next_time - float(study["start_s"])) / (
+                    stop_time - float(study["start_s"])
+                )
+                source_voltage = float(study["initial_voltage_v"]) + fraction * (
+                    float(study["final_voltage_v"])
+                    - float(study["initial_voltage_v"])
+                )
+            circuit_alter(
+                name=circuit_source_name,
+                value=source_voltage + contact_offsets[study["contact"]],
+            )
+            solve(
+                type="transient_bdf1",
+                absolute_error=float(
+                    solver[
+                        "carrier_absolute_error"
+                        if drift_diffusion
+                        else "electrostatic_absolute_error"
+                    ]
+                ),
+                relative_error=float(solver["transient_step_relative_error"]),
+                maximum_iterations=int(solver["maximum_iterations"]),
+                tdelta=step,
+                charge_error=1,
+            )
+            solver_events.append(
+                {
+                    "phase": "transient_step",
+                    "time_s": next_time,
+                    "step_s": step,
+                    "attempt": 1,
+                    "outcome": "converged",
+                }
+            )
+            transient_currents: dict[str, float] = {}
+            transient_electron_currents: dict[str, float] = {}
+            transient_hole_currents: dict[str, float] = {}
+            transient_charges: dict[str, float] = {}
+            for contact in payload["contacts"]:
+                if contact["kind"] == "insulating":
+                    continue
+                backend_contact = _backend_contact_id(contact)
+                if contact["id"] == study["contact"]:
+                    current = -float(
+                        get_circuit_node_value(
+                            node=f"{circuit_source_name}.I", solution="dcop"
+                        )
+                    )
+                    electron_current = 0.0
+                    hole_current = 0.0
+                else:
+                    region = _contact_region(payload, contact["location"])
+                    current = 0.0
+                    electron_current = 0.0
+                    hole_current = 0.0
+                    if drift_diffusion and region["material"] == "silicon":
+                        electron_current = get_contact_current(
+                            device=device,
+                            contact=backend_contact,
+                            equation="ElectronContinuityEquation",
+                        )
+                        hole_current = get_contact_current(
+                            device=device,
+                            contact=backend_contact,
+                            equation="HoleContinuityEquation",
+                        )
+                        current = electron_current + hole_current
+                transient_currents[contact["id"]] = current
+                transient_electron_currents[contact["id"]] = electron_current
+                transient_hole_currents[contact["id"]] = hole_current
+                transient_charges[contact["id"]] = get_contact_charge(
+                    device=device,
+                    contact=backend_contact,
+                    equation="PotentialEquation",
+                )
+            transient_points.append(
+                {
+                    "coordinate": next_time,
+                    "converged": True,
+                    "currents_a_per_cm2": transient_currents,
+                    "electron_currents_a_per_cm2": transient_electron_currents,
+                    "hole_currents_a_per_cm2": transient_hole_currents,
+                    "charges_c_per_cm2": transient_charges,
+                    "attempts": 1,
+                    "message": None,
+                }
+            )
+            transient_field_samples.append(
+                {"valid": True, "fields": extract_fields()}
+            )
+            current_time = next_time
+            time_step = min(maximum_step, time_step * 1.5)
+            steps += 1
+        if current_time < stop_time:
+            raise RuntimeError("transient study exhausted maximum_steps")
 
     fields = extract_fields()
     field_sweeps: dict[str, dict[str, Any]] = {}
@@ -552,14 +1681,94 @@ def main() -> int:
             "centering": field["centering"],
         }
 
+    transient_field_sweeps: dict[str, dict[str, Any]] = {}
+    if is_transient:
+        fields = transient_field_samples[-1]["fields"]
+        for name, field in fields.items():
+            transient_values: list[float] = []
+            transient_validity: list[bool] = []
+            for sample in transient_field_samples:
+                sampled = sample["fields"][name]
+                if sampled["positions_cm"] != field["positions_cm"]:
+                    raise ValueError(
+                        f"field topology changed during transient study: {name}"
+                    )
+                transient_values.extend(sampled["values"])
+                transient_validity.extend([True] * len(sampled["values"]))
+            transient_field_sweeps[name] = {
+                "positions_cm": field["positions_cm"],
+                "values": transient_values,
+                "validity": transient_validity,
+                "unit": field["unit"],
+                "centering": field["centering"],
+            }
+
     result = {
         "schema_version": "2.0",
         "simulator_version": devsim.__version__,
         "status": "completed",
-        "terminals": [contact["id"] for contact in payload["contacts"]],
+        "terminals": [
+            contact["id"]
+            for contact in payload["contacts"]
+            if contact["kind"] != "insulating"
+        ],
+        "contact_areas_m2": {
+            contact["id"]: contact.get("area_m2")
+            for contact in payload["contacts"]
+            if contact["kind"] != "insulating" and contact.get("area_m2") is not None
+        },
+        "interface_charge_densities_c_per_cm2": {
+            interface["id"]: 1.602176634e-19
+            * float(interface.get("fixed_charge_cm2") or 0.0)
+            for interface in payload["interfaces"]
+        },
+        "requested_observables": payload["observables"],
+        "sign_convention": payload["sign_convention"],
+        "parameter_set_id": payload["physics"]["parameter_set_id"],
+        "parameter_sources": payload["physics"].get("parameter_sources", {}),
+        "solver_configuration": payload["solver"],
+        "solver_events": solver_events,
+        "native_model_names": {
+            name: NATIVE_MODEL_NAMES[name]
+            for name in payload["observables"]
+            if name in NATIVE_MODEL_NAMES
+        },
+        "regions": [
+            {
+                "id": region["id"],
+                "material": region["material"],
+                "x0_cm": region["x0_cm"],
+                "x1_cm": region["x1_cm"],
+                "mesh_spacing_cm": region["mesh_spacing_cm"],
+            }
+            for region in regions
+        ],
+        "interfaces": [
+            {
+                "id": interface["id"],
+                "left_region": interface["left_region"],
+                "right_region": interface["right_region"],
+            }
+            for interface in payload["interfaces"]
+        ],
         "bias_points": points,
         "fields": fields,
         "field_sweeps": field_sweeps,
+        "frequency_points": frequency_points,
+        "ac_contact": study.get("contact") if is_ac else None,
+        "study_axis": (
+            {
+                "id": "time",
+                "kind": "time",
+                "label": "Time",
+                "unit": "s",
+                "values": [point["coordinate"] for point in transient_points],
+            }
+            if is_transient
+            else None
+        ),
+        "study_points": transient_points,
+        "study_field_sweeps": transient_field_sweeps,
     }
     Path("native_result.json").write_text(json.dumps(result, sort_keys=True, indent=2))
     return 0

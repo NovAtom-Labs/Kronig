@@ -77,6 +77,35 @@ def test_catalog_public_view_excludes_unreviewed_entries() -> None:
     assert public.capabilities[0].required_inputs[0].authority == "researcher"
 
 
+def test_typed_descriptor_preserves_execution_and_backend_constraints() -> None:
+    item = CapabilityDescriptor(
+        id="model.reviewed_transport",
+        category="model",
+        summary="Reviewed portable transport model",
+        maturity=CapabilityMaturity.REVIEWED,
+        evidence_refs=("official:devsim-2.9.1",),
+        supported_materials=("silicon",),
+        supported_interfaces=("continuity",),
+        supported_studies=("equilibrium", "dc"),
+        available_observables=("electron_current_density",),
+        required_validators=("terminal_current_conservation",),
+        parameter_sources=("official:devsim-2.9.1",),
+        execution_limits={"max_bias_points": 10000},
+        backend_compatibility={"devsim": "2.9.1"},
+        sentaurus_mapping="Mobility(...) placeholder",
+    )
+
+    catalog = CapabilityCatalog(
+        backend="devsim", adapter_version="0.2.0", descriptors=(item,)
+    )
+    projected = catalog.public_view().capabilities[0]
+
+    assert projected.supported_materials == ("silicon",)
+    assert projected.required_validators == ("terminal_current_conservation",)
+    assert projected.backend_compatibility == {"devsim": "2.9.1"}
+    assert projected.sentaurus_mapping == "Mobility(...) placeholder"
+
+
 def test_catalog_can_project_legacy_manifest_without_losing_limits() -> None:
     manifest = CapabilityManifest.from_backend("devsim")
 
@@ -85,6 +114,27 @@ def test_catalog_can_project_legacy_manifest_without_losing_limits() -> None:
     assert "study.equilibrium" in {item.id for item in catalog.descriptors}
     assert catalog.limits == manifest.limits
     assert catalog.public_view().backend == "devsim"
+    ac = next(item for item in catalog.descriptors if item.id == "study.ac")
+    assert {item.path for item in ac.required_inputs} >= {
+        "study.contact",
+        "study.frequency",
+        "study.amplitude",
+        "physics.temperature",
+    }
+    generic_dielectric = next(
+        item for item in catalog.descriptors if item.id == "material.generic_dielectric"
+    )
+    assert {item.path for item in generic_dielectric.required_inputs} == {
+        "regions.material",
+        "regions.relative_permittivity",
+    }
+    assert ac.backend_compatibility == {"devsim": "2.9.1"}
+    assert ac.execution_limits["max_bias_points"] == 10000
+    assert set(ac.required_validators) >= {
+        "canonical-datasets-structural",
+        "operating-points-converged",
+    }
+    assert ac.sentaurus_mapping == "pending-reviewed-mapping"
 
 
 def test_material_and_physics_registries_are_evidence_gated() -> None:
@@ -93,6 +143,22 @@ def test_material_and_physics_registries_are_evidence_gated() -> None:
 
     assert materials.require_reviewed("silicon").material_class == "semiconductor"
     assert materials.require_reviewed("silicon_dioxide").material_class == "dielectric"
+    assert materials.require_reviewed("generic_dielectric").parameter_keys == (
+        "relative_permittivity",
+    )
     assert physics.require_reviewed("equation.poisson").produces == ("potential",)
-    with pytest.raises(KeyError):
-        physics.require_reviewed("model.band_gap_narrowing")
+    assert physics.require_reviewed("model.slotboom_bgn").produces == (
+        "band_gap_narrowing",
+        "effective_intrinsic_density",
+    )
+    assert "total_recombination_rate" in physics.require_reviewed(
+        "model.auger"
+    ).produces
+    silicon = materials.require_reviewed("silicon")
+    assert silicon.parameter_set_version == "2026-09-29.v1"
+    assert set(silicon.parameter_sources) >= {
+        "relative_permittivity",
+        "electron_affinity",
+        "band_gap",
+    }
+    assert silicon.backend_compatibility == {"devsim": "2.9.1"}

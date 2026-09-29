@@ -33,6 +33,17 @@
     return {accepted: true, values: numbers.map((value) => Math.log10(value))};
   }
 
+  function signedLogTransform(values) {
+    const numbers = values.map(finiteNumber);
+    if (numbers.some((value) => value === null)) return {accepted: false, values: []};
+    return {
+      accepted: true,
+      values: numbers.map((value) => (
+        value === 0 ? 0 : Math.sign(value) * Math.log10(1 + Math.abs(value))
+      )),
+    };
+  }
+
   function complexResponse(realValues, imaginaryValues) {
     if (realValues.length !== imaginaryValues.length) {
       return {magnitude: [], phaseDegrees: []};
@@ -106,6 +117,7 @@
     logTransform,
     panViewport,
     segmentSeries,
+    signedLogTransform,
     toCsv,
     zoomViewport,
   };

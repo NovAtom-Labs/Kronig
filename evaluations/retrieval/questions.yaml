@@ -59,6 +59,26 @@ questions:
     backend: devsim
     version: "2.9.1"
     required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
+  - id: devsim-small-signal-response
+    query: How are complex current, admittance, conductance, and capacitance represented in a small-signal frequency study?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
+  - id: devsim-interface-charge
+    query: How is fixed interface charge represented and which benchmarks establish its sign and units?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
+  - id: devsim-temperature-parameter-studies
+    query: Which temperature and material parameter inputs can be swept without arbitrary runtime paths?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
+  - id: devsim-fermi-schottky-gate
+    query: Why are native Fermi integrals insufficient evidence for coupled Fermi transport and direct Schottky contacts?
+    backend: devsim
+    version: "2.9.1"
+    required_source_ids: [novatom-devsim-1d-engineering-guide-0.2]
   - id: sentaurus-boundary
     query: Generate a Sentaurus contact block for the pilot version.
     backend: sentaurus

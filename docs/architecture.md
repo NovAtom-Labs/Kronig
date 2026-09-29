@@ -248,7 +248,8 @@ same verified reader used by the Results Workbench.
 
 `evaluations/scientific/intake_cases.yaml` separately grades complete, incomplete, ambiguous,
 contradictory, and unsupported researcher requests. It covers exact bidirectional voltage
-points, a dimensionally suspicious oxide thickness, a supported normalized C-V request,
+points, a dimensionally suspicious oxide thickness, normalized C-V, small-signal AC,
+frequency response, transient ramps, temperature lists, registered parameter sensitivity,
 advanced contact and physics refusal, and unfamiliar layer names. These cases are evaluation
 data only. Product behavior remains driven by the capability catalog and portable concepts.
 
@@ -273,10 +274,11 @@ Do not add named-device branches. If a new structure is expressible with existin
 
 ## Current boundary
 
-The foundation is intentionally one-dimensional and silicon-first, with reviewed silicon-dioxide
-electrostatics. It supports generic analytic doping profiles, equilibrium and bounded DC,
-adaptive recovery, terminal charge, and quasi-static capacitance per unit area. It is suitable
-for exploratory drift-diffusion studies, not calibrated fabrication prediction. Two-dimensional
-geometry, heteromaterials beyond the reviewed set, metal work-function and Schottky boundaries,
-advanced carrier statistics and transport, AC and transient runtime paths, process simulation,
-optical coupling, thermal coupling, and pilot access control require later reviewed work.
+The foundation is intentionally one-dimensional and silicon-first, with reviewed dielectric
+electrostatics. It supports generic analytic profiles, equilibrium and bounded DC, adaptive
+recovery, terminal charge, quasi-static capacitance, small-signal frequency response, transient
+step or ramp schedules, temperature lists, and registered parameter studies. It is suitable for
+exploratory drift-diffusion studies, not calibrated fabrication prediction. Two-dimensional
+geometry, materials beyond the registry, direct Schottky transport, Fermi-Dirac drift diffusion,
+surface and interface-state models, process simulation, optical coupling, thermal coupling, and
+pilot access control require later reviewed work.

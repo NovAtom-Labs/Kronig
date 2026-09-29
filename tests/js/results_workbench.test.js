@@ -104,10 +104,42 @@ assertEqual(datasets[0].plotKind, "curve", "a rank-one dataset is a generic curv
 assertEqual(datasets[1].plotKind, "profile_family", "bias-position data is a profile family");
 assertEqual(datasets[2].plotKind, "complex_response", "complex rank-one data is a response");
 assertEqual(datasets[3].plotKind, "metric", "rank-zero data is a metric");
+const overlayPayload = {
+  result: {
+    axes: datasetPayload.result.axes,
+    datasets: {
+      electron_current: {id: "electron_current", label: "Electron current", unit: "A/m^2", axes: ["bias"], shape: [3], values: [1, 2, 3]},
+      hole_current: {id: "hole_current", label: "Hole current", unit: "A/m^2", axes: ["bias"], shape: [3], values: [3, 2, 1]},
+      voltage: {id: "voltage", label: "Voltage", unit: "V", axes: ["bias"], shape: [3], values: [-1, 0, 1]},
+    },
+  },
+};
+const overlayDatasets = results.datasetOptions(overlayPayload);
+assertEqual(
+  results.compatibleOverlayOptions(overlayDatasets[0], overlayDatasets).map((item) => item.id).join(","),
+  "hole_current",
+  "overlay discovery accepts only datasets with matching axes, shape, and units",
+);
 const profile = results.seriesForDataset(datasets[1], 1);
 assertEqual(profile.values.join(","), "1,2", "profile selection slices a generic rank-two dataset");
 assertEqual(profile.validity.join(","), "false,false", "profile selection preserves failed-point masks");
 assertEqual(profile.sliceAxis.kind, "bias", "the non-position axis controls profile selection");
+const markers = results.structureMarkers({
+  experiment: {
+    regions: [
+      {id: "left_region", x0: {magnitude_si: 0}, x1: {magnitude_si: 1e-6}},
+      {id: "right_region", x0: {magnitude_si: 1e-6}, x1: {magnitude_si: 2e-6}},
+    ],
+    contacts: [
+      {id: "left_contact", location: "x_min"},
+      {id: "right_contact", location: "x_max"},
+    ],
+  },
+});
+assertEqual(markers.length, 3, "the viewer exposes one interface and both contact markers");
+assertEqual(markers[0].kind, "contact", "left boundary marker identifies its contact");
+assertEqual(markers[1].kind, "interface", "internal boundary marker identifies its interface");
+assertEqual(markers[2].label, "right_contact", "right boundary marker preserves contact identity");
 assertEqual(
   results.datasetOptions({result: {axes: {}, datasets: {broken: {id: "broken", label: "Broken", unit: "V", axes: ["missing"], shape: [2], values: [1, 2]}}}}).length,
   0,

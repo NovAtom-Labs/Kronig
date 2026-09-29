@@ -40,3 +40,9 @@ def test_exact_bidirectional_bias_order_is_preserved(tmp_path: Path) -> None:
     assert potential.validity == (True,) * len(potential.values)
     assert len(potential.values) == potential.shape[0] * potential.shape[1]
     assert potential.values[: potential.shape[1]] != potential.values[-potential.shape[1] :]
+    events = result.metadata["solver_events"]
+    requested = [
+        event for event in events if event.get("phase") == "requested_operating_point"
+    ]
+    assert [event["requested_bias_v"] for event in requested] == [0.0, 2.0, 0.0, -2.0]
+    assert all(event["outcome"] in {"converged", "failed"} for event in events)

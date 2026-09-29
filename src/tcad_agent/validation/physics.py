@@ -162,3 +162,175 @@ def _failed_field_check(reason: str) -> ValidationCheck:
         message="Electric field could not be reconciled with the potential gradient.",
         evidence_paths=("result.datasets.potential", "result.datasets.electric_field"),
     )
+
+
+def band_checks(result: CanonicalResult) -> tuple[ValidationCheck, ...]:
+    conduction = result.datasets.get("conduction_band")
+    valence = result.datasets.get("valence_band")
+    if conduction is None or valence is None:
+        return (
+            ValidationCheck(
+                id="band-ordering",
+                level="physical",
+                status="not_applicable",
+                message="Both canonical band-energy fields are required.",
+                evidence_paths=(
+                    "result.datasets.conduction_band",
+                    "result.datasets.valence_band",
+                ),
+            ),
+        )
+    compatible = (
+        conduction.unit == "eV"
+        and valence.unit == "eV"
+        and conduction.axes == valence.axes
+        and conduction.shape == valence.shape
+    )
+    if not compatible:
+        return (
+            ValidationCheck(
+                id="band-ordering",
+                level="physical",
+                status="failed",
+                measured_value="incompatible canonical band datasets",
+                limit="matching eV datasets",
+                message="Conduction and valence bands must share axes, shape, and units.",
+                evidence_paths=(
+                    "result.datasets.conduction_band",
+                    "result.datasets.valence_band",
+                ),
+            ),
+        )
+    conduction_validity = conduction.validity or (True,) * len(conduction.values)
+    valence_validity = valence.validity or (True,) * len(valence.values)
+    gaps = tuple(
+        ec - ev
+        for ec, ev, ec_valid, ev_valid in zip(
+            conduction.values,
+            valence.values,
+            conduction_validity,
+            valence_validity,
+            strict=True,
+        )
+        if ec_valid and ev_valid
+    )
+    minimum_gap = min(gaps, default=float("-inf"))
+    return (
+        ValidationCheck(
+            id="band-ordering",
+            level="physical",
+            status="passed" if gaps and minimum_gap > 0 else "failed",
+            measured_value=minimum_gap,
+            limit="> 0 eV",
+            message="Conduction-band energy must exceed valence-band energy.",
+            evidence_origin="derived",
+            evidence_paths=(
+                "result.datasets.conduction_band",
+                "result.datasets.valence_band",
+            ),
+        ),
+    )
+
+
+def recombination_checks(
+    result: CanonicalResult,
+    *,
+    relative_tolerance: float = 1e-8,
+    absolute_tolerance: float = 1e-12,
+) -> tuple[ValidationCheck, ...]:
+    """Verify canonical recombination decomposition and generation sign."""
+
+    srh = result.datasets.get("srh_recombination_rate")
+    auger = result.datasets.get("auger_recombination_rate")
+    total = result.datasets.get("total_recombination_rate")
+    electron_generation = result.datasets.get("electron_generation_rate")
+    hole_generation = result.datasets.get("hole_generation_rate")
+
+    component_check = _rate_identity_check(
+        "recombination-component-balance",
+        "Total recombination must equal the sum of SRH and Auger rates.",
+        total,
+        srh,
+        auger,
+        signs=(1.0, 1.0),
+        relative_tolerance=relative_tolerance,
+        absolute_tolerance=absolute_tolerance,
+    )
+    generation_check = _rate_identity_check(
+        "generation-recombination-sign",
+        "Electron and hole net generation must equal negative total recombination.",
+        total,
+        electron_generation,
+        hole_generation,
+        signs=(-1.0, -1.0),
+        relative_tolerance=relative_tolerance,
+        absolute_tolerance=absolute_tolerance,
+    )
+    return component_check, generation_check
+
+
+def _rate_identity_check(
+    identifier: str,
+    message: str,
+    reference: Dataset | None,
+    first: Dataset | None,
+    second: Dataset | None,
+    *,
+    signs: tuple[float, float],
+    relative_tolerance: float,
+    absolute_tolerance: float,
+) -> ValidationCheck:
+    if reference is None or first is None or second is None:
+        return ValidationCheck(
+            id=identifier,
+            level="physical",
+            status="not_applicable",
+            message="Required canonical rate datasets were not all requested.",
+            evidence_paths=("result.datasets",),
+        )
+    compatible = (
+        reference.unit == first.unit == second.unit
+        and reference.axes == first.axes == second.axes
+        and reference.shape == first.shape == second.shape
+    )
+    if not compatible:
+        return ValidationCheck(
+            id=identifier,
+            level="physical",
+            status="failed",
+            measured_value="incompatible rate datasets",
+            limit="matching axes, shape, and units",
+            message=message,
+            evidence_paths=("result.datasets",),
+        )
+    errors: list[float] = []
+    scales: list[float] = []
+    for reference_value, first_value, second_value in zip(
+        reference.values, first.values, second.values, strict=True
+    ):
+        errors.extend(
+            (
+                abs(first_value - signs[0] * reference_value),
+                abs(second_value - signs[1] * reference_value),
+            )
+        )
+        scales.extend((abs(reference_value), abs(first_value), abs(second_value)))
+    if identifier == "recombination-component-balance":
+        errors = [
+            abs(reference_value - first_value - second_value)
+            for reference_value, first_value, second_value in zip(
+                reference.values, first.values, second.values, strict=True
+            )
+        ]
+    maximum_error = max(errors, default=0.0)
+    limit = absolute_tolerance + relative_tolerance * max(scales, default=0.0)
+    return ValidationCheck(
+        id=identifier,
+        level="physical",
+        status="passed" if maximum_error <= limit else "failed",
+        measured_value=maximum_error,
+        limit=limit,
+        message=message,
+        evidence_origin="derived",
+        evidence_paths=("result.datasets",),
+    )

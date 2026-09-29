@@ -58,7 +58,20 @@ class CapabilityDescriptor(StrictModel):
     required_inputs: tuple[CapabilityInputDescriptor, ...] = Field(
         default=(), max_length=32
     )
+    optional_inputs: tuple[CapabilityInputDescriptor, ...] = Field(
+        default=(), max_length=32
+    )
     produces: tuple[str, ...] = Field(default=(), max_length=64)
+    supported_materials: tuple[str, ...] = Field(default=(), max_length=32)
+    supported_regions: tuple[str, ...] = Field(default=(), max_length=32)
+    supported_interfaces: tuple[str, ...] = Field(default=(), max_length=32)
+    supported_studies: tuple[str, ...] = Field(default=(), max_length=32)
+    available_observables: tuple[str, ...] = Field(default=(), max_length=64)
+    required_validators: tuple[str, ...] = Field(default=(), max_length=32)
+    parameter_sources: tuple[str, ...] = Field(default=(), max_length=32)
+    execution_limits: dict[str, int | float] = Field(default_factory=dict)
+    backend_compatibility: dict[str, str] = Field(default_factory=dict)
+    sentaurus_mapping: str | None = Field(default=None, max_length=600)
 
     @model_validator(mode="after")
     def validate_reviewed_entry(self) -> Self:
@@ -78,7 +91,18 @@ class PublicCapabilityDescriptor(StrictModel):
     requires: tuple[str, ...] = ()
     conflicts: tuple[str, ...] = ()
     required_inputs: tuple[CapabilityInputDescriptor, ...] = ()
+    optional_inputs: tuple[CapabilityInputDescriptor, ...] = ()
     produces: tuple[str, ...] = ()
+    supported_materials: tuple[str, ...] = ()
+    supported_regions: tuple[str, ...] = ()
+    supported_interfaces: tuple[str, ...] = ()
+    supported_studies: tuple[str, ...] = ()
+    available_observables: tuple[str, ...] = ()
+    required_validators: tuple[str, ...] = ()
+    parameter_sources: tuple[str, ...] = ()
+    execution_limits: dict[str, int | float] = Field(default_factory=dict)
+    backend_compatibility: dict[str, str] = Field(default_factory=dict)
+    sentaurus_mapping: str | None = None
 
 
 class CapabilityCatalogView(StrictModel):
@@ -161,7 +185,18 @@ class CapabilityCatalog(StrictModel):
                     requires=item.requires,
                     conflicts=item.conflicts,
                     required_inputs=item.required_inputs,
+                    optional_inputs=item.optional_inputs,
                     produces=item.produces,
+                    supported_materials=item.supported_materials,
+                    supported_regions=item.supported_regions,
+                    supported_interfaces=item.supported_interfaces,
+                    supported_studies=item.supported_studies,
+                    available_observables=item.available_observables,
+                    required_validators=item.required_validators,
+                    parameter_sources=item.parameter_sources,
+                    execution_limits=item.execution_limits,
+                    backend_compatibility=item.backend_compatibility,
+                    sentaurus_mapping=item.sentaurus_mapping,
                 )
                 for item in reviewed
             ),
@@ -198,6 +233,43 @@ class CapabilityCatalog(StrictModel):
                         ),
                         required_inputs=inputs,
                         produces=_legacy_outputs(category, str(value)),
+                        supported_materials=_supported_materials(
+                            category, str(value), manifest
+                        ),
+                        supported_interfaces=(
+                            manifest.interfaces
+                            if category in {"equation", "model", "study"}
+                            else ()
+                        ),
+                        supported_studies=(
+                            manifest.studies
+                            if category in {"equation", "model", "observable"}
+                            else ()
+                        ),
+                        available_observables=(
+                            manifest.observables
+                            if category in {"equation", "model", "study"}
+                            else _legacy_outputs(category, str(value))
+                        ),
+                        required_validators=_required_validators(category),
+                        parameter_sources=(
+                            (f"adapter-parameter-registry:{manifest.backend}:{manifest.adapter_version}",)
+                            if category in {"material", "model"}
+                            else ()
+                        ),
+                        execution_limits=dict(manifest.limits),
+                        backend_compatibility={
+                            manifest.backend: (
+                                "2.9.1"
+                                if manifest.backend == "devsim"
+                                else "deployment-specific"
+                            )
+                        },
+                        sentaurus_mapping=(
+                            "pending-reviewed-mapping"
+                            if manifest.backend == "devsim"
+                            else None
+                        ),
                     )
                 )
         return cls(
@@ -213,24 +285,66 @@ def _legacy_required_inputs(
     category: CapabilityCategory, value: str
 ) -> tuple[CapabilityInputDescriptor, ...]:
     if category == "study":
-        return (
-            CapabilityInputDescriptor(
-                path="study.temperature",
-                description="Physical simulation temperature",
-                authority=InputAuthority.RESEARCHER,
-                required=True,
-                unit="K",
+        common = (
+            _researcher_input(
+                "physics.temperature", "Physical simulation temperature", unit="K"
             ),
         )
+        schedules: dict[str, tuple[CapabilityInputDescriptor, ...]] = {
+            "equilibrium": (),
+            "dc": (
+                _researcher_input("study.contact", "Driven contact"),
+                _researcher_input("study.start", "Sweep start voltage", unit="V"),
+                _researcher_input("study.stop", "Sweep stop voltage", unit="V"),
+                _researcher_input("study.step", "Sweep voltage step", unit="V"),
+            ),
+            "dc_points": (
+                _researcher_input("study.contact", "Driven contact"),
+                _researcher_input("study.values", "Exact requested voltage points", unit="V"),
+            ),
+            "ac": (
+                _researcher_input("study.contact", "Small-signal driven contact"),
+                _researcher_input("study.frequency", "Small-signal frequency", unit="Hz"),
+                _researcher_input("study.amplitude", "Small-signal amplitude", unit="V"),
+            ),
+            "frequency": (
+                _researcher_input("study.contact", "Small-signal driven contact"),
+                _researcher_input("study.start", "Frequency sweep start", unit="Hz"),
+                _researcher_input("study.stop", "Frequency sweep stop", unit="Hz"),
+                _researcher_input("study.points", "Frequency point count"),
+                _researcher_input("study.amplitude", "Small-signal amplitude", unit="V"),
+            ),
+            "transient": (
+                _researcher_input("study.contact", "Driven contact"),
+                _researcher_input("study.waveform", "Step or ramp waveform"),
+                _researcher_input("study.initial_voltage", "Initial voltage", unit="V"),
+                _researcher_input("study.final_voltage", "Final voltage", unit="V"),
+                _researcher_input("study.stop", "Transient stop time", unit="s"),
+            ),
+            "temperature": (
+                _researcher_input("study.values", "Requested temperatures", unit="K"),
+            ),
+            "parameter": (
+                _researcher_input("study.parameter_path", "Registered parameter to sweep"),
+                _researcher_input("study.values", "Requested parameter values"),
+            ),
+        }
+        return common + schedules.get(value, ())
     if category == "material":
-        return (
-            CapabilityInputDescriptor(
-                path="regions.material",
-                description="Material assignment for every spatial region",
-                authority=InputAuthority.RESEARCHER,
-                required=True,
+        inputs: tuple[CapabilityInputDescriptor, ...] = (
+            _researcher_input(
+                "regions.material", "Material assignment for every spatial region"
             ),
         )
+        if value == "generic_dielectric":
+            inputs += (
+                _researcher_input(
+                    "regions.relative_permittivity",
+                    "Researcher-specified relative permittivity",
+                    unit="1",
+                ),
+            )
+        return inputs
     if category == "profile":
         return (
             CapabilityInputDescriptor(
@@ -241,14 +355,19 @@ def _legacy_required_inputs(
             ),
         )
     if category == "contact":
-        return (
-            CapabilityInputDescriptor(
-                path="contacts.boundary_conditions",
-                description="Contact locations, types and applied conditions",
-                authority=InputAuthority.RESEARCHER,
-                required=True,
+        inputs = (
+            _researcher_input(
+                "contacts.boundary_conditions",
+                "Contact locations, types and applied conditions",
             ),
         )
+        if value == "metal_work_function":
+            inputs += (
+                _researcher_input(
+                    "contacts.work_function", "Metal work function", unit="eV"
+                ),
+            )
+        return inputs
     if category in {"equation", "model"}:
         return (
             CapabilityInputDescriptor(
@@ -261,9 +380,47 @@ def _legacy_required_inputs(
     return ()
 
 
+def _researcher_input(
+    path: str,
+    description: str,
+    *,
+    unit: str | None = None,
+) -> CapabilityInputDescriptor:
+    return CapabilityInputDescriptor(
+        path=path,
+        description=description,
+        authority=InputAuthority.RESEARCHER,
+        required=True,
+        unit=unit,
+    )
+
+
 def _legacy_outputs(category: CapabilityCategory, value: str) -> tuple[str, ...]:
     if category == "observable":
         return (value,)
     if category == "equation" and value == "poisson":
         return ("potential", "electric_field")
     return ()
+
+
+def _supported_materials(
+    category: CapabilityCategory,
+    value: str,
+    manifest: CapabilityManifest,
+) -> tuple[str, ...]:
+    if category == "material":
+        return (value,)
+    if category == "profile" and value != "fixed_charge":
+        return tuple(item for item in manifest.materials if item == "silicon")
+    if category in {"equation", "model", "study", "observable"}:
+        return manifest.materials
+    return ()
+
+
+def _required_validators(category: CapabilityCategory) -> tuple[str, ...]:
+    common = ("canonical-datasets-structural",)
+    if category == "study":
+        return (*common, "operating-points-converged")
+    if category in {"equation", "model"}:
+        return (*common, "requested-observables-present")
+    return common

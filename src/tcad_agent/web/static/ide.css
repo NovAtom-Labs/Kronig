@@ -557,6 +557,8 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
 .result-chart-grid { stroke: #202830; stroke-width: 1; }
 .result-chart-axis { stroke: #4a5560; stroke-width: 1; }
 .result-chart-interface { stroke: #65717d; stroke-dasharray: 2 4; stroke-width: 1; }
+.result-chart-contact { stroke: var(--accent); stroke-dasharray: 5 4; stroke-width: 1.2; }
+.result-chart-line.is-overlay { stroke: #d5a458; stroke-dasharray: 7 4; }
 .result-chart-line { fill: none; stroke: #86a9d4; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
 .result-chart-tick, .result-chart-label { fill: #77838f; font: 10px var(--font-mono); }
 .result-chart-crosshair { stroke: #697b8e; stroke-dasharray: 3 3; stroke-width: 1; }

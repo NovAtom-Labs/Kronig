@@ -52,6 +52,14 @@ For each enabled mechanism record:
 5. an observable expected to change when it is enabled
 6. a limiting case or reference used to validate the implementation
 
+## Agent Kronig DEVSIM 2.9.1 implementation boundary
+
+The reviewed one-dimensional adapter currently exposes constant mobility, DEVSIM's pinned Klaassen bulk mobility implementation, and an optional one-dimensional high-field saturation correction. It exposes SRH, constant-coefficient Auger recombination, and Slotboom band-gap narrowing through explicit model selections. Electron and hole mobility, SRH and Auger components, total recombination, and net carrier generation are extracted separately.
+
+The parameter set identifier, every overridden parameter value, its source label, and its version are copied into the compiled payload and canonical result metadata. These baselines are reproducible simulation parameters, not a claim of universal process calibration. Researchers must supply a reviewed calibrated set when predictive process-specific accuracy is required.
+
+Surface mobility and surface recombination require explicit interface-normal fields or velocities and independent benchmarks. They remain disabled instead of being approximated by bulk models.
+
 ## Source basis
 
 - DEVSIM official manual and maintained examples: https://devsim.net/

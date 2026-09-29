@@ -213,3 +213,106 @@ def test_gateway_allows_reviewed_evidence_to_choose_interface_coupling() -> None
     )
 
     assert decision.status == "ready"
+
+
+def test_gateway_reconciles_explicit_researcher_value_mislabeled_as_evidence() -> None:
+    response = json.dumps(
+        {
+            "status": "ready",
+            "summary": "The requested profile is complete.",
+            "questions": [],
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Run the requested silicon study.",
+                "fields": [
+                    {
+                        "path": "regions.p.profile.type",
+                        "value": "uniform",
+                        "origin": "evidence",
+                        "rationale": "The guide describes uniform profiles.",
+                        "evidence_refs": ["guide:profiles"],
+                    }
+                ],
+                "exclusions": [],
+                "deliverables": [],
+                "validation_expectations": [],
+                "unresolved_noncritical": [],
+                "unresolved_critical": [],
+            },
+            "unresolved_critical": [],
+            "warnings": [],
+            "runtime_research_needed": False,
+            "runtime_research_reason": None,
+        }
+    )
+    evidence = EvidenceExcerpt(
+        id="guide:profiles",
+        title="Reviewed profile guide",
+        url="internal://profiles",
+        version="1",
+        content_hash="b" * 64,
+        reviewed=True,
+        content="Uniform profiles are supported.",
+    )
+
+    decision = OpenHandsPreparationModel(ScriptedLLM([response])).prepare(
+        original_prompt="Use uniform boron doping in the p region.",
+        answers=(),
+        workspace=workspace(),
+        evidence=(evidence,),
+    )
+
+    assert decision.intent is not None
+    field = decision.intent.fields[0]
+    assert field.origin.value == "researcher"
+    assert field.evidence_refs == ()
+
+
+def test_gateway_does_not_reconcile_value_absent_from_researcher_input() -> None:
+    invalid = {
+        "status": "ready",
+        "summary": "The profile is complete.",
+        "questions": [],
+        "intent": {
+            "task_kind": "simulation",
+            "objective": "Run a silicon study.",
+            "fields": [
+                {
+                    "path": "regions.p.profile.type",
+                    "value": "gaussian",
+                    "origin": "evidence",
+                    "rationale": "The guide describes Gaussian profiles.",
+                    "evidence_refs": ["guide:profiles"],
+                }
+            ],
+            "exclusions": [],
+            "deliverables": [],
+            "validation_expectations": [],
+            "unresolved_noncritical": [],
+            "unresolved_critical": [],
+        },
+        "unresolved_critical": [],
+        "warnings": [],
+        "runtime_research_needed": False,
+        "runtime_research_reason": None,
+    }
+    evidence = EvidenceExcerpt(
+        id="guide:profiles",
+        title="Reviewed profile guide",
+        url="internal://profiles",
+        version="1",
+        content_hash="b" * 64,
+        reviewed=True,
+        content="Gaussian profiles are supported.",
+    )
+    gateway = OpenHandsPreparationModel(
+        ScriptedLLM([json.dumps(invalid), json.dumps(invalid)])
+    )
+
+    with pytest.raises(ModelResponseError, match="researcher-owned field"):
+        gateway.prepare(
+            original_prompt="Use boron doping in the p region.",
+            answers=(),
+            workspace=workspace(),
+            evidence=(evidence,),
+        )

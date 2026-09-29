@@ -99,6 +99,53 @@ def test_default_temperature_is_validated_as_a_quantity() -> None:
     assert spec.physics.temperature.to("K") == 300.0
 
 
+def test_solver_controls_are_explicit_bounded_and_portable() -> None:
+    payload = minimal_spec()
+    payload["solver"] = {
+        "maximum_iterations": 120,
+        "relative_error": 1e-7,
+        "electrostatic_absolute_error": 0.5,
+        "carrier_absolute_error": 1e9,
+    }
+
+    spec = ExperimentSpec.model_validate(payload)
+
+    assert spec.solver.maximum_iterations == 120
+    assert spec.solver.relative_error == pytest.approx(1e-7)
+
+    payload["solver"]["relative_error"] = 0
+    with pytest.raises(ValidationError, match="greater than 0"):
+        ExperimentSpec.model_validate(payload)
+
+
+def test_mesh_anchors_and_spacing_bounds_are_unit_checked() -> None:
+    payload = minimal_spec()
+    payload["regions"][0].update(
+        {
+            "mesh_spacing": "20 nm",
+            "minimum_mesh_spacing": "2 nm",
+            "maximum_mesh_spacing": "50 nm",
+        }
+    )
+    payload["mesh_anchors"] = [
+        {"position": "0.25 um", "spacing": "5 nm"},
+        {"position": "0.5 um", "spacing": "2 nm"},
+    ]
+
+    spec = ExperimentSpec.model_validate(payload)
+
+    assert spec.mesh_anchors[0].spacing.to("nm") == pytest.approx(5.0)
+    assert spec.regions[0].minimum_mesh_spacing.to("nm") == pytest.approx(2.0)
+
+
+def test_mesh_anchor_must_lie_inside_stack() -> None:
+    payload = minimal_spec()
+    payload["mesh_anchors"] = [{"position": "2 um", "spacing": "5 nm"}]
+
+    with pytest.raises(ValidationError, match="mesh anchor"):
+        ExperimentSpec.model_validate(payload)
+
+
 def test_metal_contact_requires_energy_work_function() -> None:
     contact = Contact.model_validate(
         {
@@ -141,6 +188,21 @@ def test_contact_rejects_voltage_as_work_function() -> None:
                 "work_function": "4.10 V",
             }
         )
+
+
+def test_contact_area_and_voltage_offset_are_explicit_quantities() -> None:
+    contact = Contact.model_validate(
+        {
+            "id": "gate",
+            "location": "x_min",
+            "kind": "ideal_gate",
+            "voltage_offset": "0.25 V",
+            "area": "100 um^2",
+        }
+    )
+
+    assert contact.voltage_offset.to("V") == pytest.approx(0.25)
+    assert contact.area.to("m^2") == pytest.approx(1e-10)
 
 
 def test_schema_represents_requested_equilibrium_observables() -> None:

@@ -14,6 +14,10 @@ class MaterialDescriptor(StrictModel):
     maturity: CapabilityMaturity
     evidence_refs: tuple[str, ...]
     parameter_keys: tuple[str, ...] = ()
+    parameter_set_version: str
+    parameter_sources: dict[str, str]
+    backend_compatibility: dict[str, str]
+    compatible_interfaces: tuple[str, ...] = ("continuity",)
 
 
 class MaterialRegistry:
@@ -40,6 +44,19 @@ class MaterialRegistry:
                         "effective_density_conduction",
                         "effective_density_valence",
                     ),
+                    parameter_set_version="2026-09-29.v1",
+                    parameter_sources={
+                        "relative_permittivity": "DEVSIM 2.9.1 simple_physics.py",
+                        "electron_affinity": "Agent Kronig reviewed silicon baseline 2026-09-29.v1",
+                        "band_gap": "Agent Kronig reviewed silicon baseline 2026-09-29.v1",
+                        "effective_density_conduction": (
+                            "Agent Kronig reviewed silicon baseline 2026-09-29.v1"
+                        ),
+                        "effective_density_valence": (
+                            "Agent Kronig reviewed silicon baseline 2026-09-29.v1"
+                        ),
+                    },
+                    backend_compatibility={"devsim": "2.9.1"},
                 ),
                 MaterialDescriptor(
                     id="silicon_dioxide",
@@ -47,6 +64,23 @@ class MaterialRegistry:
                     maturity=CapabilityMaturity.REVIEWED,
                     evidence_refs=source,
                     parameter_keys=("permittivity",),
+                    parameter_set_version="devsim-2.9.1",
+                    parameter_sources={
+                        "relative_permittivity": "DEVSIM 2.9.1 simple_physics.py"
+                    },
+                    backend_compatibility={"devsim": "2.9.1"},
+                ),
+                MaterialDescriptor(
+                    id="generic_dielectric",
+                    material_class="dielectric",
+                    maturity=CapabilityMaturity.REVIEWED,
+                    evidence_refs=("agent-kronig:user-parameterized-dielectric:v1",),
+                    parameter_keys=("relative_permittivity",),
+                    parameter_set_version="researcher-supplied-v1",
+                    parameter_sources={
+                        "relative_permittivity": "researcher-owned experiment input"
+                    },
+                    backend_compatibility={"devsim": "2.9.1"},
                 ),
             )
         )

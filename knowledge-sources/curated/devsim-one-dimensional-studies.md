@@ -12,19 +12,19 @@ The DEVSIM command surface is broader than the Agent Kronig adapter. The officia
 
 Represent a one-dimensional problem as ordered regions, adjacent interfaces, spatial profiles, boundary contacts, physical equations and models, a study schedule, and requested observables. Names such as diode or capacitor may remain in human-facing titles but must never select the runtime path.
 
-Regions are contiguous intervals with explicit materials and mesh spacing. The reviewed material set currently contains silicon and silicon dioxide. Carrier continuity equations apply only inside semiconductor regions. Dielectrics participate in electrostatics and displacement, not electron or hole transport.
+Regions are contiguous intervals with explicit materials and mesh spacing. The reviewed material set contains silicon, silicon dioxide, and a generic dielectric whose relative permittivity is supplied by the researcher. Carrier continuity equations apply only inside semiconductor regions. Dielectrics participate in electrostatics and displacement, not electron or hole transport. Unknown materials and generic dielectrics without a relative permittivity are refused.
 
-Adjacent regions require explicit interface records. Continuity is available for reviewed silicon-to-silicon and silicon-to-silicon-dioxide compositions. A fixed interface-charge field exists in the portable contract but is refused by the DEVSIM runtime until a benchmark proves its sign, units, and residual behavior.
+Adjacent material regions require explicit interface records. Electrostatic continuity is available for reviewed semiconductor and dielectric compositions. Fixed interface charge is implemented as a displacement jump, normalized to canonical `C/m^2`, and covered by zero-charge reduction, sign, and mesh-refinement benchmarks. Interface trap distributions and surface recombination remain gated until their equations and independent references are reviewed.
 
 ## Profiles and units
 
-The supported profile primitives are constant, linear, Gaussian, error-function, and tabulated. Each profile belongs to one region and has an explicit donor or acceptor species. Multiple profiles superpose algebraically. Spatial quantities are normalized to SI in the product contract and converted to centimeters only inside the DEVSIM adapter.
+The supported profile primitives are constant, piecewise constant, linear, Gaussian, error-function, and tabulated with explicit linear or nearest interpolation. Donor and acceptor profiles belong to semiconductor regions and superpose algebraically. Fixed bulk charge may be applied to a reviewed region. Spatial quantities are normalized to SI in the product contract and converted to centimeters only inside the DEVSIM adapter.
 
 Never infer an ambiguous unit. A statement such as an oxide thickness of `10 m` must be confirmed if the researcher may have meant nanometers. Do not silently reinterpret it based on typical fabrication dimensions. Tabulated coordinates must stay within the owning region, be strictly ordered, and declare the interpolation rule.
 
 ## Boundary semantics
 
-An ohmic contact is valid only where the reviewed semiconductor contact equations are intended. An ideal gate is valid on the dielectric side of a reviewed oxide stack. A numerical contact voltage is not a metal work function.
+An ohmic contact is valid only where the reviewed semiconductor contact equations are intended. An ideal gate is valid on a dielectric boundary. A metal work-function boundary is available on dielectric boundaries and creates an explicit flat-band offset from the pinned semiconductor energy reference. Insulating boundaries create no contact equation and cannot be driven by a study. Contact voltage offsets and optional physical areas remain explicit experiment inputs. A numerical contact voltage is not a metal work function.
 
 A requested aluminum work function, Schottky barrier, surface recombination velocity, tunneling boundary, or interface trap distribution changes the physical boundary model. If the adapter does not advertise the exact contact capability, block the run. Never replace a metal-semiconductor boundary with an ohmic contact merely to obtain convergence.
 
@@ -32,7 +32,9 @@ A requested aluminum work function, Schottky barrier, surface recombination velo
 
 Construct the mesh and material parameters first. Solve electrostatic equilibrium before creating and initializing carrier solutions. For drift diffusion, create the electron and hole equations only in semiconductor regions, then connect compatible semiconductor interfaces and solve the coupled system.
 
-The reviewed transport path uses Boltzmann carrier statistics, constant mobility, and Shockley-Read-Hall recombination through the pinned DEVSIM helper implementation. Fermi-Dirac statistics, Auger recombination, band-gap narrowing, field-dependent mobility, incomplete ionization, quantum corrections, and self-heating are not interchangeable refinements. They must remain unsupported until their equations, derivatives, parameters, observables, and benchmarks are reviewed together.
+The reviewed transport paths use Boltzmann carrier statistics, constant or doping-dependent Klaassen bulk mobility, optional one-dimensional high-field saturation, Shockley-Read-Hall recombination, optional Auger recombination, and optional Slotboom band-gap narrowing. Model identifiers and parameters are allowlisted and preserved in result provenance. The adapter extracts separate electron and hole mobility, current, recombination, generation, band-energy, and quasi-Fermi datasets when requested.
+
+Fermi-Dirac transport, direct metal-semiconductor Schottky transport, Philips-style surface mobility, interface traps, incomplete ionization, quantum corrections, and self-heating remain explicit research gates. The presence of DEVSIM Fermi-integral functions does not by itself validate a coupled Fermi drift-diffusion implementation.
 
 ## Equilibrium and DC studies
 
@@ -48,7 +50,9 @@ DEVSIM exposes contact charge for the potential equation. Agent Kronig normalize
 
 For a strictly monotonic voltage sequence with unique points, quasi-static capacitance density is the finite-difference derivative `dQ/dV` in `F/m^2`. Duplicate, unordered, or bidirectional voltage points do not produce one implicit derivative curve. Use separate monotonic branches or request exact point data. Absolute capacitance requires area and must trigger clarification when area is absent.
 
-Small-signal AC capacitance is a different study. Upstream DEVSIM examples use circuit coupling, an AC source, `solve(type="ac", frequency=...)`, and complex circuit-current solutions. That upstream capability is not advertised by this adapter until complex normalization and reference benchmarks are complete.
+Small-signal AC capacitance is a different study. The reviewed adapter uses circuit coupling, an explicit AC amplitude, `solve(type="ac", frequency=...)`, and complex circuit-current solutions. It reports real and imaginary current response, complex admittance, conductance, and capacitance over one frequency or a bounded frequency sweep. A real low-frequency benchmark compares AC capacitance with charge-derived capacitance.
+
+Transient step and ramp schedules, temperature lists, and allowlisted parameter sweeps are also available. Transient pulse waveforms remain gated. Temperature studies rebuild temperature-dependent material state at every requested value. Parameter studies can change only registered model parameters, never arbitrary runtime paths.
 
 ## Canonical datasets
 

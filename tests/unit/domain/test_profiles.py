@@ -62,6 +62,16 @@ PROFILE = TypeAdapter(Profile1D)
             },
             "tabulated",
         ),
+        (
+            {
+                "kind": "piecewise_constant",
+                "region": "bulk",
+                "species": "donor",
+                "boundaries": ["0 um", "0.4 um", "1 um"],
+                "values": ["1e15 cm^-3", "8e16 cm^-3"],
+            },
+            "piecewise_constant",
+        ),
     ],
 )
 def test_profiles_are_typed_and_unit_checked(payload: dict, kind: str) -> None:
@@ -91,5 +101,18 @@ def test_tabulated_profile_rejects_unsorted_or_mismatched_points() -> None:
                 "species": "donor",
                 "positions": ["1 um", "0 um"],
                 "values": ["1e15 cm^-3", "2e15 cm^-3"],
+            }
+        )
+
+
+def test_piecewise_profile_requires_one_value_per_interval() -> None:
+    with pytest.raises(ValidationError, match="one value per interval"):
+        PROFILE.validate_python(
+            {
+                "kind": "piecewise_constant",
+                "region": "bulk",
+                "species": "donor",
+                "boundaries": ["0 um", "0.4 um", "1 um"],
+                "values": ["1e15 cm^-3"],
             }
         )

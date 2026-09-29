@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 
 from openhands.sdk import LLM, Message, TextContent
@@ -132,6 +133,9 @@ class OpenHandsPreparationModel:
                 decision = PreparationDecision.model_validate_json(
                     _unwrap_json_fence(text)
                 )
+                decision = self._reconcile_explicit_researcher_origins(
+                    decision, original_prompt, answers
+                )
                 self._validate_authority(decision, workspace, evidence)
                 return decision
             except (ValidationError, ValueError) as error:
@@ -174,6 +178,54 @@ class OpenHandsPreparationModel:
                     )
                 )
         raise AssertionError("unreachable preparation retry loop")
+
+    def _reconcile_explicit_researcher_origins(
+        self,
+        decision: PreparationDecision,
+        original_prompt: str,
+        answers: Sequence[ClarificationAnswer],
+    ) -> PreparationDecision:
+        """Correct a model provenance label only for literally supplied values.
+
+        This is intentionally narrow. It cannot promote a value merely because local
+        evidence contains it, and it does not infer equivalence between units, numbers,
+        aliases, or scientific concepts.
+        """
+        if decision.intent is None:
+            return decision
+        researcher_text = "\n".join(
+            (original_prompt, *(answer.answer for answer in answers))
+        ).casefold()
+        reconciled = []
+        changed = False
+        for field in decision.intent.fields:
+            value = field.value
+            explicitly_supplied = (
+                field.origin is IntentOrigin.EVIDENCE
+                and not self._is_expert_path(field.path)
+                and isinstance(value, str)
+                and len(value.strip()) >= 3
+                and re.search(
+                    rf"(?<!\w){re.escape(value.strip().casefold())}(?!\w)",
+                    researcher_text,
+                )
+                is not None
+            )
+            if explicitly_supplied:
+                field = field.model_copy(
+                    update={
+                        "origin": IntentOrigin.RESEARCHER,
+                        "rationale": "The value is stated explicitly by the researcher.",
+                        "source_reference": None,
+                        "evidence_refs": (),
+                    }
+                )
+                changed = True
+            reconciled.append(field)
+        if not changed:
+            return decision
+        intent = decision.intent.model_copy(update={"fields": tuple(reconciled)})
+        return decision.model_copy(update={"intent": intent})
 
     def _validate_authority(
         self,

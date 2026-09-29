@@ -4,12 +4,12 @@ adapter_version: "0.2.0"
 execution_state: configured
 dimensions: [1]
 equations: [poisson, electron_continuity, hole_continuity]
-models: [boltzmann, constant_mobility, srh]
-materials: [silicon, silicon_dioxide]
-profiles: [constant, linear, gaussian, error_function, tabulated]
-interfaces: [continuity]
-contacts: [ohmic, ideal_gate]
-studies: [equilibrium, dc, dc_points]
+models: [boltzmann, constant_mobility, klaassen_mobility, high_field_saturation, srh, auger, slotboom_bgn]
+materials: [silicon, silicon_dioxide, generic_dielectric]
+profiles: [constant, fixed_charge, piecewise_constant, linear, gaussian, error_function, tabulated]
+interfaces: [continuity, fixed_charge]
+contacts: [ohmic, ideal_gate, metal_work_function, insulating]
+studies: [equilibrium, dc, dc_points, ac, frequency, transient, temperature, parameter]
 observables:
   - terminal_current
   - terminal_charge
@@ -18,11 +18,35 @@ observables:
   - electron_density
   - hole_density
   - charge_density
+  - conduction_band
+  - valence_band
+  - intrinsic_energy
+  - electron_affinity
+  - band_gap
+  - band_gap_narrowing
+  - effective_intrinsic_carrier_concentration
+  - fermi_level
+  - electron_quasi_fermi_level
+  - hole_quasi_fermi_level
   - electron_current_density
   - hole_current_density
   - electron_mobility
   - hole_mobility
   - recombination_rate
+  - srh_recombination_rate
+  - auger_recombination_rate
+  - total_recombination_rate
+  - electron_generation_rate
+  - hole_generation_rate
+  - net_doping
+  - donor_concentration
+  - acceptor_concentration
+  - electrostatic_flux
+  - total_current_density
+  - terminal_electron_current
+  - terminal_hole_current
+  - interface_charge_density
+  - fixed_charge_density
 limits:
-  max_bias_points: 10
+  max_bias_points: 10000
   max_regions: 32

@@ -77,6 +77,7 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
         return {"phase": "delegate", "subagent": action.subagent_type}
     if isinstance(action, TcadDomainAction):
         phases = {
+            "describe_spec": "inspect",
             "validate_spec": "validate",
             "prepare_experiment": "validate",
             "execute_experiment": "execute",

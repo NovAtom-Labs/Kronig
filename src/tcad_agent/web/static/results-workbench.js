@@ -87,6 +87,21 @@
     });
   }
 
+  function compatibleOverlayOptions(primary, datasets) {
+    if (!primary) return [];
+    const axisSignature = JSON.stringify(
+      primary.axes.map((axis) => ({id: axis.id, values: axis.values})),
+    );
+    return datasets.filter((candidate) => (
+      candidate.id !== primary.id
+      && candidate.unit === primary.unit
+      && JSON.stringify(candidate.shape) === JSON.stringify(primary.shape)
+      && JSON.stringify(candidate.axes.map((axis) => ({id: axis.id, values: axis.values})))
+        === axisSignature
+      && candidate.plotKind === primary.plotKind
+    ));
+  }
+
   function fieldOptions(payload) {
     const canonical = datasetOptions(payload).flatMap((dataset) => {
       if (dataset.shape.length !== 1 || dataset.axes[0]?.kind !== "position") return [];
@@ -224,8 +239,23 @@
   function regionMarkers(payload) {
     return (payload?.experiment?.regions || []).slice(0, -1).flatMap((region) => {
       const value = Number(region.x1?.magnitude_si);
-      return Number.isFinite(value) ? [{value, label: region.id}] : [];
+      return Number.isFinite(value) ? [{value, label: region.id, kind: "interface"}] : [];
     });
+  }
+
+  function structureMarkers(payload) {
+    const regions = payload?.experiment?.regions || [];
+    if (!regions.length) return [];
+    const start = Number(regions[0]?.x0?.magnitude_si);
+    const stop = Number(regions.at(-1)?.x1?.magnitude_si);
+    const contacts = (payload?.experiment?.contacts || []).flatMap((contact) => {
+      const value = contact.location === "x_min" ? start
+        : contact.location === "x_max" ? stop : Number.NaN;
+      return Number.isFinite(value)
+        ? [{value, label: String(contact.id || contact.location), kind: "contact"}]
+        : [];
+    });
+    return [...contacts, ...regionMarkers(payload)].sort((left, right) => left.value - right.value);
   }
 
   function element(tag, className = "", text = "") {
@@ -308,10 +338,11 @@
     svg,
     tooltip,
     field,
-    logarithmic = false,
+    scaleMode = "linear",
     viewport = null,
     onViewportChange = null,
     markers = [],
+    overlays = [],
   ) {
     svg.replaceChildren();
     tooltip.classList.add("hidden");
@@ -320,11 +351,27 @@
       value: field.values[index],
       valid: field.validity ? Boolean(field.validity[index]) : true,
     }));
-    let useLog = logarithmic;
+    let useLog = scaleMode === "log";
+    const useSignedLog = scaleMode === "signed_log";
     if (useLog && points.some((point) => point.valid && point.value <= 0)) useLog = false;
     const plotted = points.map((point) => ({
       ...point,
-      plotted: useLog ? Math.log10(point.value) : point.value,
+      plotted: useLog ? Math.log10(point.value)
+        : useSignedLog
+          ? Math.sign(point.value) * Math.log10(1 + Math.abs(point.value))
+          : point.value,
+    }));
+    const overlayPoints = overlays.flatMap((overlay) => overlay.positions.map((position, index) => {
+      const value = overlay.values[index];
+      return {
+        position,
+        value,
+        valid: overlay.validity ? Boolean(overlay.validity[index]) : true,
+        plotted: useLog ? Math.log10(value)
+          : useSignedLog
+            ? Math.sign(value) * Math.log10(1 + Math.abs(value))
+            : value,
+      };
     }));
     const validPlotted = plotted.filter((point) => point.valid);
     const candidates = validPlotted.length ? validPlotted : plotted;
@@ -346,7 +393,11 @@
     const withinViewport = candidates.filter(
       (point) => point.position >= xMinimum && point.position <= xMaximum,
     );
-    const displayed = withinViewport.length ? withinViewport : candidates;
+    const displayedPrimary = withinViewport.length ? withinViewport : candidates;
+    const displayedOverlays = overlayPoints.filter(
+      (point) => point.valid && point.position >= xMinimum && point.position <= xMaximum,
+    );
+    const displayed = [...displayedPrimary, ...displayedOverlays];
     let yMinimum = Math.min(...displayed.map((point) => point.plotted));
     let yMaximum = Math.max(...displayed.map((point) => point.plotted));
     if (yMinimum === yMaximum) {
@@ -378,11 +429,11 @@
     svg.append(
       svgNode("line", {x1: dimensions.left, y1: dimensions.top + dimensions.height, x2: dimensions.left + dimensions.width, y2: dimensions.top + dimensions.height, class: "result-chart-axis"}),
       svgNode("line", {x1: dimensions.left, y1: dimensions.top, x2: dimensions.left, y2: dimensions.top + dimensions.height, class: "result-chart-axis"}),
-      svgNode("text", {x: 18, y: 160, transform: "rotate(-90 18 160)", class: "result-chart-label", "text-anchor": "middle"}, useLog ? `log₁₀(${field.unit})` : field.unit),
+      svgNode("text", {x: 18, y: 160, transform: "rotate(-90 18 160)", class: "result-chart-label", "text-anchor": "middle"}, useLog ? `log₁₀(${field.unit})` : useSignedLog ? `signed log₁₀(${field.unit})` : field.unit),
     );
-    markers.filter((marker) => marker.value > xMinimum && marker.value < xMaximum).forEach(
+    markers.filter((marker) => marker.value >= xMinimum && marker.value <= xMaximum).forEach(
       (marker) => svg.append(
-        svgNode("line", {x1: x(marker.value), y1: dimensions.top, x2: x(marker.value), y2: dimensions.top + dimensions.height, class: "result-chart-interface"}),
+        svgNode("line", {x1: x(marker.value), y1: dimensions.top, x2: x(marker.value), y2: dimensions.top + dimensions.height, class: marker.kind === "contact" ? "result-chart-contact" : "result-chart-interface"}),
         svgNode("text", {x: x(marker.value) + 4, y: dimensions.top + 12, class: "result-chart-tick"}, marker.label),
       ),
     );
@@ -390,6 +441,25 @@
       d: segment.map((point, index) => `${index ? "L" : "M"} ${x(point.x)} ${y(point.value)}`).join(" "),
       class: "result-chart-line",
     })));
+    overlays.forEach((overlay) => {
+      const transformed = overlay.values.map((value) => (
+        useLog ? Math.log10(value)
+          : useSignedLog ? Math.sign(value) * Math.log10(1 + Math.abs(value)) : value
+      ));
+      const overlaySegments = globalThis.AgentKronigScientificChart?.segmentSeries(
+        overlay.positions,
+        transformed,
+        overlay.positions.map((position, index) => (
+          (!overlay.validity || Boolean(overlay.validity[index]))
+          && position >= xMinimum && position <= xMaximum
+          && (!useLog || overlay.values[index] > 0)
+        )),
+      ) || [];
+      overlaySegments.forEach((segment) => svg.append(svgNode("path", {
+        d: segment.map((point, index) => `${index ? "L" : "M"} ${x(point.x)} ${y(point.value)}`).join(" "),
+        class: "result-chart-line is-overlay",
+      })));
+    });
     const crosshair = svgNode("line", {class: "result-chart-crosshair hidden"});
     const marker = svgNode("circle", {r: 4, class: "result-chart-marker hidden"});
     const hitArea = svgNode("rect", {x: dimensions.left, y: dimensions.top, width: dimensions.width, height: dimensions.height, class: "result-chart-hit"});
@@ -460,7 +530,7 @@
       ));
     });
     hitArea.addEventListener("dblclick", () => onViewportChange?.(fullExtent));
-    return useLog;
+    return {logAccepted: !scaleMode || scaleMode !== "log" || useLog};
   }
 
   function renderFields(payload) {
@@ -490,7 +560,7 @@
     });
     const scale = element("select");
     scale.setAttribute("aria-label", "Result field scale");
-    [["linear", "Linear scale"], ["log", "Logarithmic scale"]].forEach(([value, text]) => {
+    [["linear", "Linear scale"], ["log", "Logarithmic scale"], ["signed_log", "Signed-log scale"]].forEach(([value, text]) => {
       const option = element("option", "", text);
       option.value = value;
       scale.append(option);
@@ -505,19 +575,19 @@
     let viewport = null;
     const redraw = () => {
       const field = fields.find((candidate) => candidate.name === select.value) || fields[0];
-      const logAccepted = drawFieldChart(
+      const scaleResult = drawFieldChart(
         svg,
         tooltip,
         {...field, axis: {kind: "position", unit: "m"}},
-        scale.value === "log",
+        scale.value,
         viewport,
         (next) => {
           viewport = next;
           redraw();
         },
-        regionMarkers(payload),
+        structureMarkers(payload),
       );
-      if (scale.value === "log" && !logAccepted) scale.value = "linear";
+      if (scale.value === "log" && !scaleResult.logAccepted) scale.value = "linear";
       svg.setAttribute("aria-label", `${label(field.name)} across device position`);
     };
     select.addEventListener("change", () => {
@@ -594,7 +664,7 @@
     });
     const scale = element("select");
     scale.setAttribute("aria-label", "Result dataset scale");
-    [["linear", "Linear scale"], ["log", "Logarithmic scale"]].forEach(([value, text]) => {
+    [["linear", "Linear scale"], ["log", "Logarithmic scale"], ["signed_log", "Signed-log scale"]].forEach(([value, text]) => {
       const option = element("option", "", text);
       option.value = value;
       scale.append(option);
@@ -603,7 +673,11 @@
     exportCsv.type = "button";
     const exportSvg = element("button", "result-export", "SVG");
     exportSvg.type = "button";
-    controls.append(select, slice, mode, scale, exportCsv, exportSvg);
+    const exportPng = element("button", "result-export", "PNG");
+    exportPng.type = "button";
+    const overlay = element("select", "hidden");
+    overlay.setAttribute("aria-label", "Compatible result overlay");
+    controls.append(select, slice, mode, scale, overlay, exportCsv, exportSvg, exportPng);
     section.append(controls);
     const chartRoot = element("div", "result-chart");
     const svg = svgNode("svg", {viewBox: "0 0 880 330", role: "img"});
@@ -614,6 +688,19 @@
     let viewport = null;
     const redraw = () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
+      if (overlay.dataset.primary !== dataset.id) {
+        overlay.replaceChildren();
+        const none = element("option", "", "No overlay");
+        none.value = "";
+        overlay.append(none);
+        compatibleOverlayOptions(dataset, datasets).forEach((candidate) => {
+          const option = element("option", "", candidate.label);
+          option.value = candidate.id;
+          overlay.append(option);
+        });
+        overlay.dataset.primary = dataset.id;
+      }
+      overlay.classList.toggle("hidden", overlay.options.length <= 1);
       mode.classList.toggle("hidden", dataset.plotKind !== "complex_response");
       scale.classList.toggle("hidden", dataset.plotKind === "heatmap");
       slice.replaceChildren();
@@ -640,19 +727,28 @@
           unit: series.valueUnit,
           axis: series.axis,
         };
-        const logAccepted = drawFieldChart(
+        const overlayDataset = datasets.find((candidate) => candidate.id === overlay.value);
+        const overlaySeries = overlayDataset
+          ? seriesForDataset(overlayDataset, slice.value, mode.value)
+          : null;
+        const scaleResult = drawFieldChart(
           svg,
           tooltip,
           field,
-          scale.value === "log",
+          scale.value,
           viewport,
           (next) => {
             viewport = next;
             redraw();
           },
-          series.axis.kind === "position" ? regionMarkers(payload) : [],
+          series.axis.kind === "position" ? structureMarkers(payload) : [],
+          overlaySeries ? [{
+            positions: overlaySeries.axis.values,
+            values: overlaySeries.values,
+            validity: overlaySeries.validity,
+          }] : [],
         );
-        if (scale.value === "log" && !logAccepted) scale.value = "linear";
+        if (scale.value === "log" && !scaleResult.logAccepted) scale.value = "linear";
       }
       svg.setAttribute("aria-label", `${dataset.label} scientific plot`);
     };
@@ -660,7 +756,7 @@
       viewport = null;
       redraw();
     });
-    [slice, mode, scale].forEach((control) => control.addEventListener("change", redraw));
+    [slice, mode, scale, overlay].forEach((control) => control.addEventListener("change", redraw));
     exportCsv.addEventListener("click", () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       const series = seriesForDataset(dataset, slice.value, mode.value);
@@ -677,6 +773,30 @@
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       const source = new XMLSerializer().serializeToString(svg);
       triggerDownload(`${dataset.id}.svg`, source, "image/svg+xml;charset=utf-8");
+    });
+    exportPng.addEventListener("click", () => {
+      const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
+      const source = new XMLSerializer().serializeToString(svg);
+      const image = new Image();
+      const blobUrl = URL.createObjectURL(new Blob([source], {type: "image/svg+xml"}));
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 1760;
+        canvas.height = 660;
+        const context = canvas.getContext("2d");
+        context?.drawImage(image, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(blobUrl);
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          const pngUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.download = `${dataset.id}.png`;
+          link.href = pngUrl;
+          link.click();
+          URL.revokeObjectURL(pngUrl);
+        }, "image/png");
+      };
+      image.src = blobUrl;
     });
     redraw();
     return section;
@@ -801,12 +921,14 @@
 
   globalThis.AgentKronigResults = {
     datasetOptions,
+    compatibleOverlayOptions,
     fieldOptions,
     findCanonicalResultPath,
     formatNumber,
     isCanonicalResultPath,
     render,
     seriesForDataset,
+    structureMarkers,
     summarize,
   };
 })();

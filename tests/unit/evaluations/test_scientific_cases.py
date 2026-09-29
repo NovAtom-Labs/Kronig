@@ -96,7 +96,7 @@ cases:
 def test_intake_suite_covers_complete_ambiguous_unsupported_and_varied_requests() -> None:
     suite = ScientificIntakeSuite.from_file(INTAKE_SUITE)
 
-    assert len(suite.cases) >= 5
+    assert len(suite.cases) >= 11
     assert {case.expected_status for case in suite.cases} >= {
         "ready",
         "clarification",
@@ -104,6 +104,11 @@ def test_intake_suite_covers_complete_ambiguous_unsupported_and_varied_requests(
     }
     assert any(case.expected_study == "dc_points" for case in suite.cases)
     assert any(case.expected_study == "dc" for case in suite.cases)
+    assert any(case.expected_study == "ac" for case in suite.cases)
+    assert any(case.expected_study == "frequency" for case in suite.cases)
+    assert any(case.expected_study == "transient" for case in suite.cases)
+    assert any(case.expected_study == "temperature" for case in suite.cases)
+    assert any(case.expected_study == "parameter" for case in suite.cases)
     assert any("unit" in case.required_concepts for case in suite.cases)
     assert any("unsupported_physics" in case.required_concepts for case in suite.cases)
     for case in suite.cases:

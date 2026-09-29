@@ -19,6 +19,7 @@ def stack() -> dict:
                 "left_region": "oxide",
                 "right_region": "bulk",
                 "fixed_charge_density": "1e11 cm^-2",
+                "mesh_spacing": "0.5 nm",
             }
         ],
         "profiles": [],
@@ -42,6 +43,7 @@ def test_interface_between_adjacent_regions_accepts_fixed_sheet_charge() -> None
 
     assert spec.interfaces[0].fixed_charge_density is not None
     assert spec.interfaces[0].fixed_charge_density.to("cm^-2") == pytest.approx(1e11)
+    assert spec.interfaces[0].mesh_spacing.to("nm") == pytest.approx(0.5)
 
 
 def test_interface_must_reference_an_adjacent_ordered_pair() -> None:

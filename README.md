@@ -103,13 +103,15 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Agent runtime | Process-scoped OpenHands execution, repository file tools, bounded terminal commands, tasks, approvals, and delegated agents |
 | Intent preparation | Same-model structured preparation, bounded repository and TCAD context, adaptive clarification, deterministic compilation, and provenance hashes |
 | Scientific contract | Strict simulator-neutral `ExperimentSpec` with dimensional quantities, typed axes and datasets, and unknown-field rejection |
-| Geometry | Up to 32 ordered, contiguous silicon or silicon-dioxide regions described as data, without named-device branches |
-| Doping | Constant, linear, Gaussian, error-function, and tabulated donor or acceptor profiles |
-| Studies | Equilibrium, exact-point DC, bounded range DC, adaptive continuation, terminal charge, and quasi-static capacitance density |
+| Geometry | Up to 32 ordered, contiguous silicon, silicon-dioxide, or researcher-parameterized dielectric regions with bounded mesh controls and automatic profile landmarks |
+| Profiles | Constant, piecewise, linear, Gaussian, error-function, and tabulated donor or acceptor profiles plus fixed bulk charge |
+| Interfaces | Explicit material interfaces, electrostatic continuity, mesh refinement, and fixed interface charge |
+| Physics | Poisson and drift diffusion, Boltzmann statistics, constant or Klaassen mobility, high-field saturation, SRH, Auger, Slotboom band-gap narrowing, and canonical band energies |
+| Studies | Equilibrium, exact or ranged DC, adaptive recovery, quasi-static C-V, small-signal AC, frequency, transient step or ramp, temperature, and registered parameter studies |
 | DEVSIM | Local deterministic compilation, execution, normalization, validation, reporting, and evidence bundles |
 | Sentaurus | Deterministic command compilation, source maps, signed remote protocol, canonical result contract, and conformance rules |
 | Knowledge | Manifest-gated retrieval over pinned official DEVSIM documentation and source plus source-grounded portable TCAD guides, with review state, backend/version filters, hashes, and citations |
-| Results | Dataset-driven metrics, curves, bias-indexed profile families, heatmaps, complex-response views, operating points, validation, provenance, zoom, pan, crosshair inspection, and CSV or SVG export |
+| Results | Dataset-driven metrics, curves, indexed profile families, heatmaps, complex-response views, compatible overlays, linear, log, and signed-log scales, operating points, validation, provenance, zoom, pan, crosshair inspection, contact and interface markers, and CSV, SVG, or PNG export |
 | Provenance | Source versions, hashes, compiler identity, simulator identity, validation records, and atomic bundle manifests |
 
 ### Backend boundary
@@ -118,14 +120,14 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | --- | --- | --- |
 | Execution | Local and packaged | Disabled until a licensed host passes integration checks |
 | Dimension | 1D | 1D |
-| Material | Silicon and silicon dioxide | Silicon |
+| Material | Silicon, silicon dioxide, and generic dielectric with explicit permittivity | Silicon |
 | Regions | Up to 32 ordered regions | Up to 32 ordered regions |
-| Contacts | Endpoint ohmic contacts and oxide-side ideal gates | Endpoint ohmic or explicit metal work-function contacts |
+| Contacts | Semiconductor ohmic, dielectric ideal-gate or work-function boundaries, insulating boundaries, offsets, and optional area | Endpoint ohmic or explicit metal work-function contacts |
 | Statistics | Boltzmann | Boltzmann or Fermi |
-| Mobility | Constant | Constant and reviewed Sentaurus mappings |
-| Recombination | SRH | SRH and Auger |
-| Band-gap narrowing | Unsupported | Supported by the adapter contract |
-| Studies | Equilibrium, exact or ranged DC, adaptive recovery, and quasi-static charge or C-V, up to 10 requested points | Equilibrium and DC sweep, up to 10 points |
+| Mobility | Constant, Klaassen, and reviewed one-dimensional high-field saturation | Constant and reviewed Sentaurus mappings |
+| Recombination | SRH and Auger | SRH and Auger |
+| Band-gap narrowing | Reviewed Slotboom implementation | Supported by the adapter contract |
+| Studies | Equilibrium, DC, charge or C-V, AC or frequency, transient step or ramp, temperature, and registered parameters, with a 10,000-point resource limit | Equilibrium and DC sweep, up to 10 points |
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
 
@@ -154,10 +156,11 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 
 - One spatial dimension, silicon and silicon dioxide, reviewed analytic profile primitives, and endpoint contacts.
 - No arbitrary model-written simulator syntax.
-- No process simulation, transient analysis, AC, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or circuit co-simulation.
+- No process simulation, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or arbitrary circuit co-simulation.
 - No automated calibration against fabrication measurements.
-- The reviewed DEVSIM adapter returns mobility and SRH recombination, but does not yet cover metal work functions, Schottky contacts, Fermi statistics, Auger, band-gap narrowing, or band-edge and Fermi-level profiles.
-- AC, frequency-domain, transient, temperature, and generic parameter studies exist in the portable contract but remain disabled in the DEVSIM manifest until runtime extraction and reference benchmarks pass.
+- Direct metal-semiconductor Schottky transport and coupled Fermi-Dirac drift diffusion remain disabled research gates. Metal work function is supported only as a reviewed electrostatic boundary on dielectric contacts.
+- Philips-style surface mobility, surface recombination, interface traps, and transient pulse waveforms remain disabled until their equations and reference benchmarks are complete.
+- Parameter studies are restricted to the registered model-parameter paths. Arbitrary runtime paths and arbitrary material values are rejected.
 - DC sweeps retain every requested terminal operating point plus bias-indexed spatial profiles. Failed solves remain explicit and are masked as gaps in the scientific viewer.
 - Licensed Sentaurus execution remains unavailable until a separate host, exact simulator version, extractor, signing keys, quotas, and conformance cases are configured and verified.
 - Windows and macOS can warn about unsigned alpha packages.
@@ -242,7 +245,8 @@ Live Bedrock and licensed Sentaurus tests are opt-in. Ordinary local verificatio
 The synthetic scientific suite exercises complete, incomplete, ambiguous, contradictory,
 and unsupported natural researcher prompts. Real DEVSIM coverage spans mixed silicon and oxide
 compositions, analytic profiles, equilibrium, exact and adaptive DC, terminal charge,
-quasi-static capacitance, immutable provenance, deterministic validation, and graphable
+quasi-static capacitance, AC and frequency response, transient schedules, temperature and
+registered parameter studies, immutable provenance, deterministic validation, and graphable
 canonical datasets:
 
 ```bash
