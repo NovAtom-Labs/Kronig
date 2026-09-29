@@ -448,6 +448,11 @@ def test_workspace_results_endpoint_returns_verified_canonical_bundle(
     assert payload["manifest"]["run_id"] == "run-0001"
     assert payload["result"]["backend"] == "devsim"
     assert payload["result"]["fields"]["potential"]["unit"] == "V"
+    assert payload["result"]["datasets"]["potential"]["unit"] == "V"
+    assert payload["result"]["datasets"]["potential"]["axes"] == [
+        "position__potential"
+    ]
+    assert payload["result"]["axes"]["position__potential"]["kind"] == "position"
 
 
 def test_workspace_results_endpoint_sanitizes_invalid_bundle_error(

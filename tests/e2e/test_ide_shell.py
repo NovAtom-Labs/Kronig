@@ -74,7 +74,8 @@ def test_workspace_route_restores_current_process_session_activity(
     assert 'id="agent-run-summary"' in restored_page.text
     assert 'id="agent-reasoning"' in restored_page.text
     assert 'id="agent-changes"' in restored_page.text
-    assert 'src="/static/results-workbench.js?v=20260927-1"' in restored_page.text
+    assert 'src="/static/scientific-chart.js?v=20260929-1"' in restored_page.text
+    assert 'src="/static/results-workbench.js?v=20260929-1"' in restored_page.text
     assert "Foundation slice" not in restored_page.text
     assert [message["content"] for message in restored_messages] == [
         "Inspect the experiment definition"

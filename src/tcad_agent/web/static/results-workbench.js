@@ -28,7 +28,69 @@
       .filter((value) => Number.isFinite(value));
   }
 
+  function datasetOptions(payload) {
+    const axes = payload?.result?.axes || {};
+    return Object.entries(payload?.result?.datasets || {}).flatMap(([name, dataset]) => {
+      const axisIds = Array.isArray(dataset?.axes) ? dataset.axes : [];
+      const shape = Array.isArray(dataset?.shape) ? dataset.shape.map(Number) : [];
+      const values = Array.isArray(dataset?.values) ? dataset.values.map(Number) : [];
+      if (
+        axisIds.length !== shape.length
+        || values.some((value) => !Number.isFinite(value))
+        || shape.reduce((total, size) => total * size, 1) !== values.length
+      ) return [];
+      const resolvedAxes = axisIds.map((axisId) => axes[axisId]);
+      if (resolvedAxes.some((axis, index) => (
+        !axis
+        || !Array.isArray(axis.values)
+        || axis.values.length !== shape[index]
+        || axis.values.some((value) => !Number.isFinite(Number(value)))
+      ))) return [];
+      const imaginary = dataset.imaginary_values;
+      if (
+        imaginary !== null
+        && imaginary !== undefined
+        && (!Array.isArray(imaginary)
+          || imaginary.length !== values.length
+          || imaginary.some((value) => !Number.isFinite(Number(value))))
+      ) return [];
+      const kinds = resolvedAxes.map((axis) => String(axis.kind || "index"));
+      let plotKind = "table";
+      if (axisIds.length === 0) plotKind = "metric";
+      else if (imaginary && axisIds.length === 1) plotKind = "complex_response";
+      else if (axisIds.length === 1) plotKind = "curve";
+      else if (axisIds.length === 2 && kinds.includes("position")) plotKind = "profile_family";
+      else if (axisIds.length === 2) plotKind = "heatmap";
+      return [{
+        name,
+        id: String(dataset.id || name),
+        label: String(dataset.label || label(name)),
+        unit: String(dataset.unit || "1"),
+        axes: resolvedAxes.map((axis) => ({
+          ...axis,
+          values: axis.values.map(Number),
+        })),
+        shape,
+        values,
+        imaginaryValues: imaginary ? imaginary.map(Number) : null,
+        centering: String(dataset.centering || "node"),
+        source: String(dataset.source || "simulator"),
+        plotKind,
+      }];
+    });
+  }
+
   function fieldOptions(payload) {
+    const canonical = datasetOptions(payload).flatMap((dataset) => {
+      if (dataset.shape.length !== 1 || dataset.axes[0]?.kind !== "position") return [];
+      return [{
+        name: dataset.name,
+        positions: dataset.axes[0].values,
+        values: dataset.values,
+        unit: dataset.unit,
+      }];
+    });
+    if (canonical.length) return canonical;
     return Object.entries(payload?.result?.fields || {}).flatMap(([name, series]) => {
       const positions = Array.isArray(series?.positions_m) ? series.positions_m.map(Number) : [];
       const values = Array.isArray(series?.values) ? series.values.map(Number) : [];
@@ -44,8 +106,11 @@
 
   function summarize(payload) {
     const fields = payload?.result?.fields || {};
-    const potential = finiteValues(fields.potential?.values);
-    const electricField = finiteValues(fields.electric_field?.values);
+    const datasets = payload?.result?.datasets || {};
+    const potential = finiteValues(datasets.potential?.values || fields.potential?.values);
+    const electricField = finiteValues(
+      datasets.electric_field?.values || fields.electric_field?.values,
+    );
     const currents = (payload?.result?.bias_points || []).flatMap(
       (point) => finiteValues(Object.values(point.terminal_currents_a_per_m2 || {})),
     );
@@ -63,9 +128,53 @@
         ? Math.max(...currents.map(Math.abs))
         : null,
       operatingPointCount: (payload?.result?.bias_points || []).length,
-      fieldCount: Object.keys(fields).length,
+      fieldCount: Object.keys(datasets).length || Object.keys(fields).length,
       validationPassed: checks.filter((check) => check.status === "passed").length,
       validationTotal: checks.length,
+    };
+  }
+
+  function seriesForDataset(dataset, sliceIndex = 0, complexMode = "magnitude") {
+    const chart = globalThis.AgentKronigScientificChart;
+    if (!dataset || !dataset.axes?.length) return null;
+    let values = dataset.values;
+    if (dataset.imaginaryValues) {
+      const response = chart?.complexResponse(dataset.values, dataset.imaginaryValues);
+      if (complexMode === "phase") values = response?.phaseDegrees || [];
+      else if (complexMode === "real") values = dataset.values;
+      else if (complexMode === "imaginary") values = dataset.imaginaryValues;
+      else values = response?.magnitude || [];
+    }
+    if (dataset.shape.length === 1) {
+      return {
+        axis: dataset.axes[0],
+        values,
+        valueUnit: complexMode === "phase" ? "°" : dataset.unit,
+        label: dataset.label,
+      };
+    }
+    if (dataset.shape.length !== 2) return null;
+    const positionIndex = dataset.axes.findIndex((axis) => axis.kind === "position");
+    if (positionIndex < 0) return null;
+    const otherIndex = positionIndex === 0 ? 1 : 0;
+    const boundedSlice = Math.min(
+      dataset.shape[otherIndex] - 1,
+      Math.max(0, Number(sliceIndex) || 0),
+    );
+    const profile = [];
+    for (let position = 0; position < dataset.shape[positionIndex]; position += 1) {
+      const flatIndex = positionIndex === 1
+        ? boundedSlice * dataset.shape[1] + position
+        : position * dataset.shape[1] + boundedSlice;
+      profile.push(values[flatIndex]);
+    }
+    return {
+      axis: dataset.axes[positionIndex],
+      values: profile,
+      valueUnit: dataset.unit,
+      label: dataset.label,
+      sliceAxis: dataset.axes[otherIndex],
+      sliceIndex: boundedSlice,
     };
   }
 
@@ -249,6 +358,12 @@
   }
 
   function renderFields(payload) {
+    const datasets = datasetOptions(payload).filter(
+      (dataset) => ["curve", "complex_response", "profile_family", "heatmap"].includes(
+        dataset.plotKind,
+      ),
+    );
+    if (datasets.length) return renderDatasets(payload, datasets);
     const fields = fieldOptions(payload);
     const section = element("section", "result-section result-fields");
     const heading = element("div", "result-section-heading");
@@ -289,6 +404,134 @@
     };
     select.addEventListener("change", redraw);
     scale.addEventListener("change", redraw);
+    redraw();
+    return section;
+  }
+
+  function triggerDownload(name, content, type) {
+    const link = document.createElement("a");
+    link.download = name;
+    link.href = URL.createObjectURL(new Blob([content], {type}));
+    link.click();
+    URL.revokeObjectURL(link.href);
+  }
+
+  function renderHeatmap(svg, dataset) {
+    svg.replaceChildren();
+    const chart = globalThis.AgentKronigScientificChart;
+    const cells = chart?.heatmapCells(
+      dataset.axes[0].values,
+      dataset.axes[1].values,
+      dataset.values,
+    ) || [];
+    if (!cells.length) return;
+    const values = cells.map((cell) => cell.value);
+    const minimum = Math.min(...values);
+    const maximum = Math.max(...values);
+    const width = 760 / dataset.shape[0];
+    const height = 260 / dataset.shape[1];
+    cells.forEach((cell, index) => {
+      const fraction = maximum === minimum ? 0.5 : (cell.value - minimum) / (maximum - minimum);
+      const hue = 215 - 175 * fraction;
+      svg.append(svgNode("rect", {
+        x: 82 + Math.floor(index / dataset.shape[1]) * width,
+        y: 22 + (dataset.shape[1] - 1 - index % dataset.shape[1]) * height,
+        width: Math.max(width, 1),
+        height: Math.max(height, 1),
+        fill: `hsl(${hue} 48% ${35 + fraction * 20}%)`,
+      }));
+    });
+    svg.append(
+      svgNode("text", {x: 462, y: 315, class: "result-chart-label", "text-anchor": "middle"}, `${dataset.axes[0].label} (${dataset.axes[0].unit})`),
+      svgNode("text", {x: 18, y: 152, transform: "rotate(-90 18 152)", class: "result-chart-label", "text-anchor": "middle"}, `${dataset.axes[1].label} (${dataset.axes[1].unit})`),
+      svgNode("text", {x: 846, y: 16, class: "result-chart-tick", "text-anchor": "end"}, `${formatNumber(minimum)} to ${formatNumber(maximum)} ${dataset.unit}`),
+    );
+  }
+
+  function renderDatasets(payload, datasets) {
+    const section = element("section", "result-section result-fields");
+    const heading = element("div", "result-section-heading");
+    heading.append(element("h2", "", "Scientific datasets"));
+    heading.append(element("span", "", `${datasets.length} graphable`));
+    section.append(heading);
+    const controls = element("div", "result-field-controls");
+    const select = element("select");
+    select.setAttribute("aria-label", "Displayed result dataset");
+    datasets.forEach((dataset) => {
+      const option = element("option", "", dataset.label);
+      option.value = dataset.name;
+      select.append(option);
+    });
+    const slice = element("select", "hidden");
+    slice.setAttribute("aria-label", "Displayed operating point");
+    const mode = element("select", "hidden");
+    mode.setAttribute("aria-label", "Complex result view");
+    [["magnitude", "Magnitude"], ["phase", "Phase"], ["real", "Real"], ["imaginary", "Imaginary"]].forEach(([value, text]) => {
+      const option = element("option", "", text);
+      option.value = value;
+      mode.append(option);
+    });
+    const scale = element("select");
+    scale.setAttribute("aria-label", "Result dataset scale");
+    [["linear", "Linear scale"], ["log", "Logarithmic scale"]].forEach(([value, text]) => {
+      const option = element("option", "", text);
+      option.value = value;
+      scale.append(option);
+    });
+    const exportCsv = element("button", "result-export", "CSV");
+    exportCsv.type = "button";
+    controls.append(select, slice, mode, scale, exportCsv);
+    section.append(controls);
+    const chartRoot = element("div", "result-chart");
+    const svg = svgNode("svg", {viewBox: "0 0 880 330", role: "img"});
+    const tooltip = element("div", "result-chart-tooltip hidden");
+    chartRoot.append(svg, tooltip);
+    section.append(chartRoot);
+
+    const redraw = () => {
+      const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
+      mode.classList.toggle("hidden", dataset.plotKind !== "complex_response");
+      scale.classList.toggle("hidden", dataset.plotKind === "heatmap");
+      slice.replaceChildren();
+      if (dataset.plotKind === "profile_family") {
+        const positionIndex = dataset.axes.findIndex((axis) => axis.kind === "position");
+        const sliceAxis = dataset.axes[positionIndex === 0 ? 1 : 0];
+        sliceAxis.values.forEach((value, index) => {
+          const option = element("option", "", `${sliceAxis.label}: ${formatNumber(value)} ${sliceAxis.unit}`);
+          option.value = String(index);
+          slice.append(option);
+        });
+        slice.classList.remove("hidden");
+      } else {
+        slice.classList.add("hidden");
+      }
+      if (dataset.plotKind === "heatmap") {
+        renderHeatmap(svg, dataset);
+      } else {
+        const series = seriesForDataset(dataset, slice.value, mode.value);
+        const field = {
+          positions: series.axis.values,
+          values: series.values,
+          unit: series.valueUnit,
+        };
+        const logAccepted = drawFieldChart(svg, tooltip, field, scale.value === "log");
+        if (scale.value === "log" && !logAccepted) scale.value = "linear";
+      }
+      svg.setAttribute("aria-label", `${dataset.label} scientific plot`);
+    };
+    [select, slice, mode, scale].forEach((control) => control.addEventListener("change", redraw));
+    exportCsv.addEventListener("click", () => {
+      const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
+      const series = seriesForDataset(dataset, slice.value, mode.value);
+      if (!series) return;
+      const points = series.axis.values.map((x, index) => ({x, value: series.values[index]}));
+      const content = globalThis.AgentKronigScientificChart.toCsv(
+        points,
+        `${series.axis.label} (${series.axis.unit})`,
+        `${dataset.label} (${series.valueUnit})`,
+      );
+      triggerDownload(`${dataset.id}.csv`, content, "text/csv;charset=utf-8");
+    });
     redraw();
     return section;
   }
@@ -411,11 +654,13 @@
   }
 
   globalThis.AgentKronigResults = {
+    datasetOptions,
     fieldOptions,
     findCanonicalResultPath,
     formatNumber,
     isCanonicalResultPath,
     render,
+    seriesForDataset,
     summarize,
   };
 })();

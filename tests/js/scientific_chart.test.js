@@ -1,0 +1,41 @@
+"use strict";
+
+function assertEqual(actual, expected, message) {
+  if (actual !== expected) throw new Error(`${message}: ${actual}`);
+}
+
+const chart = globalThis.AgentKronigScientificChart;
+
+const segmented = chart.segmentSeries(
+  [0, 1, 2, 3],
+  [10, 20, 30, 40],
+  [true, false, true, true],
+);
+assertEqual(segmented.length, 2, "failed operating points create visible gaps");
+assertEqual(segmented[0].length, 1, "the first valid point is preserved");
+assertEqual(segmented[1].length, 2, "the later valid run is preserved");
+
+assertEqual(chart.logTransform([1, 10, 100]).accepted, true, "positive values support log scale");
+assertEqual(chart.logTransform([1, 0, 100]).accepted, false, "zero rejects log scale safely");
+
+const complex = chart.complexResponse([3, 0], [4, 1]);
+assertEqual(complex.magnitude[0], 5, "complex magnitude is derived generically");
+assertEqual(Math.round(complex.phaseDegrees[1]), 90, "complex phase is available in degrees");
+
+const cells = chart.heatmapCells([0, 1], [10, 20, 30], [1, 2, 3, 4, 5, 6]);
+assertEqual(cells.length, 6, "rank-two flattened data maps to every heatmap cell");
+assertEqual(cells[4].x, 1, "heatmap coordinates preserve first-axis order");
+assertEqual(cells[4].y, 20, "heatmap coordinates preserve second-axis order");
+
+const zoomed = chart.zoomViewport({minimum: 0, maximum: 10}, 5, 0.5);
+assertEqual(zoomed.minimum, 2.5, "zoom preserves the data-space center");
+assertEqual(zoomed.maximum, 7.5, "zoom changes range deterministically");
+const panned = chart.panViewport(zoomed, 1);
+assertEqual(panned.minimum, 3.5, "pan moves the viewport in data units");
+assertEqual(panned.maximum, 8.5, "pan preserves viewport width");
+
+assertEqual(
+  chart.toCsv([{x: 0, value: 1}, {x: 2, value: 3}], "Bias (V)", "Current (A/m^2)"),
+  "Bias (V),Current (A/m^2)\n0,1\n2,3\n",
+  "CSV export is deterministic and contains labels",
+);

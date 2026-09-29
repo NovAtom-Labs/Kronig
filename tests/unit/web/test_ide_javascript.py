@@ -82,6 +82,25 @@ def test_results_workbench_recognizes_and_summarizes_canonical_results() -> None
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
+def test_scientific_chart_helpers_are_dataset_and_device_neutral() -> None:
+    project_root = Path(__file__).parents[3]
+    source = (
+        project_root / "src/tcad_agent/web/static/scientific-chart.js"
+    ).read_text()
+    assertions = (
+        project_root / "tests/js/scientific_chart.test.js"
+    ).read_text()
+    completed = subprocess.run(
+        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_agent_events_reduce_restored_and_live_activity_deterministically() -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-events.js").read_text()

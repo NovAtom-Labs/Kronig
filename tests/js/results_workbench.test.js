@@ -82,3 +82,33 @@ const fields = results.fieldOptions(payload);
 assertEqual(fields.length, 2, "only finite aligned field series are graphable");
 assertEqual(fields[0].name, "potential", "field order follows canonical result order");
 assertEqual(fields[1].name, "electric_field", "all valid canonical fields remain selectable");
+
+const datasetPayload = {
+  result: {
+    axes: {
+      bias: {id: "bias", kind: "bias", label: "Bias", unit: "V", values: [-1, 0, 1]},
+      position: {id: "position", kind: "position", label: "Position", unit: "m", values: [0, 1e-6]},
+      frequency: {id: "frequency", kind: "frequency", label: "Frequency", unit: "Hz", values: [1e3, 1e4]},
+    },
+    datasets: {
+      current: {id: "current", label: "Current", unit: "A/m^2", axes: ["bias"], shape: [3], values: [-1, 0, 1]},
+      potential_map: {id: "potential_map", label: "Potential map", unit: "V", axes: ["bias", "position"], shape: [3, 2], values: [0, 1, 1, 2, 2, 3]},
+      admittance: {id: "admittance", label: "Admittance", unit: "S/m^2", axes: ["frequency"], shape: [2], values: [1, 2], imaginary_values: [3, 4]},
+      peak: {id: "peak", label: "Peak", unit: "V/m", axes: [], shape: [], centering: "scalar", values: [7]},
+    },
+  },
+};
+const datasets = results.datasetOptions(datasetPayload);
+assertEqual(datasets.length, 4, "every well-formed canonical dataset is discoverable");
+assertEqual(datasets[0].plotKind, "curve", "a rank-one dataset is a generic curve");
+assertEqual(datasets[1].plotKind, "profile_family", "bias-position data is a profile family");
+assertEqual(datasets[2].plotKind, "complex_response", "complex rank-one data is a response");
+assertEqual(datasets[3].plotKind, "metric", "rank-zero data is a metric");
+const profile = results.seriesForDataset(datasets[1], 1);
+assertEqual(profile.values.join(","), "1,2", "profile selection slices a generic rank-two dataset");
+assertEqual(profile.sliceAxis.kind, "bias", "the non-position axis controls profile selection");
+assertEqual(
+  results.datasetOptions({result: {axes: {}, datasets: {broken: {id: "broken", label: "Broken", unit: "V", axes: ["missing"], shape: [2], values: [1, 2]}}}}).length,
+  0,
+  "datasets with unresolved axes never reach the viewer",
+);
