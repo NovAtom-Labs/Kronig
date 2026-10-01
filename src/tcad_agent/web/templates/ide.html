@@ -49,6 +49,13 @@
           </div>
           <button id="browse-workspace" class="browse-workspace" type="button">Open folder</button>
         </form>
+        <section id="experiment-projects" class="experiment-projects" hidden aria-labelledby="experiment-projects-title">
+          <header>
+            <span id="experiment-projects-title">EXPERIMENTS</span>
+            <span id="experiment-project-count">0</span>
+          </header>
+          <div id="experiment-project-list" class="experiment-project-list"></div>
+        </section>
         <div id="repository-tree" class="repository-tree" role="tree">
           <p class="empty-copy">Open a local repository to inspect its files.</p>
         </div>
@@ -141,6 +148,29 @@
               <div class="clarification-actions">
                 <span>Answers apply to this run only.</span>
                 <button id="submit-clarification" type="submit">Continue</button>
+              </div>
+            </form>
+          </section>
+          <section id="plan-review-card" class="plan-review-card hidden" aria-labelledby="plan-review-title">
+            <header>
+              <span>EXPERIMENT READY</span>
+              <h2 id="plan-review-title">Review prepared experiment</h2>
+              <p id="plan-review-summary"></p>
+            </header>
+            <dl id="plan-review-facts" class="plan-review-facts"></dl>
+            <p id="plan-review-path" class="plan-review-path"></p>
+            <div class="plan-review-actions">
+              <button id="open-plan" type="button">Open plan</button>
+              <button id="revise-plan" type="button">Request changes</button>
+              <button id="approve-plan" type="button">Approve and run</button>
+              <button id="approve-plan-unattended" type="button">Run unattended</button>
+            </div>
+            <form id="plan-revision-form" class="plan-revision-form hidden">
+              <label for="plan-revision-instruction">What should change?</label>
+              <textarea id="plan-revision-instruction" rows="3" maxlength="4000" placeholder="Describe only the changes needed before execution"></textarea>
+              <div>
+                <button id="cancel-plan-revision" type="button">Cancel</button>
+                <button type="submit">Revise plan</button>
               </div>
             </form>
           </section>
@@ -238,6 +268,6 @@
     <script src="/static/desktop-bridge.js?v=20260925-1" defer></script>
     <script src="/static/scientific-chart.js?v=20260929-1" defer></script>
     <script src="/static/results-workbench.js?v=20260929-1" defer></script>
-    <script src="/static/ide.js?v=20260928-2" defer></script>
+    <script src="/static/ide.js?v=20261001-1" defer></script>
   </body>
 </html>

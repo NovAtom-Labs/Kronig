@@ -123,3 +123,70 @@ assertEqual(
 view.reset();
 assertEqual(view.snapshot().lastEventId, 0, "reset clears the cursor");
 assertEqual(view.snapshot().steps.length, 0, "reset clears steps");
+
+const preparationView = globalThis.AgentKronigIDEEvents.createRunPresentation();
+preparationView.accept(event(201, "run_created", {run_id: "run-prep", state: "queued"}));
+snapshot = preparationView.snapshot();
+assertEqual(snapshot.runState, "queued", "a newly created preparation run is visible immediately");
+preparationView.accept(event(202, "prompt_preparation_started", {
+  run_id: "run-prep",
+  phase: "understanding_request",
+}));
+assertEqual(
+  preparationView.snapshot().currentOperation,
+  "Understanding the research request",
+  "request understanding is visible before tool execution",
+);
+preparationView.accept(event(203, "prompt_preparation_progress", {
+  run_id: "run-prep",
+  phase: "checking_local_evidence",
+}));
+assertEqual(
+  preparationView.snapshot().currentOperation,
+  "Checking local scientific evidence",
+  "scientific preparation progress remains visible while the model is working",
+);
+preparationView.accept(event(204, "clarification_required", {
+  run_id: "run-prep",
+  question_count: 2,
+}));
+snapshot = preparationView.snapshot();
+assertEqual(snapshot.runState, "waiting_for_user", "clarification updates the visible run state");
+assertEqual(snapshot.currentOperation, "Waiting for your response", "clarification names the next action");
+
+const planView = globalThis.AgentKronigIDEEvents.createRunPresentation();
+planView.accept(event(210, "run_started", {run_id: "run-plan"}));
+planView.accept(event(211, "plan_ready", {
+  run_id: "run-plan",
+  plan_digest: "a".repeat(64),
+  plan_path: "/repo/experiments/bias-study/PLAN.md",
+  revision: 0,
+}));
+snapshot = planView.snapshot();
+assertEqual(snapshot.runState, "waiting_for_plan_approval", "a prepared plan has a dedicated state");
+assertEqual(snapshot.currentOperation, "Experiment plan ready for review", "plan review names the next action");
+assertEqual(snapshot.plan.planDigest, "a".repeat(64), "typed plan metadata is retained");
+planView.accept(event(212, "plan_approved", {
+  run_id: "run-plan",
+  plan_digest: "a".repeat(64),
+  approval_mode: "review_each_risk",
+}));
+assertEqual(planView.snapshot().runState, "running", "plan approval resumes the same run");
+
+planView.accept(event(213, "result_ready", {
+  run_id: "run-plan",
+  bundle_run_id: "experiment-0001",
+  execution_state: "completed",
+  validation_state: "needs_review",
+  deliverable_state: "incomplete",
+  report_state: "complete",
+  overall_state: "needs_attention",
+  failed_check_count: 2,
+  unmet_deliverables: ["electron_density"],
+}));
+const resultSnapshot = planView.snapshot("run-plan");
+assertEqual(resultSnapshot.resultReady.overallState, "needs_attention", "structured outcome is retained");
+assertEqual(resultSnapshot.resultReady.failedCheckCount, 2, "failed check count is retained");
+snapshot = planView.snapshot();
+assertEqual(snapshot.resultReady.bundleRunId, "experiment-0001", "managed result metadata reaches the UI");
+assertEqual(snapshot.resultReady.validationState, "needs_review", "validation review remains distinct from execution");

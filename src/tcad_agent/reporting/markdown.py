@@ -1,6 +1,7 @@
 """Markdown report rendered only from structured evidence."""
 
 from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.reporting.traceability import TraceabilityMatrix
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.models import ValidationReport
 
@@ -11,8 +12,15 @@ class MarkdownReport:
         spec: ExperimentSpec,
         result: CanonicalResult,
         validation: ValidationReport,
+        *,
+        traceability: TraceabilityMatrix | None = None,
     ) -> str:
-        outcome = "Completed" if validation.overall == "passed" else "Failed"
+        if result.status != "completed":
+            outcome = "Failed"
+        elif validation.overall == "passed":
+            outcome = "Completed"
+        else:
+            outcome = "Checks need attention"
         lines = [
             f"# {spec.name} TCAD Evidence Summary",
             "",
@@ -48,6 +56,21 @@ class MarkdownReport:
                 f"| {check.id} | {check.level} | {check.status} | "
                 f"{check.evidence_origin} | {check.measured_value} | {check.limit} |"
             )
+        if traceability is not None:
+            lines.extend(
+                [
+                    "",
+                    "## Requested output traceability",
+                    "",
+                    "| Requested output | Status | Canonical evidence |",
+                    "|---|---|---|",
+                ]
+            )
+            for record in traceability.records:
+                evidence = ", ".join(record.evidence_datasets) or "unavailable"
+                lines.append(
+                    f"| {record.deliverable} | {record.status.value} | {evidence} |"
+                )
         lines.extend(
             [
                 "",

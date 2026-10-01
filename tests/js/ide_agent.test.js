@@ -115,6 +115,8 @@ assertEqual(researchTrail.stages[0].phase, "Repository", "inspection is presente
 assertEqual(researchTrail.stages[0].actionCount, 6, "grouped phase preserves its action count");
 assertEqual(researchTrail.stages[1].phase, "Validation", "validation remains a distinct research phase");
 assertEqual(researchTrail.current.label, "Running validation", "the active scientific operation is prominent");
+assertEqual(researchTrail.recent.length, 4, "chat keeps a bounded recent operational record");
+assertEqual(researchTrail.recent.at(-1).label, "Running validation", "the latest public action remains visible");
 assertEqual(JSON.stringify(researchTrail).includes("check-7"), false, "raw commands stay out of the chat trail");
 assertEqual(JSON.stringify(researchTrail).includes("private chain of thought"), false, "chat trail never exposes private reasoning");
 
@@ -137,6 +139,59 @@ const queuedTrail = agent.researchTrail({
   pendingApprovals: [],
 });
 assertEqual(queuedTrail.current.label, "Preparing the research approach", "a new run starts with an honest narrative state");
+
+const preparingTrail = agent.researchTrail({
+  runState: "queued",
+  currentOperation: "Checking local scientific evidence",
+  steps: [],
+  pendingApprovals: [],
+});
+assertEqual(preparingTrail.current.label, "Checking local scientific evidence", "preparation events drive the notebook narrative");
+assertEqual(preparingTrail.title, "Preparing request", "preprocessing uses a task-neutral title");
+assertEqual(preparingTrail.meta, "Live", "preparation does not claim that zero actions is useful progress");
+
+const clarificationTrail = agent.researchTrail({
+  runState: "waiting_for_user",
+  currentOperation: "Waiting for your response",
+  steps: [],
+  pendingApprovals: [],
+});
+assertEqual(clarificationTrail.title, "Input needed", "clarification has an explicit notebook title");
+assertEqual(clarificationTrail.current.label, "Waiting for your response", "clarification keeps the next action visible");
+assertEqual(clarificationTrail.meta, "Input needed", "clarification never displays a misleading zero-action count");
+
+const planReview = agent.planReview({
+  status: "pending",
+  revision: 2,
+  plan_digest: "f".repeat(64),
+  plan_path: "/repo/experiments/implant-study/PLAN.md",
+  prepared: {
+    backend: "devsim",
+    warnings: ["Absolute current requires contact area."],
+    spec: {
+      name: "Compensated silicon implant",
+      study: {kind: "dc_points"},
+      regions: [{id: "silicon"}],
+      contacts: [{id: "left"}, {id: "right"}],
+      observables: ["potential", "terminal_current_density"],
+    },
+    completeness: {records: [{status: "resolved"}, {status: "resolved"}]},
+  },
+});
+assertEqual(planReview.visible, true, "a pending typed plan has a dedicated review view");
+assertEqual(planReview.title, "Compensated silicon implant", "plan review uses the research title");
+assertEqual(planReview.study, "DC points", "study kind is presented plainly");
+assertEqual(planReview.planPath, "experiments/implant-study/PLAN.md", "plan path is repository relative");
+assertEqual(planReview.warningCount, 1, "plan warnings remain visible before execution");
+
+const planTrail = agent.researchTrail({
+  runState: "waiting_for_plan_approval",
+  currentOperation: "Experiment plan ready for review",
+  steps: [],
+  pendingApprovals: [],
+});
+assertEqual(planTrail.title, "Plan ready", "plan approval is distinct from a tool permission");
+assertEqual(planTrail.meta, "Review needed", "plan gate states the required researcher action");
 
 const betweenActions = agent.operationalUpdates({
   runState: "running",
@@ -234,6 +289,27 @@ const failed = agent.outcomeSummary(
 assertEqual(failed.tone, "danger", "failed run uses failure treatment");
 assertEqual(failed.failedStep, "Run validation", "failure keeps the failed step");
 assertEqual(failed.lastSuccessfulStep, "Inspect files", "failure keeps partial evidence");
+
+const needsAttention = agent.outcomeSummary(
+  {
+    runState: "blocked",
+    steps: rows,
+    resultReady: {
+      executionState: "completed",
+      validationState: "needs_review",
+      deliverableState: "incomplete",
+      reportState: "complete",
+      overallState: "needs_attention",
+      failedCheckCount: 2,
+      unmetDeliverables: ["electron_density"],
+    },
+  },
+  {files: []},
+);
+assertEqual(needsAttention.tone, "warning", "scientific review state is not shown as success or generic failure");
+assertEqual(needsAttention.title, "Results ready, checks need attention", "review outcome is humanized");
+assertEqual(needsAttention.failedCheckCount, 2, "exact failed-check count remains visible");
+assertEqual(needsAttention.unmetDeliverables[0], "electron_density", "missing requested evidence remains visible");
 
 const permission = agent.permissionView({
   summary: "Agent Kronig wants to access a path outside this repository.",

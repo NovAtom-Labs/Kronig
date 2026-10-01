@@ -52,6 +52,7 @@ def test_engine_executes_real_devsim_and_writes_verified_bundle(
     )
     assert view.manifest.run_id == bundle.run_id
     assert view.validation.overall == "passed"
+    assert not (tmp_path / "runs/.work/run-engine-real-devsim").exists()
 
 
 @pytest.mark.integration

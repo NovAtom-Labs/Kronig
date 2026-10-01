@@ -151,7 +151,9 @@
 
   function researchTrail(snapshot) {
     const state = snapshot?.runState || "idle";
-    if (state === "idle") return {visible: false, stages: [], current: null, recovery: null};
+    if (state === "idle") return {
+      visible: false, stages: [], recent: [], current: null, recovery: null,
+    };
     const steps = snapshot?.steps || [];
     const phaseLabels = {
       Plan: ["Approach", "Preparing the research approach", "Research approach prepared"],
@@ -198,24 +200,55 @@
     const pendingApproval = (snapshot?.pendingApprovals || []).at(-1);
     if (pendingApproval || state === "waiting_for_approval") {
       current = {label: "Waiting for researcher approval", status: "waiting"};
+    } else if (state === "waiting_for_plan_approval") {
+      current = {label: "Review the prepared experiment", status: "waiting"};
+    } else if (state === "waiting_for_user") {
+      current = {
+        label: snapshot?.currentOperation || "Waiting for your response",
+        status: "waiting",
+      };
     } else if (["queued", "running"].includes(state) && !steps.length) {
-      current = {label: "Preparing the research approach", status: "running"};
+      current = {
+        label: snapshot?.currentOperation && snapshot.currentOperation !== "Idle"
+          ? snapshot.currentOperation
+          : "Preparing the research approach",
+        status: "running",
+      };
     } else if (state === "running" && !current) {
       current = {label: "Reviewing results and choosing the next action", status: "running"};
     }
     const titles = {
+      queued: "Preparing request",
       completed: "Research record",
       failed: "Research stopped",
       blocked: "Research blocked",
       cancelled: "Research cancelled",
       waiting_for_approval: "Research awaiting approval",
+      waiting_for_plan_approval: "Plan ready",
+      waiting_for_user: "Input needed",
       paused: "Research paused",
     };
+    const meta = steps.length
+      ? `${steps.length} ${steps.length === 1 ? "action" : "actions"}`
+      : state === "waiting_for_user"
+        ? "Input needed"
+        : state === "waiting_for_plan_approval"
+          ? "Review needed"
+        : ["queued", "running"].includes(state)
+          ? "Live"
+          : "No tool actions";
+    const recent = chatTimeline(snapshot).slice(-4).map((update) => ({
+      id: update.id,
+      phase: update.phase,
+      label: update.label,
+      status: update.status,
+    }));
     return {
       visible: true,
       title: titles[state] || "Research in progress",
-      meta: `${steps.length} ${steps.length === 1 ? "action" : "actions"}`,
+      meta,
       stages,
+      recent,
       current,
       recovery: recoveredFailures.length
         ? "Intermediate corrections were resolved automatically. No researcher action was required."
@@ -245,6 +278,7 @@
     const successful = steps.filter((step) => step.status === "completed");
     const state = snapshot?.runState || "idle";
     const terminal = ["completed", "failed", "blocked", "cancelled"].includes(state);
+    const scientificOutcome = snapshot?.resultReady || null;
     const titles = {
       completed: "Run completed",
       failed: "Run failed",
@@ -277,14 +311,28 @@
       .filter((event) => ["agent_error", "change_baseline_warning"].includes(event.kind))
       .forEach((event) => warnings.push(String(event.payload?.detail || event.kind)));
     const nextActions = [];
-    if (state === "completed") nextActions.push("Review changed files and validation evidence.");
+    if (scientificOutcome?.overallState === "needs_attention") {
+      nextActions.push("Review failed checks and unmet requested outputs in Results.");
+    } else if (state === "completed") nextActions.push("Review changed files and validation evidence.");
     else if (failed) nextActions.push("Inspect the failed action output before retrying.");
     else if (state === "blocked") nextActions.push("Resolve the reported blocker before continuing.");
     return {
       visible: terminal,
       state,
-      tone: tones[state] || "neutral",
-      title: titles[state] || snapshot?.currentOperation || "Run activity",
+      tone: scientificOutcome?.overallState === "completed"
+        ? "success"
+        : scientificOutcome?.overallState === "needs_attention"
+          ? "warning"
+          : scientificOutcome?.overallState === "failed"
+            ? "danger"
+            : tones[state] || "neutral",
+      title: scientificOutcome?.overallState === "completed"
+        ? "Simulation completed"
+        : scientificOutcome?.overallState === "needs_attention"
+          ? "Results ready, checks need attention"
+          : scientificOutcome?.overallState === "failed"
+            ? "Simulation failed"
+            : titles[state] || snapshot?.currentOperation || "Run activity",
       changedFiles: changedPaths.length,
       changedPaths,
       completedSteps: successful.length,
@@ -299,6 +347,12 @@
       provenance: unique(successful.map((step) => step.provenance).filter((item) => typeof item === "string")),
       warnings,
       nextActions,
+      executionState: scientificOutcome?.executionState || null,
+      validationState: scientificOutcome?.validationState || null,
+      deliverableState: scientificOutcome?.deliverableState || null,
+      reportState: scientificOutcome?.reportState || null,
+      failedCheckCount: scientificOutcome?.failedCheckCount || 0,
+      unmetDeliverables: scientificOutcome?.unmetDeliverables || [],
     };
   }
 
@@ -401,6 +455,38 @@
     return "none";
   }
 
+  function planReview(record) {
+    const prepared = record?.prepared || {};
+    const spec = prepared.spec || {};
+    const rawPath = String(record?.plan_path || "").replaceAll("\\", "/");
+    const experimentIndex = rawPath.lastIndexOf("/experiments/");
+    const planPath = experimentIndex >= 0
+      ? rawPath.slice(experimentIndex + 1)
+      : rawPath.split("/").filter(Boolean).at(-1) || "PLAN.md";
+    const studyKind = String(spec.study?.kind || "study");
+    const studyLabels = {dc_points: "DC points", dc_sweep: "DC sweep", ac: "AC"};
+    const study = studyLabels[studyKind] || studyKind
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (letter) => letter.toUpperCase())
+      .replace(/^Dc\b/, "DC")
+      .replace(/^Ac\b/, "AC");
+    const completeness = prepared.completeness?.records || [];
+    return {
+      visible: record?.status === "pending",
+      title: String(spec.name || "Prepared experiment"),
+      backend: String(prepared.backend || "simulator"),
+      study,
+      regionCount: Array.isArray(spec.regions) ? spec.regions.length : 0,
+      contactCount: Array.isArray(spec.contacts) ? spec.contacts.length : 0,
+      observableCount: Array.isArray(spec.observables) ? spec.observables.length : 0,
+      unresolvedCount: completeness.filter((item) => item.status !== "resolved").length,
+      warningCount: Array.isArray(prepared.warnings) ? prepared.warnings.length : 0,
+      planPath,
+      planDigest: String(record?.plan_digest || ""),
+      revision: Number(record?.revision || 0),
+    };
+  }
+
   globalThis.AgentKronigAgentView = {
     affectedFilePaths,
     activityRows,
@@ -412,6 +498,7 @@
     outcomeSummary,
     operationalUpdates,
     permissionView,
+    planReview,
     phaseForStep,
     researchTrail,
     sanitizeArguments,

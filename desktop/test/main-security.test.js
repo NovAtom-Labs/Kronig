@@ -8,7 +8,10 @@ const {
   developmentIconPath,
   shouldAutoStart,
   installGracefulQuit,
+  installWindowCloseGuard,
   installPermissionPolicy,
+  resultWindowUrl,
+  sanitizeDiagnosticSummary,
 } = require("../src/main");
 
 test("denies every renderer permission request and check", () => {
@@ -46,6 +49,32 @@ test("navigation policy allows only the authenticated loopback origin", () => {
   assert.equal(prevented, true);
 });
 
+test("result pop-out URL is restricted to typed local workspace and run identifiers", () => {
+  assert.equal(
+    resultWindowUrl("http://127.0.0.1:43127", {
+      workspaceId: "11111111-1111-4111-8111-111111111111",
+      runId: "22222222-2222-4222-8222-222222222222",
+    }),
+    "http://127.0.0.1:43127/workspaces/11111111-1111-4111-8111-111111111111?result_run_id=22222222-2222-4222-8222-222222222222",
+  );
+  assert.throws(
+    () => resultWindowUrl("https://example.com", {workspaceId: "../outside", runId: "x"}),
+    /identifier/,
+  );
+});
+
+test("clipboard diagnostic summaries are bounded and redact secrets", () => {
+  const summary = sanitizeDiagnosticSummary({
+    diagnosticId: "diag-0123456789abcdef",
+    code: "local_state_operation_failed",
+    message: "token=secret-value " + "x".repeat(9000),
+  });
+
+  assert.match(summary, /diag-0123456789abcdef/);
+  assert.doesNotMatch(summary, /secret-value/);
+  assert.ok(summary.length <= 4096);
+});
+
 test("launch token contains at least 32 random bytes", () => {
   const first = createLaunchToken();
   const second = createLaunchToken();
@@ -80,7 +109,7 @@ test("application quit waits for backend shutdown", async () => {
   let quitCalls = 0;
   let releaseStop;
   const stopped = new Promise((resolve) => { releaseStop = resolve; });
-  installGracefulQuit(
+  const isShutdownComplete = installGracefulQuit(
     {
       on(event, callback) {
         if (event === "before-quit") handler = callback;
@@ -95,9 +124,33 @@ test("application quit waits for backend shutdown", async () => {
   handler({preventDefault: () => { prevented = true; }});
   assert.equal(prevented, true);
   assert.equal(quitCalls, 0);
+  assert.equal(isShutdownComplete(), false);
   releaseStop();
   await stopped;
   await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(quitCalls, 1);
+  assert.equal(isShutdownComplete(), true);
+});
+
+test("window close keeps the renderer alive until graceful shutdown completes", () => {
+  let closeHandler;
+  let quitCalls = 0;
+  let shutdownComplete = false;
+  installWindowCloseGuard(
+    {on(event, callback) { if (event === "close") closeHandler = callback; }},
+    {quit() { quitCalls += 1; }},
+    () => shutdownComplete,
+  );
+
+  let prevented = false;
+  closeHandler({preventDefault() { prevented = true; }});
+  assert.equal(prevented, true);
+  assert.equal(quitCalls, 1);
+
+  shutdownComplete = true;
+  prevented = false;
+  closeHandler({preventDefault() { prevented = true; }});
+  assert.equal(prevented, false);
   assert.equal(quitCalls, 1);
 });
 
@@ -117,4 +170,26 @@ test("application quit remains open when backend work is active", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(quitCalls, 0);
   assert.equal(blockedCalls, 1);
+});
+
+test("application quit can never be trapped by backend cleanup failure", async () => {
+  let handler;
+  let quitCalls = 0;
+  let forcedStops = 0;
+  installGracefulQuit(
+    {
+      on(_event, callback) { handler = callback; },
+      quit() { quitCalls += 1; },
+    },
+    async () => { throw new Error("cleanup failed"); },
+    async () => "quit-anyway",
+    async () => { forcedStops += 1; },
+  );
+
+  handler({preventDefault() {}});
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(forcedStops, 1);
+  assert.equal(quitCalls, 1);
 });

@@ -40,9 +40,12 @@ Agent Kronig combines an agentic repository IDE with a constrained scientific ex
 - Runs allowlisted repository commands and deterministic validation inside the selected workspace.
 - Delegates bounded analysis or review to registered specialist agents while one primary agent owns the final write sequence.
 - Converts research intent into a strict, simulator-neutral `ExperimentSpec`.
+- Resolves consequential scientific inputs into an auditable input ledger and refuses unresolved requirements before execution.
 - Checks a backend capability manifest before generating any simulator input.
+- Writes a deterministic `PLAN.md` and `plan.json`, pauses the same agent run for review, and resumes only the exact approved digest.
 - Compiles supported DEVSIM and Sentaurus jobs through deterministic adapters.
 - Normalizes simulator output into canonical result fields and validates numerical evidence.
+- Stores immutable simulator internals in application data while projecting a readable experiment folder into the selected repository.
 - Builds an evidence summary for every run and creates a separate narrative report only when the research task calls for one.
 - Retrieves reviewed TCAD context from pinned DEVSIM documentation, source, examples, and portable physics guidance with source metadata and citations.
 - Escalates to bounded public web research only when local evidence is missing, stale, conflicting, or insufficient, with run-scoped network approval and hashed source records.
@@ -86,6 +89,8 @@ Evidence summary, hashes, provenance, and run bundle
 ```
 
 The language model interprets intent and operates tools. It is not the authority for units, simulator syntax, supported physics, or numerical acceptance. Schemas, capability manifests, adapters, runners, and validators own those decisions.
+
+Plan approval is a product state, not a chat convention. `Approve and run`, `Run unattended`, and a contextual one-word `approved` all resolve the same pending plan record. A plan approval covers its local simulator execution for that run, so the same action is not requested again. Network, external-file, package, Git, remote, destructive, and system mutations remain outside unattended consent.
 
 ### Intent preparation
 
@@ -198,9 +203,9 @@ Every controlled TCAD bundle contains `report.md` as a compact evidence summary.
 
 ### Scientific results in the workspace
 
-Completed experiment bundles open in the center pane as a Results Workbench. Selecting a repository artifact whose path ends in `results/canonical.json` shows structure, canonical metrics, interactive one-dimensional fields, operating points, validation evidence, and manifest provenance. The underlying JSON remains available through the Evidence view.
+Completed managed experiment bundles open in the center pane as a Results Workbench. The application resolves the verified bundle by run identity, so researchers do not need to find or open internal JSON. The workbench shows structure, canonical metrics, interactive one-dimensional fields, operating points, validation evidence, and manifest provenance. The readable repository project retains `PLAN.md`, `REPORT.md`, `experiment.json`, `results.json`, and `validation.json` for audit and collaboration.
 
-When a foreground agent run creates or modifies a canonical result, Agent Kronig finds it through that run's immutable Changes manifest and opens the workbench automatically. Ordinary JSON files continue to use the generic file viewer.
+When a foreground agent run registers a hash-verified canonical result, Agent Kronig opens the workbench automatically for both passed and needs-review validation outcomes. Execution state and scientific validation state are displayed separately. Ordinary JSON files continue to use the generic file viewer.
 
 The workbench reads only verified `ExperimentSpec`, `CanonicalResult`, `ValidationReport`, and `BundleManifest` artifacts. DEVSIM and Sentaurus therefore share the same interface after their adapters normalize native results. It discovers scalar metrics, curves, profile families, heatmaps, and complex responses from canonical axes, shape, unit, and centering. Direct TDR or PLT extraction remains a responsibility of the Sentaurus exporter and canonical schema, not the UI.
 

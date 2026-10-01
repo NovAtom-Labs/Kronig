@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from tcad_agent.experiments.errors import (
     PlanDigestMismatchError,
 )
 from tcad_agent.experiments.models import PreparedExperiment
+from tcad_agent.experiments.planning import expected_bias_points
 from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.runners.models import RunBudget
 
@@ -29,6 +31,8 @@ def test_prepare_returns_stable_typed_plan_without_writing_files(
     assert first.plan["spec"] == valid_spec.normalized()
     assert first.plan["backend"] == "devsim"
     assert first.plan["warnings"] == ["local-only"]
+    assert first.completeness.ready
+    assert first.plan["scientific_input_ledger"]
     assert len(first.plan_digest) == 64
     assert len(first.capability_digest) == 64
     assert tuple(tmp_path.iterdir()) == ()
@@ -77,3 +81,12 @@ def test_execute_rejects_digest_before_creating_output(
         )
 
     assert not (tmp_path / "runs").exists()
+
+
+def test_expected_point_count_uses_all_explicit_dc_points() -> None:
+    payload = json.loads(
+        Path("tests/fixtures/workflows/compensated_gaussian_three_point.json").read_text()
+    )
+    spec = ExperimentSpec.model_validate(payload)
+
+    assert expected_bias_points(spec) == 3

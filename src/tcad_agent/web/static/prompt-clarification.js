@@ -32,5 +32,15 @@
     return {expected_revision: model.revision, answers};
   }
 
-  globalThis.AgentKronigClarification = {submission, view};
+  function signature(preparation) {
+    const model = view(preparation);
+    if (!model.visible) return "";
+    return JSON.stringify({
+      revision: model.revision,
+      summary: model.summary,
+      questions: model.questions,
+    });
+  }
+
+  globalThis.AgentKronigClarification = {signature, submission, view};
 })();

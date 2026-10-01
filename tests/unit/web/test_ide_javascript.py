@@ -267,6 +267,10 @@ def test_production_ide_wires_chat_recovery_file_editing_and_panel_controls() ->
         "AgentKronigResults.render",
         "/results?path=",
         "openCanonicalResult",
+        "openManagedResult",
+        "/plan/approve",
+        "/plan/revise",
+        "renderPlan",
         'target.querySelector("summary")?.focus()',
     ):
         assert required in source or required in permission_source
@@ -457,3 +461,12 @@ def test_composer_and_panel_reveal_controls_are_integrated_and_minimal() -> None
         re.DOTALL,
     )
     assert ".message-form > label" in source
+
+
+def test_workspace_shell_loads_researcher_facing_experiment_projects() -> None:
+    project_root = Path(__file__).parents[3]
+    script = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
+
+    assert "/experiments`" in script
+    assert "function renderExperimentProjects" in script
+    assert "openManagedResult(experiment.run_id)" in script

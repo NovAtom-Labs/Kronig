@@ -179,7 +179,7 @@ Read AGENTS.md and RESEARCH_TASK.md, then complete the research task end to end.
 ```
 
 4. Confirm the three-pane layout. At desktop width, resize both dividers and double-click each one to restore its default. At tablet width, open Repository as a drawer. At narrow width, open Agent as a drawer.
-5. Use Chat for the current workspace session and approval decisions. Inspect the plain-language explanation before opening Technical details. Approve all like this applies only to the displayed permission category and expires when the run ends.
+5. Use Chat for the current workspace session and approval decisions. Scientific execution first produces a repository `PLAN.md` and a compact plan card. Choose `Approve and run`, `Run unattended`, request a revision, or type `approved` while that exact plan is pending. Plan consent expires with the run. Other permission categories remain separate, and `Approve all like this` applies only to the displayed category for the current run.
 6. Use Activity to inspect one expandable row per tool action, including phase, delegated ownership, duration, commands, and output. Current-operation summaries are derived from tool events. Raw provider reasoning is never stored or displayed.
 7. Use Changes to confirm that only the files attributable to this run appear. Select a changed text file and verify that its unified diff opens in the central workspace.
 8. Open a safe text file, select Edit, make a disposable change, and save it. Restore that manual edit before grading so it is not confused with agent work.
@@ -199,15 +199,22 @@ Open a repository workspace and paste the prompt in
 portable specification, check DEVSIM capabilities, run only the explicit supported subset, and
 report the generated evidence.
 
-The local DEVSIM subset uses ohmic contacts, Boltzmann statistics, constant mobility, and SRH.
-Aluminum work functions, Fermi statistics, Auger recombination, band-gap narrowing, band profiles,
-mobility output, and recombination output remain visible as unsupported local capabilities.
+The local DEVSIM one-dimensional backend now supports the reviewed portable capability set described
+in `docs/testing/devsim-1d-expansion-acceptance.md`, including explicit current-density versus
+absolute-current semantics, work-function and reviewed Schottky boundaries, Boltzmann and bounded
+Fermi transport, mobility models, SRH and Auger recombination, Slotboom band-gap narrowing, band
+profiles, temperature and parameter studies, transient and AC studies, and canonical result
+validation. Unsupported combinations remain explicit research gates and are never silently removed.
 
 The full request is represented by `examples/al-pn-al-equilibrium.yaml` for the Sentaurus adapter.
 Licensed execution must remain unavailable until the remote host passes the Sentaurus integration
 and conformance checklist.
 
-Closing Agent Kronig or opening another repository clears the agent chat and activity trail. The repository and every generated file remain on disk, so a later session can inspect the artifacts without restoring earlier chat history.
+Closing Agent Kronig or opening another repository clears the agent chat and activity trail. The
+repository and readable experiment projects remain on disk. Immutable compiled inputs, native
+outputs, logs, and verified bundles live under Agent Kronig application data instead of cluttering
+the selected repository. A later session can inspect the projected artifacts without restoring
+earlier chat history.
 
 ## 10. Optional Bedrock smoke test
 

@@ -297,6 +297,24 @@ def test_simulator_execution_requires_plain_language_run_scoped_approval(
     )
 
 
+def test_digest_only_simulator_execution_uses_same_permission_category(
+    workspace: Path,
+) -> None:
+    event = action_event(
+        "tcad_domain",
+        TcadDomainAction(
+            operation="execute_approved_plan",
+            payload={"approved_plan_digest": "a" * 64},
+        ),
+    )
+
+    assert classify_action(workspace, event) is SecurityRisk.HIGH
+    assert (
+        policy_module.permission_category(workspace, event)
+        is PermissionCategory.SIMULATION_EXECUTION
+    )
+
+
 def test_unknown_action_fails_closed(workspace: Path) -> None:
     assert classify_action(workspace, action_event("mystery", None)) is SecurityRisk.HIGH
 

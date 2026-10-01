@@ -57,6 +57,8 @@ def test_workspace_route_restores_current_process_session_activity(
     assert 'class="edge-reveal edge-reveal-left"' in restored_page.text
     assert 'class="edge-reveal edge-reveal-right"' in restored_page.text
     assert 'id="close-workspace-browser"' in restored_page.text
+    assert 'id="experiment-projects"' in restored_page.text
+    assert 'id="experiment-project-list"' in restored_page.text
     assert 'data-agent-view="chat"' in restored_page.text
     assert 'data-agent-view="activity"' in restored_page.text
     assert 'data-agent-view="changes"' in restored_page.text

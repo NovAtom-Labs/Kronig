@@ -311,12 +311,22 @@ class ValidationEngine:
     ) -> ValidationCheck:
         missing: list[str] = []
         for observable in spec.observables:
-            if observable is Observable.TERMINAL_CURRENT:
+            if observable in {
+                Observable.TERMINAL_CURRENT,
+                Observable.TERMINAL_CURRENT_DENSITY,
+            }:
                 complete_currents = bool(result.terminals) and bool(result.bias_points) and all(
                     set(result.terminals).issubset(point.terminal_currents_a_per_m2)
                     for point in result.bias_points
                 )
                 if not complete_currents:
+                    missing.append(observable.value)
+            elif observable is Observable.ABSOLUTE_TERMINAL_CURRENT:
+                complete_absolute_currents = bool(result.terminals) and all(
+                    f"absolute_terminal_current__{terminal}" in result.datasets
+                    for terminal in result.terminals
+                )
+                if not complete_absolute_currents:
                     missing.append(observable.value)
             elif observable is Observable.TERMINAL_CHARGE:
                 complete_charge = bool(result.terminals) and bool(result.operating_points) and all(

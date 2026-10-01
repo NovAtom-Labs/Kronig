@@ -193,6 +193,37 @@
     };
   }
 
+  function resultStatus(payload) {
+    const execution = String(
+      payload?.execution_state || payload?.manifest?.execution_state || payload?.manifest?.state || "unknown",
+    );
+    const validation = String(
+      payload?.validation_state
+      || payload?.manifest?.validation_state
+      || payload?.validation?.overall
+      || "unknown",
+    );
+    if (execution !== "completed") {
+      return {
+        title: "Execution did not complete",
+        detail: "Canonical evidence is incomplete and must not be treated as a finished result.",
+        tone: "danger",
+      };
+    }
+    if (!["passed", "completed"].includes(validation)) {
+      return {
+        title: "Execution completed · validation needs review",
+        detail: "The converged canonical data remains viewable, but scientific validation did not pass.",
+        tone: "warning",
+      };
+    }
+    return {
+      title: "Execution and validation completed",
+      detail: "The result is backed by the verified canonical bundle and its validation record.",
+      tone: "success",
+    };
+  }
+
   function seriesForDataset(dataset, sliceIndex = 0, complexMode = "magnitude") {
     const chart = globalThis.AgentKronigScientificChart;
     if (!dataset || !dataset.axes?.length) return null;
@@ -941,8 +972,70 @@
     );
     identity.append(badges);
     header.append(identity);
+    if (globalThis.agentKronigDesktop?.exportResultsPdf) {
+      const commands = element("div", "result-command-bar");
+      if (payload.agent_run_id && payload.workspace_id) {
+        const popout = element("button", "result-popout", "Open in window");
+        popout.type = "button";
+        popout.addEventListener("click", () => {
+          void globalThis.agentKronigDesktop.openResultsWindow({
+            workspaceId: payload.workspace_id,
+            runId: payload.agent_run_id,
+          });
+        });
+        const exportBundle = element("button", "result-export-bundle", "Export bundle");
+        exportBundle.type = "button";
+        exportBundle.addEventListener("click", async () => {
+          exportBundle.disabled = true;
+          const original = exportBundle.textContent;
+          exportBundle.textContent = "Exporting…";
+          try {
+            const selection = await globalThis.agentKronigDesktop.chooseBundleExportDestination({
+              suggestedName: `${payload.experiment?.name || payload.manifest?.run_id || "results"}.akbundle`,
+            });
+            if (!selection?.cancelled && selection?.path) {
+              const response = await fetch(`/api/runs/${payload.agent_run_id}/bundle/export`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({destination: selection.path}),
+              });
+              if (!response.ok) {
+                throw new Error("The reproducibility bundle could not be exported.");
+              }
+            }
+          } finally {
+            exportBundle.disabled = false;
+            exportBundle.textContent = original;
+          }
+        });
+        commands.append(popout, exportBundle);
+      }
+      const exportPdf = element("button", "result-export-pdf", "Export PDF");
+      exportPdf.type = "button";
+      exportPdf.addEventListener("click", async () => {
+        exportPdf.disabled = true;
+        exportPdf.textContent = "Exporting…";
+        try {
+          await globalThis.agentKronigDesktop.exportResultsPdf({
+            suggestedName: `${payload.experiment?.name || payload.manifest?.run_id || "results"}.pdf`,
+          });
+        } finally {
+          exportPdf.disabled = false;
+          exportPdf.textContent = "Export PDF";
+        }
+      });
+      commands.append(exportPdf);
+      header.append(commands);
+    }
+    const status = resultStatus(payload);
+    const statusBanner = element("section", `result-status is-${status.tone}`);
+    statusBanner.append(
+      element("strong", "", status.title),
+      element("span", "", status.detail),
+    );
     workbench.append(
       header,
+      statusBanner,
       renderStructure(payload),
       renderMetrics(payload),
       renderFields(payload, comparisonRuns),
@@ -964,6 +1057,7 @@
     formatNumber,
     isCanonicalResultPath,
     render,
+    resultStatus,
     seriesForDataset,
     structureMarkers,
     summarize,

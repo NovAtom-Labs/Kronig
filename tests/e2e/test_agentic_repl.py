@@ -24,6 +24,7 @@ from tcad_agent.ide.models import PermissionCategory, RunState, is_run_grantable
 from tcad_agent.ide.results import WorkspaceResultReader
 from tcad_agent.ide.store import SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
+from tcad_agent.runtime.paths import RuntimePaths
 from tcad_agent.web.app import create_app
 from tcad_agent.web.ide_routes import IDEServices
 
@@ -275,13 +276,15 @@ def test_repository_agent_repairs_validates_and_delegates_end_to_end(
 
 def test_repository_agent_prepares_executes_and_opens_canonical_tcad_result(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repository = tmp_path / "empty-tcad-research"
     repository.mkdir()
+    runtime_root = tmp_path / "managed-runtime"
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(runtime_root))
     spec_payload = yaml.safe_load((PROJECT_ROOT / "examples/pn-junction.yaml").read_text())
     spec = ExperimentSpec.model_validate(spec_payload)
     prepared = ExperimentEngine().prepare(spec, "devsim")
-    result_path = repository / "runs/run-agent-acceptance/results/canonical.json"
     llm = TestLLM.from_messages(
         [
             _tool_call(
@@ -308,8 +311,11 @@ def test_repository_agent_prepares_executes_and_opens_canonical_tcad_result(
             ),
             _tool_call(
                 "inspect-canonical-result",
-                "file_editor",
-                {"command": "view", "path": str(result_path)},
+                "tcad_domain",
+                {
+                    "operation": "inspect_bundle",
+                    "payload": {"run_id": "run-agent-acceptance"},
+                },
             ),
             Message(
                 role="assistant",
@@ -347,22 +353,26 @@ def test_repository_agent_prepares_executes_and_opens_canonical_tcad_result(
 
     supervisor.join(run_id, timeout=30)
     waiting = services.store.get_run(run_id)
-    assert waiting.state is RunState.WAITING_FOR_APPROVAL
-    approvals = web.get(f"{session_url}/approvals").json()
-    assert len(approvals) == 1
-    approval = approvals[0]
-    assert approval["permission_category"] == "simulation_execution"
+    assert waiting.state is RunState.WAITING_FOR_PLAN_APPROVAL
+    plan = web.get(f"/api/runs/{run_id}/plan").json()
     resolved = web.post(
-        f"/api/approvals/{approval['id']}/approve-category",
-        json={"expected_revision": approval["revision"]},
+        f"/api/runs/{run_id}/plan/approve",
+        json={
+            "expected_revision": plan["revision"],
+            "plan_digest": plan["plan_digest"],
+            "mode": "review_each_risk",
+        },
     )
-    assert resolved.status_code == 200, resolved.text
+    assert resolved.status_code == 202, resolved.text
     supervisor.join(run_id, timeout=60)
 
     assert services.store.get_run(run_id).state is RunState.COMPLETED
-    view = WorkspaceResultReader().read(
-        repository, "runs/run-agent-acceptance/results/canonical.json"
+    result_record = services.store.get_experiment_result(run_id)
+    managed_bundle = (
+        RuntimePaths.from_workspace(repository).bundle_root
+        / result_record.bundle_run_id
     )
+    view = WorkspaceResultReader().read_bundle(managed_bundle)
     assert view.result.backend == "devsim"
     assert view.validation.overall == "passed"
     messages = web.get(f"{session_url}/messages").json()

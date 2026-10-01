@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 from uuid import UUID
@@ -195,6 +194,18 @@ def test_live_compiled_request_runs_devsim_and_opens_graphable_results(
             continue
         if run.state in {RunState.RUNNING, RunState.QUEUED}:
             continue
+        if run.state is RunState.WAITING_FOR_PLAN_APPROVAL:
+            plan = web.get(f"/api/runs/{run_id}/plan").json()
+            response = web.post(
+                f"/api/runs/{run_id}/plan/approve",
+                json={
+                    "expected_revision": plan["revision"],
+                    "plan_digest": plan["plan_digest"],
+                    "mode": "unattended_local",
+                },
+            )
+            assert response.status_code == 202, response.text
+            continue
         assert run.state is RunState.WAITING_FOR_APPROVAL
         for approval in web.get(f"{session_url}/approvals").json():
             category = PermissionCategory(approval["permission_category"])
@@ -210,18 +221,10 @@ def test_live_compiled_request_runs_devsim_and_opens_graphable_results(
     assert store.get_run(run_id).state is RunState.COMPLETED
     preparation_record = store.get_prompt_preparation(run_id)
     assert preparation_record.compiled_request is not None
-    results = tuple(repository.glob("runs/*/results/canonical.json"))
-    completed = tuple(
-        result
-        for result in results
-        if json.loads((result.parent.parent / "manifest.json").read_text())["state"]
-        == "completed"
-    )
-    assert len(completed) == 1
-    relative = completed[0].relative_to(repository).as_posix()
-    response = web.get(
-        f"/api/workspaces/{workspace['id']}/results", params={"path": relative}
-    )
+    result_record = store.get_experiment_result(run_id)
+    assert result_record.project_root.is_relative_to(repository)
+    assert not (repository / "runs").exists()
+    response = web.get(f"/api/runs/{run_id}/result")
     assert response.status_code == 200, response.text
     payload = response.json()
     graphable = {

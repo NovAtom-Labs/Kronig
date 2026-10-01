@@ -810,6 +810,19 @@ class DevsimAdapter:
                     values=currents,
                     validity=tuple(point.state == "converged" for point in operating_points),
                 )
+                datasets[f"terminal_current_density__{terminal}"] = Dataset(
+                    id=f"terminal_current_density__{terminal}",
+                    label=f"Terminal current density at {terminal}",
+                    unit="A/m^2",
+                    axes=(operating_axis_id,),
+                    shape=(len(coordinate_values),),
+                    centering=DatasetCentering.OPERATING_POINT,
+                    values=currents,
+                    validity=tuple(
+                        point.state == "converged" for point in operating_points
+                    ),
+                    source="derived:terminal-current-density-alias",
+                )
                 datasets[f"terminal_electron_current__{terminal}"] = Dataset(
                     id=f"terminal_electron_current__{terminal}",
                     label=f"Terminal electron current at {terminal}",

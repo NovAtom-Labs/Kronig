@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from uuid import UUID
 
 from openhands.sdk.agent.stream_context import (
@@ -43,10 +43,17 @@ from tcad_agent.agent.policy import (
     permission_category,
 )
 from tcad_agent.agent.tools import TcadDomainAction, TcadDomainObservation
+from tcad_agent.experiments.models import PreparedExperiment
 from tcad_agent.ide.changes import WorkspaceChangeTracker
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
-from tcad_agent.ide.models import PermissionCategory, WorkspaceBaseline, is_run_grantable
+from tcad_agent.ide.models import (
+    PermissionCategory,
+    RunState,
+    WorkspaceBaseline,
+    is_run_grantable,
+)
+from tcad_agent.ide.outcomes import derive_run_outcome
 from tcad_agent.ide.store import SqliteIDEStore
 
 MAX_EVENT_TEXT = 16_000
@@ -81,7 +88,11 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "validate_spec": "validate",
             "prepare_experiment": "validate",
             "execute_experiment": "execute",
+            "execute_approved_plan": "execute",
             "validate_result": "validate",
+            "inspect_bundle": "inspect",
+            "read_canonical_summary": "inspect",
+            "validate_bundle": "validate",
             "search_knowledge": "inspect",
             "search_web": "inspect",
             "fetch_source": "inspect",
@@ -94,9 +105,10 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "validate_spec",
             "prepare_experiment",
             "validate_result",
+            "validate_bundle",
         }:
             metadata["evidence_kind"] = "validation"
-        elif action.operation == "execute_experiment":
+        elif action.operation in {"execute_experiment", "execute_approved_plan"}:
             metadata["evidence_kind"] = "simulation"
         elif action.operation in {"search_knowledge", "search_web", "fetch_source"}:
             metadata["evidence_kind"] = "research"
@@ -226,6 +238,12 @@ class AgentEventBridge:
         self._action_metadata: dict[str, dict[str, JsonValue]] = {}
         self._ambiguous_actions: set[str] = set()
         self._change_tracker = WorkspaceChangeTracker()
+        self._plan_pause: Callable[[], None] | None = None
+
+    def bind_plan_pause(self, callback: Callable[[], None]) -> None:
+        """Bind the runtime pause used to enforce the prepared-plan review gate."""
+
+        self._plan_pause = callback
 
     def __call__(self, event: Event) -> None:
         if isinstance(event, ActionEvent):
@@ -357,14 +375,110 @@ class AgentEventBridge:
             isinstance(event.observation, TcadDomainObservation)
             and event.observation.status != "ok"
         )
+        visible_output = self._safe(event.observation.text)
+        prepared_plan: PreparedExperiment | None = None
+        result_ready: dict[str, JsonValue] | None = None
+        if (
+            not observation_failed
+            and isinstance(event.observation, TcadDomainObservation)
+            and event.observation.code == "experiment_prepared"
+        ):
+            prepared_plan = PreparedExperiment.model_validate(
+                event.observation.data["prepared"]
+            )
+            artifact_data = event.observation.data.get("plan_artifacts", {})
+            if not isinstance(artifact_data, dict) or self.workspace is None:
+                raise ValueError("prepared experiment is missing workspace plan artifacts")
+            plan_path = Path(str(artifact_data.get("plan", ""))).resolve()
+            structured_path = Path(
+                str(artifact_data.get("structured_plan", ""))
+            ).resolve()
+            if not plan_path.is_relative_to(self.workspace) or not structured_path.is_relative_to(
+                self.workspace
+            ):
+                raise ValueError("prepared plan artifacts escaped the selected workspace")
+            self.store.save_prepared_plan(
+                self.run_id,
+                prepared_plan,
+                plan_path=plan_path,
+                structured_plan_path=structured_path,
+            )
+            visible_output = "Experiment plan prepared for review."
+        if (
+            not observation_failed
+            and isinstance(event.observation, TcadDomainObservation)
+            and event.observation.code == "experiment_executed"
+        ):
+            data = event.observation.data
+            bundle_data = data.get("bundle")
+            project_data = data.get("experiment")
+            if (
+                not isinstance(bundle_data, dict)
+                or not isinstance(project_data, dict)
+                or self.workspace is None
+            ):
+                raise ValueError("completed experiment is missing managed result metadata")
+            bundle_run_id = str(bundle_data.get("run_id", "")).strip()
+            execution_state = str(bundle_data.get("execution_state", "failed"))
+            validation_state = str(bundle_data.get("validation_state", "failed"))
+            project_root = Path(str(project_data.get("project_root", ""))).resolve()
+            if not bundle_run_id or not project_root.is_relative_to(self.workspace):
+                raise ValueError("completed experiment metadata escaped the workspace")
+            if execution_state not in {"failed", "completed"}:
+                raise ValueError("completed experiment has an invalid execution state")
+            if validation_state not in {"passed", "needs_review", "failed"}:
+                raise ValueError("completed experiment has an invalid validation state")
+            self.store.save_experiment_result(
+                self.run_id,
+                bundle_run_id=bundle_run_id,
+                project_root=project_root,
+                execution_state=cast(Literal["failed", "completed"], execution_state),
+                validation_state=cast(
+                    Literal["passed", "needs_review", "failed"], validation_state
+                ),
+            )
+            outcome_values = derive_run_outcome(
+                run_id=self.run_id,
+                project_root=project_root,
+                execution_state=cast(
+                    Literal["failed", "completed"], execution_state
+                ),
+                validation_state=cast(
+                    Literal["passed", "needs_review", "failed"], validation_state
+                ),
+            )
+            outcome = self.store.save_run_outcome(**outcome_values)
+            try:
+                approved_plan = self.store.get_prepared_plan(self.run_id)
+            except RuntimeError:
+                approved_plan = None
+            if approved_plan is not None and approved_plan.status == "approved":
+                self.store.consume_prepared_plan(
+                    self.run_id, approved_plan.plan_digest
+                )
+            result_ready = {
+                "run_id": str(self.run_id),
+                "bundle_run_id": bundle_run_id,
+                "execution_state": execution_state,
+                "validation_state": validation_state,
+                "deliverable_state": outcome.deliverable_state,
+                "report_state": outcome.report_state,
+                "overall_state": outcome.overall_state,
+                "failed_check_count": outcome.failed_check_count,
+                "unmet_deliverables": list(outcome.unmet_deliverables),
+            }
+            visible_output = "Experiment completed. Open the Results Workbench to review it."
         payload: dict[str, JsonValue] = {
             **self._base(event),
             "action_id": event.action_id,
             "is_error": observation_failed,
-            "output": self._safe(event.observation.text),
+            "output": visible_output,
             "tool_call_id": event.tool_call_id,
             "tool_name": event.tool_name,
         }
+        if prepared_plan is not None:
+            payload["plan_digest"] = prepared_plan.plan_digest
+            payload["plan_ready"] = True
         if isinstance(event.observation, TaskObservation):
             payload.update(
                 {
@@ -412,11 +526,17 @@ class AgentEventBridge:
             "tool_call_completed",
             payload,
         )
+        if result_ready is not None:
+            self.events.append(self.conversation_id, "result_ready", result_ready)
+        if prepared_plan is not None and self._plan_pause is not None:
+            self._plan_pause()
 
     def _message(self, event: MessageEvent) -> None:
         if event.source != "agent" or event.llm_message.role != "assistant":
             return
         content = self._safe("\n".join(content_to_str(event.llm_message.content))).strip()
+        if self.store.get_run(self.run_id).state is RunState.WAITING_FOR_PLAN_APPROVAL:
+            return
         if content:
             self.conversations.add_assistant_message(self.conversation_id, content)
 

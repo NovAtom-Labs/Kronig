@@ -406,6 +406,24 @@ class CapabilityService:
             tuple(str(observable) for observable in spec.observables),
             manifest.observables,
         )
+        if any(
+            str(observable) == "absolute_terminal_current"
+            for observable in spec.observables
+        ):
+            missing_area = tuple(contact.id for contact in spec.contacts if contact.area is None)
+            if missing_area:
+                issues.append(
+                    CapabilityIssue(
+                        path="contacts.area",
+                        code="missing_contact_area",
+                        message=(
+                            "absolute terminal current requires a physical area for "
+                            "every reported terminal"
+                        ),
+                        requested=",".join(missing_area),
+                        supported=("provide contact area", "use terminal current density"),
+                    )
+                )
         decomposition_outputs = {
             "electron_drift_current_density",
             "electron_diffusion_current_density",
@@ -450,9 +468,13 @@ class CapabilityService:
             bias_points,
             manifest.limits.get("max_bias_points"),
         )
-        status = (
-            CapabilityStatus.BACKEND_UNSUPPORTED if issues else CapabilityStatus.SUPPORTED
-        )
+        status = CapabilityStatus.SUPPORTED
+        if issues:
+            status = (
+                CapabilityStatus.NEEDS_INPUT
+                if all(issue.code == "missing_contact_area" for issue in issues)
+                else CapabilityStatus.BACKEND_UNSUPPORTED
+            )
         return CapabilityDecision(status=status, backend=manifest.backend, issues=tuple(issues))
 
     @staticmethod

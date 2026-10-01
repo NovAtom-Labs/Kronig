@@ -20,6 +20,7 @@ from tcad_agent.ide.events import EventFeed
 from tcad_agent.ide.models import RunState
 from tcad_agent.ide.store import ConversationNotFoundError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
+from tcad_agent.runtime.paths import RuntimePaths
 from tcad_agent.web import ide_routes
 from tcad_agent.web.app import create_app
 from tcad_agent.web.ide_routes import IDEServices
@@ -453,6 +454,172 @@ def test_workspace_results_endpoint_returns_verified_canonical_bundle(
         "position__potential"
     ]
     assert payload["result"]["axes"]["position__potential"]["kind"] == "position"
+    catalog = {entry["id"]: entry for entry in payload["catalog"]}
+    assert catalog["potential"]["view"] == "curve"
+
+
+def test_agent_run_result_endpoint_opens_application_managed_bundle(
+    tmp_path: Path, result_bundle_factory, monkeypatch
+) -> None:
+    data_root = tmp_path / "app-data"
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(data_root))
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    events = EventFeed(store)
+    services = IDEServices(
+        workspaces=WorkspaceManager(store),
+        conversations=ConversationService(store, events),
+        events=events,
+    )
+    root = tmp_path / "repo"
+    root.mkdir()
+    workspace = services.workspaces.open(root)
+    conversation = services.conversations.create(workspace.id, "Research run")
+    run = store.create_run(conversation.id, conversation.id)
+    runtime = RuntimePaths.from_workspace(root)
+    result_bundle_factory(runtime.bundle_root)
+    store.save_experiment_result(
+        run.id,
+        bundle_run_id="run-0001",
+        project_root=root / "experiments" / "bias-study",
+        execution_state="completed",
+        validation_state="passed",
+    )
+    web = TestClient(create_app(ide=services))
+
+    response = web.get(f"/api/runs/{run.id}/result")
+
+    assert response.status_code == 200
+    assert response.json()["manifest"]["run_id"] == "run-0001"
+
+
+def test_agent_run_bundle_export_writes_verified_reproducibility_archive(
+    tmp_path: Path, result_bundle_factory, monkeypatch
+) -> None:
+    data_root = tmp_path / "app-data"
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(data_root))
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    events = EventFeed(store)
+    services = IDEServices(
+        workspaces=WorkspaceManager(store),
+        conversations=ConversationService(store, events),
+        events=events,
+    )
+    root = tmp_path / "repo"
+    root.mkdir()
+    workspace = services.workspaces.open(root)
+    conversation = services.conversations.create(workspace.id, "Research run")
+    run = store.create_run(conversation.id, conversation.id)
+    runtime = RuntimePaths.from_workspace(root)
+    result_bundle_factory(runtime.bundle_root)
+    store.save_experiment_result(
+        run.id,
+        bundle_run_id="run-0001",
+        project_root=root / "experiments" / "bias-study",
+        execution_state="completed",
+        validation_state="passed",
+    )
+    web = TestClient(create_app(ide=services))
+    destination = tmp_path / "exports" / "bias-study.akbundle"
+
+    response = web.post(
+        f"/api/runs/{run.id}/bundle/export",
+        json={"destination": str(destination)},
+    )
+
+    assert response.status_code == 201
+    assert destination.is_file()
+    assert response.json()["destination"] == str(destination.resolve())
+    assert response.json()["run_id"] == "run-0001"
+    assert len(response.json()["sha256"]) == 64
+
+
+def test_agent_run_dataset_endpoint_returns_bounded_viewer_data(
+    tmp_path: Path, result_bundle_factory, monkeypatch
+) -> None:
+    data_root = tmp_path / "app-data"
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(data_root))
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    events = EventFeed(store)
+    services = IDEServices(
+        workspaces=WorkspaceManager(store),
+        conversations=ConversationService(store, events),
+        events=events,
+    )
+    root = tmp_path / "repo"
+    root.mkdir()
+    workspace = services.workspaces.open(root)
+    conversation = services.conversations.create(workspace.id, "Research run")
+    run = store.create_run(conversation.id, conversation.id)
+    runtime = RuntimePaths.from_workspace(root)
+    result_bundle_factory(runtime.bundle_root)
+    store.save_experiment_result(
+        run.id,
+        bundle_run_id="run-0001",
+        project_root=root / "experiments" / "bias-study",
+        execution_state="completed",
+        validation_state="passed",
+    )
+    web = TestClient(create_app(ide=services))
+
+    response = web.get(
+        f"/api/runs/{run.id}/result/datasets/potential",
+        params={"max_points": 4},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "potential"
+    assert payload["shape"] == [3]
+    assert payload["axes"][0]["kind"] == "position"
+    assert payload["values"] == [0.0, 0.41, 0.82]
+
+
+def test_workspace_experiments_endpoint_lists_researcher_facing_projects(
+    tmp_path: Path,
+) -> None:
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    events = EventFeed(store)
+    services = IDEServices(
+        workspaces=WorkspaceManager(store),
+        conversations=ConversationService(store, events),
+        events=events,
+    )
+    root = tmp_path / "repo"
+    project = root / "experiments" / "gaussian-implant-sweep"
+    project.mkdir(parents=True)
+    for name in ("PLAN.md", "REPORT.md", "results.json", "validation.json"):
+        (project / name).write_text("{}\n")
+    workspace = services.workspaces.open(root)
+    conversation = services.conversations.create(workspace.id, "Research run")
+    run = store.create_run(conversation.id, conversation.id)
+    store.save_experiment_result(
+        run.id,
+        bundle_run_id="run-0001",
+        project_root=project,
+        execution_state="completed",
+        validation_state="needs_review",
+    )
+    web = TestClient(create_app(ide=services))
+
+    response = web.get(f"/api/workspaces/{workspace.id}/experiments")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "run_id": str(run.id),
+            "bundle_run_id": "run-0001",
+            "name": "gaussian-implant-sweep",
+            "project_path": "experiments/gaussian-implant-sweep",
+            "execution_state": "completed",
+            "validation_state": "needs_review",
+            "artifacts": {
+                "plan": "experiments/gaussian-implant-sweep/PLAN.md",
+                "report": "experiments/gaussian-implant-sweep/REPORT.md",
+                "results": "experiments/gaussian-implant-sweep/results.json",
+                "validation": "experiments/gaussian-implant-sweep/validation.json",
+            },
+        }
+    ]
 
 
 def test_workspace_results_endpoint_sanitizes_invalid_bundle_error(

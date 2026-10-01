@@ -11,6 +11,8 @@ from uuid import UUID, uuid4
 
 from pydantic import JsonValue
 
+from tcad_agent.experiments.models import PreparedExperiment
+from tcad_agent.ide.migrations import migrate_schema
 from tcad_agent.ide.models import (
     AgentRunRecord,
     ApprovalDecision,
@@ -18,10 +20,14 @@ from tcad_agent.ide.models import (
     ConversationMessage,
     ConversationRecord,
     ConversationState,
+    ExperimentResultRecord,
     GitSnapshot,
     IDEEvent,
     PermissionCategory,
+    PlanApprovalMode,
+    PreparedPlanRecord,
     RepositorySnapshot,
+    RunOutcomeRecord,
     RunState,
     WorkspaceBaseline,
     WorkspaceChangeSet,
@@ -33,6 +39,17 @@ from tcad_agent.prompting.models import (
     CompiledAgentRequest,
     PreparationDecision,
     PromptPreparationRecord,
+)
+
+RUN_OWNED_TABLES = (
+    "approval_requests",
+    "run_permission_grants",
+    "run_change_baselines",
+    "run_change_manifests",
+    "prompt_preparations",
+    "prepared_plans",
+    "experiment_results",
+    "run_outcomes",
 )
 
 
@@ -155,22 +172,45 @@ class SqliteIDEStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS prepared_plans (
+                    run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
+                    plan_digest TEXT NOT NULL,
+                    prepared_json TEXT NOT NULL,
+                    plan_path TEXT NOT NULL,
+                    structured_plan_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    approval_mode TEXT,
+                    revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS experiment_results (
+                    run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
+                    bundle_run_id TEXT NOT NULL,
+                    project_root TEXT NOT NULL,
+                    execution_state TEXT NOT NULL,
+                    validation_state TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS run_outcomes (
+                    run_id TEXT PRIMARY KEY REFERENCES agent_runs(id),
+                    execution_state TEXT NOT NULL,
+                    validation_state TEXT NOT NULL,
+                    deliverable_state TEXT NOT NULL,
+                    report_state TEXT NOT NULL,
+                    overall_state TEXT NOT NULL,
+                    failed_check_count INTEGER NOT NULL,
+                    unmet_deliverables_json TEXT NOT NULL,
+                    project_root TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
-            approval_columns = {
-                row["name"]
-                for row in connection.execute(
-                    "PRAGMA table_info(approval_requests)"
-                ).fetchall()
-            }
-            if "permission_category" not in approval_columns:
-                connection.execute(
-                    """
-                    ALTER TABLE approval_requests
-                    ADD COLUMN permission_category TEXT NOT NULL
-                    DEFAULT 'unrecognized_action'
-                    """
-                )
+            migrate_schema(connection)
 
     def open_workspace(self, snapshot: RepositorySnapshot) -> WorkspaceRecord:
         now = datetime.now(UTC)
@@ -361,12 +401,7 @@ class SqliteIDEStore:
                     f"conversation does not exist: {conversation_id}"
                 )
             run_ids = "SELECT id FROM agent_runs WHERE conversation_id = ?"
-            for table in (
-                "approval_requests",
-                "run_permission_grants",
-                "run_change_baselines",
-                "run_change_manifests",
-            ):
+            for table in RUN_OWNED_TABLES:
                 connection.execute(
                     f"DELETE FROM {table} WHERE run_id IN ({run_ids})", (key,)
                 )
@@ -520,6 +555,353 @@ class SqliteIDEStore:
             ) from error
         return self.get_prompt_preparation(run_id)
 
+    def save_prepared_plan(
+        self,
+        run_id: UUID,
+        prepared: PreparedExperiment,
+        *,
+        plan_path: Path,
+        structured_plan_path: Path,
+    ) -> PreparedPlanRecord:
+        now = datetime.now(UTC)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            run = connection.execute(
+                "SELECT * FROM agent_runs WHERE id = ?", (str(run_id),)
+            ).fetchone()
+            if run is None:
+                raise IDEStoreError(f"agent run does not exist: {run_id}")
+            existing = connection.execute(
+                "SELECT * FROM prepared_plans WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO prepared_plans (
+                        run_id, plan_digest, prepared_json, plan_path,
+                        structured_plan_path, status, approval_mode, revision,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, 'pending', NULL, 0, ?, ?)
+                    """,
+                    (
+                        str(run_id),
+                        prepared.plan_digest,
+                        prepared.model_dump_json(),
+                        str(plan_path.resolve()),
+                        str(structured_plan_path.resolve()),
+                        now.isoformat(),
+                        now.isoformat(),
+                    ),
+                )
+            elif existing["status"] == "revision_requested":
+                connection.execute(
+                    """
+                    UPDATE prepared_plans
+                    SET plan_digest = ?, prepared_json = ?, plan_path = ?,
+                        structured_plan_path = ?, status = 'pending',
+                        approval_mode = NULL, revision = revision + 1,
+                        updated_at = ?
+                    WHERE run_id = ? AND revision = ?
+                    """,
+                    (
+                        prepared.plan_digest,
+                        prepared.model_dump_json(),
+                        str(plan_path.resolve()),
+                        str(structured_plan_path.resolve()),
+                        now.isoformat(),
+                        str(run_id),
+                        existing["revision"],
+                    ),
+                )
+            else:
+                raise IDEStoreError(f"prepared plan already exists for run {run_id}")
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                SET state = ?, revision = revision + 1, updated_at = ?
+                WHERE id = ? AND revision = ?
+                """,
+                (
+                    RunState.WAITING_FOR_PLAN_APPROVAL.value,
+                    now.isoformat(),
+                    str(run_id),
+                    run["revision"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise IDEStoreError(f"stale run revision for {run_id}")
+            connection.commit()
+        except sqlite3.IntegrityError as error:
+            connection.rollback()
+            raise IDEStoreError(f"prepared plan already exists for run {run_id}") from error
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        record = self.get_prepared_plan(run_id)
+        run_record = self.get_run(run_id)
+        self.append_event(
+            run_record.conversation_id,
+            "plan_ready",
+            {
+                "run_id": str(run_id),
+                "plan_digest": prepared.plan_digest,
+                "plan_path": str(record.plan_path),
+                "revision": record.revision,
+            },
+        )
+        return record
+
+    def get_prepared_plan(self, run_id: UUID) -> PreparedPlanRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM prepared_plans WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        if row is None:
+            raise IDEStoreError(f"prepared plan does not exist: {run_id}")
+        return self._prepared_plan(row)
+
+    def save_experiment_result(
+        self,
+        run_id: UUID,
+        *,
+        bundle_run_id: str,
+        project_root: Path,
+        execution_state: Literal["failed", "completed"],
+        validation_state: Literal["passed", "needs_review", "failed"],
+    ) -> ExperimentResultRecord:
+        now = datetime.now(UTC)
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO experiment_results (
+                        run_id, bundle_run_id, project_root, execution_state,
+                        validation_state, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(run_id),
+                        bundle_run_id,
+                        str(project_root.resolve()),
+                        execution_state,
+                        validation_state,
+                        now.isoformat(),
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise IDEStoreError(f"experiment result already exists for run {run_id}") from error
+        return self.get_experiment_result(run_id)
+
+    def get_experiment_result(self, run_id: UUID) -> ExperimentResultRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM experiment_results WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        if row is None:
+            raise IDEStoreError(f"experiment result does not exist: {run_id}")
+        return self._experiment_result(row)
+
+    def list_experiment_results_for_workspace(
+        self, workspace_id: UUID
+    ) -> tuple[ExperimentResultRecord, ...]:
+        self.get_workspace(workspace_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT experiment_results.*
+                FROM experiment_results
+                JOIN agent_runs ON agent_runs.id = experiment_results.run_id
+                JOIN conversations ON conversations.id = agent_runs.conversation_id
+                WHERE conversations.workspace_id = ?
+                ORDER BY experiment_results.created_at DESC,
+                         experiment_results.run_id DESC
+                """,
+                (str(workspace_id),),
+            ).fetchall()
+        return tuple(self._experiment_result(row) for row in rows)
+
+    def save_run_outcome(
+        self,
+        run_id: UUID,
+        *,
+        execution_state: Literal["failed", "completed"],
+        validation_state: Literal["passed", "needs_review", "failed"],
+        deliverable_state: Literal["complete", "incomplete"],
+        report_state: Literal["complete", "missing", "failed"],
+        overall_state: Literal["completed", "needs_attention", "failed"],
+        failed_check_count: int,
+        unmet_deliverables: tuple[str, ...],
+        project_root: Path,
+    ) -> RunOutcomeRecord:
+        self.get_run(run_id)
+        now = datetime.now(UTC)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO run_outcomes (
+                    run_id, execution_state, validation_state, deliverable_state,
+                    report_state, overall_state, failed_check_count,
+                    unmet_deliverables_json, project_root, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    execution_state = excluded.execution_state,
+                    validation_state = excluded.validation_state,
+                    deliverable_state = excluded.deliverable_state,
+                    report_state = excluded.report_state,
+                    overall_state = excluded.overall_state,
+                    failed_check_count = excluded.failed_check_count,
+                    unmet_deliverables_json = excluded.unmet_deliverables_json,
+                    project_root = excluded.project_root,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    str(run_id),
+                    execution_state,
+                    validation_state,
+                    deliverable_state,
+                    report_state,
+                    overall_state,
+                    failed_check_count,
+                    json.dumps(unmet_deliverables),
+                    str(project_root.resolve()),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+        return self.get_run_outcome(run_id)
+
+    def get_run_outcome(self, run_id: UUID) -> RunOutcomeRecord:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM run_outcomes WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        if row is None:
+            raise IDEStoreError(f"run outcome does not exist: {run_id}")
+        return self._run_outcome(row)
+
+    def find_run_outcome(self, run_id: UUID) -> RunOutcomeRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM run_outcomes WHERE run_id = ?", (str(run_id),)
+            ).fetchone()
+        return self._run_outcome(row) if row is not None else None
+
+    def approve_prepared_plan(
+        self,
+        run_id: UUID,
+        expected_revision: int,
+        plan_digest: str,
+        *,
+        mode: PlanApprovalMode,
+    ) -> PreparedPlanRecord:
+        now = datetime.now(UTC)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE prepared_plans
+                SET status = 'approved', approval_mode = ?,
+                    revision = revision + 1, updated_at = ?
+                WHERE run_id = ? AND revision = ? AND plan_digest = ?
+                  AND status = 'pending'
+                """,
+                (
+                    mode.value,
+                    now.isoformat(),
+                    str(run_id),
+                    expected_revision,
+                    plan_digest,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise IDEStoreError(f"stale or already resolved prepared plan for {run_id}")
+        return self.get_prepared_plan(run_id)
+
+    def consume_prepared_plan(self, run_id: UUID, plan_digest: str) -> PreparedPlanRecord:
+        now = datetime.now(UTC)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE prepared_plans
+                SET status = 'consumed', revision = revision + 1, updated_at = ?
+                WHERE run_id = ? AND plan_digest = ? AND status = 'approved'
+                """,
+                (now.isoformat(), str(run_id), plan_digest),
+            )
+        if cursor.rowcount != 1:
+            raise IDEStoreError(
+                f"prepared plan is not approved or was already executed for {run_id}"
+            )
+        return self.get_prepared_plan(run_id)
+
+    def request_plan_revision(
+        self, run_id: UUID, expected_revision: int
+    ) -> PreparedPlanRecord:
+        now = datetime.now(UTC)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                """
+                UPDATE prepared_plans
+                SET status = 'revision_requested', revision = revision + 1,
+                    updated_at = ?
+                WHERE run_id = ? AND revision = ? AND status = 'pending'
+                """,
+                (now.isoformat(), str(run_id), expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise IDEStoreError(f"stale or resolved prepared plan for {run_id}")
+            run = connection.execute(
+                "SELECT * FROM agent_runs WHERE id = ?", (str(run_id),)
+            ).fetchone()
+            if run is None:
+                raise IDEStoreError(f"agent run does not exist: {run_id}")
+            run_cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                SET state = ?, revision = revision + 1, updated_at = ?
+                WHERE id = ? AND revision = ?
+                """,
+                (
+                    RunState.QUEUED.value,
+                    now.isoformat(),
+                    str(run_id),
+                    run["revision"],
+                ),
+            )
+            if run_cursor.rowcount != 1:
+                raise IDEStoreError(f"stale run revision for {run_id}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_prepared_plan(run_id)
+
+    def pending_plan_for_workspace(
+        self, workspace_id: UUID
+    ) -> PreparedPlanRecord | None:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT prepared_plans.*
+                FROM prepared_plans
+                JOIN agent_runs ON agent_runs.id = prepared_plans.run_id
+                JOIN conversations ON conversations.id = agent_runs.conversation_id
+                WHERE conversations.workspace_id = ?
+                  AND prepared_plans.status = 'pending'
+                ORDER BY prepared_plans.created_at DESC
+                """,
+                (str(workspace_id),),
+            ).fetchall()
+        if len(rows) > 1:
+            raise IDEStoreError("more than one prepared plan is pending")
+        return self._prepared_plan(rows[0]) if rows else None
+
     def get_prompt_preparation(self, run_id: UUID) -> PromptPreparationRecord:
         with self._connect() as connection:
             row = connection.execute(
@@ -647,7 +1029,15 @@ class SqliteIDEStore:
         self, run_id: UUID, expected_revision: int, state: RunState
     ) -> AgentRunRecord:
         now = datetime.now(UTC)
-        with self._connect() as connection:
+        terminal = state in {
+            RunState.COMPLETED,
+            RunState.FAILED,
+            RunState.BLOCKED,
+            RunState.CANCELLED,
+        }
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
             cursor = connection.execute(
                 """
                 UPDATE agent_runs
@@ -656,8 +1046,27 @@ class SqliteIDEStore:
                 """,
                 (state.value, now.isoformat(), str(run_id), expected_revision),
             )
-        if cursor.rowcount != 1:
-            raise IDEStoreError(f"stale run revision for {run_id}")
+            if cursor.rowcount != 1:
+                raise IDEStoreError(f"stale run revision for {run_id}")
+            if terminal:
+                connection.execute(
+                    "DELETE FROM run_permission_grants WHERE run_id = ?",
+                    (str(run_id),),
+                )
+                connection.execute(
+                    """
+                    UPDATE prepared_plans
+                    SET approval_mode = NULL, revision = revision + 1, updated_at = ?
+                    WHERE run_id = ? AND approval_mode IS NOT NULL
+                    """,
+                    (now.isoformat(), str(run_id)),
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
         run = self.get_run(run_id)
         self.append_event(
             run.conversation_id,
@@ -759,6 +1168,24 @@ class SqliteIDEStore:
                 (str(run_id),),
             ).fetchall()
         return tuple(row["permission_category"] for row in rows)
+
+    def grant_run_permission(
+        self, run_id: UUID, category: PermissionCategory
+    ) -> None:
+        if not is_run_grantable(category):
+            raise IDEStoreError(
+                f"permission category cannot be granted for a run: {category.value}"
+            )
+        self.get_run(run_id)
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO run_permission_grants (
+                    run_id, permission_category, created_at
+                ) VALUES (?, ?, ?)
+                """,
+                (str(run_id), category.value, datetime.now(UTC).isoformat()),
+            )
 
     def resolve_approval_with_grant(
         self,
@@ -1133,6 +1560,49 @@ class SqliteIDEStore:
                 else None
             ),
             revision=row["revision"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _prepared_plan(row: sqlite3.Row) -> PreparedPlanRecord:
+        mode = row["approval_mode"]
+        return PreparedPlanRecord(
+            run_id=UUID(row["run_id"]),
+            plan_digest=row["plan_digest"],
+            prepared=cast(dict[str, JsonValue], json.loads(row["prepared_json"])),
+            plan_path=Path(row["plan_path"]),
+            structured_plan_path=Path(row["structured_plan_path"]),
+            status=row["status"],
+            approval_mode=PlanApprovalMode(mode) if mode is not None else None,
+            revision=row["revision"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _experiment_result(row: sqlite3.Row) -> ExperimentResultRecord:
+        return ExperimentResultRecord(
+            run_id=UUID(row["run_id"]),
+            bundle_run_id=row["bundle_run_id"],
+            project_root=Path(row["project_root"]),
+            execution_state=row["execution_state"],
+            validation_state=row["validation_state"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    @staticmethod
+    def _run_outcome(row: sqlite3.Row) -> RunOutcomeRecord:
+        return RunOutcomeRecord(
+            run_id=UUID(row["run_id"]),
+            execution_state=row["execution_state"],
+            validation_state=row["validation_state"],
+            deliverable_state=row["deliverable_state"],
+            report_state=row["report_state"],
+            overall_state=row["overall_state"],
+            failed_check_count=row["failed_check_count"],
+            unmet_deliverables=tuple(json.loads(row["unmet_deliverables_json"])),
+            project_root=Path(row["project_root"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

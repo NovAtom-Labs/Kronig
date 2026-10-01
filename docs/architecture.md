@@ -86,12 +86,16 @@ Each backend publishes dimensions, equations, models, materials, profiles, conta
 
 ### PreparedExperiment and ExperimentEngine
 
-`ExperimentEngine.prepare` validates `ExperimentSpec` against the selected capability manifest and
-returns a stable plan, capability digest, and plan digest without compiling or executing simulator
-syntax. `ExperimentEngine.execute` accepts only that prepared record and its exact approved digest.
-It owns deterministic compilation, bounded execution, canonical normalization, mandatory
-validation, event provenance, and atomic bundle writing. Output paths are selected by the product
-below the opened repository and cannot be supplied by model-generated input.
+`ExperimentEngine.prepare` validates `ExperimentSpec` against the selected capability manifest,
+resolves its scientific completeness ledger, and returns a stable plan, capability digest, and plan
+digest without compiling or executing simulator syntax. The product writes byte-stable `PLAN.md`
+and `plan.json` artifacts, pauses the active OpenHands runtime, and persists a typed plan gate.
+`ExperimentEngine.execute` accepts only that prepared record and its exact approved digest. It owns
+deterministic compilation, bounded execution, canonical normalization, mandatory validation, event
+provenance, and atomic bundle writing. Output paths are selected by the product and cannot be
+supplied by model-generated input. Immutable runtime bundles live below cross-platform application
+data. A separate projector writes a small `experiments/<slug>/` project into the opened repository
+and never exposes compiled, native, log, staging, or work directories there.
 
 ### Adapter
 
@@ -143,7 +147,10 @@ DEVSIM native result  -> DEVSIM adapter  -> CanonicalResult -> Results Workbench
 Sentaurus export      -> Sentaurus adapter -> CanonicalResult -> Results Workbench
 ```
 
-The browser recognizes only repository-relative paths ending in `results/canonical.json`. A completed foreground agent run may auto-open a result only when that exact path is present as a created, modified, or renamed artifact in the run's immutable change manifest. Other JSON files remain generic repository files.
+The run-result API resolves only a result record registered by the event bridge and reconstructs its
+bundle path under the application-managed runtime root. It verifies the manifest and artifacts before
+returning canonical evidence. A completed foreground run auto-opens that managed result for passed
+or needs-review outcomes. Repository JSON files remain generic files unless opened explicitly.
 
 The renderer discovers views from canonical axis kind, shape, unit, centering, and complex values. It supports scalar metrics, one-dimensional curves, operating-point profile families, generic rank-two heatmaps, complex magnitude and phase, failed-point gaps, and CSV export without naming a device. Direct binary TDR or PLT parsing stays on the licensed Sentaurus side. Spatial two-dimensional visualization requires a future canonical mesh contract and is not inferred from one-dimensional samples.
 

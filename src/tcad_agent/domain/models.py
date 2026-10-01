@@ -1,7 +1,7 @@
 """Pydantic contracts for simulator-neutral TCAD experiments."""
 
 from enum import StrEnum
-from typing import Literal, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -66,6 +66,8 @@ class Equation(StrEnum):
 
 class Observable(StrEnum):
     TERMINAL_CURRENT = "terminal_current"
+    TERMINAL_CURRENT_DENSITY = "terminal_current_density"
+    ABSOLUTE_TERMINAL_CURRENT = "absolute_terminal_current"
     TERMINAL_CHARGE = "terminal_charge"
     POTENTIAL = "potential"
     ELECTRIC_FIELD = "electric_field"
@@ -398,6 +400,29 @@ class ExperimentSpec(StrictModel):
     sign_convention: SignConvention = Field(default_factory=SignConvention)
     solver: SolverControls = Field(default_factory=SolverControls)
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_observables(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        observables = value.get("observables")
+        if not isinstance(observables, (list, tuple)) or "terminal_current" not in {
+            str(item) for item in observables
+        }:
+            return value
+        migrated = dict(value)
+        migrated["observables"] = tuple(
+            "terminal_current_density" if str(item) == "terminal_current" else item
+            for item in observables
+        )
+        metadata = dict(migrated.get("metadata") or {})
+        metadata.setdefault(
+            "migration.terminal_current",
+            "schema 1.0 terminal_current mapped to terminal_current_density",
+        )
+        migrated["metadata"] = metadata
+        return migrated
 
     @model_validator(mode="after")
     def validate_composition(self) -> Self:

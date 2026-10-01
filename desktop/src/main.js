@@ -44,7 +44,38 @@ function installPermissionPolicy(electronSession) {
   electronSession.setPermissionCheckHandler(() => false);
 }
 
-function installGracefulQuit(app, stopBackend, onBlocked = async () => {}) {
+function resultWindowUrl(origin, payload = {}) {
+  const base = new URL(origin);
+  const identifier = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (
+    base.protocol !== "http:"
+    || !["127.0.0.1", "localhost", "::1"].includes(base.hostname)
+    || !identifier.test(String(payload.workspaceId || ""))
+    || !identifier.test(String(payload.runId || ""))
+  ) throw new Error("Result window identifier is invalid");
+  const destination = new URL(`/workspaces/${payload.workspaceId}`, base.origin);
+  destination.searchParams.set("result_run_id", payload.runId);
+  return destination.toString();
+}
+
+function sanitizeDiagnosticSummary(payload = {}) {
+  const redacted = [
+    `Diagnostic: ${String(payload.diagnosticId || "unavailable")}`,
+    `Code: ${String(payload.code || "unclassified")}`,
+    `Message: ${String(payload.message || "No message was provided.")}`,
+  ].join("\n").replace(
+    /\b(token|password|secret|api[-_]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
+    "$1=[REDACTED]",
+  );
+  return redacted.slice(0, 4096);
+}
+
+function installGracefulQuit(
+  app,
+  stopBackend,
+  onBlocked = async () => "keep-working",
+  forceStopBackend = async () => {},
+) {
   let shutdownComplete = false;
   let shutdownStarted = false;
   app.on("before-quit", (event) => {
@@ -60,8 +91,29 @@ function installGracefulQuit(app, stopBackend, onBlocked = async () => {}) {
       })
       .catch(async (error) => {
         shutdownStarted = false;
-        await onBlocked(error);
+        const decision = await onBlocked(error);
+        if (decision === "retry") {
+          app.quit();
+          return;
+        }
+        if (decision === "quit-anyway") {
+          try {
+            await forceStopBackend();
+          } finally {
+            shutdownComplete = true;
+            app.quit();
+          }
+        }
       });
+  });
+  return () => shutdownComplete;
+}
+
+function installWindowCloseGuard(window, app, isShutdownComplete) {
+  window.on("close", (event) => {
+    if (isShutdownComplete()) return;
+    event.preventDefault();
+    app.quit();
   });
 }
 
@@ -69,11 +121,12 @@ function createApplication(
   electron = require("electron"),
   updater = require("electron-updater").autoUpdater,
 ) {
-  const {app, BrowserWindow, dialog, ipcMain, safeStorage, session} = electron;
+  const {app, BrowserWindow, clipboard, dialog, ipcMain, safeStorage, session, shell} = electron;
   configureApplicationIdentity(app);
   let mainWindow = null;
   let supervisor = null;
   let settingsStore = null;
+  let isShutdownComplete = () => false;
   const windowIcon = developmentIconPath(app.isPackaged);
   const updateFeedUrl = process.env.AGENT_KRONIG_UPDATE_URL || "";
   let verifyDownload = async () => {};
@@ -157,6 +210,7 @@ function createApplication(
         devTools: !app.isPackaged,
       },
     });
+    installWindowCloseGuard(window, app, isShutdownComplete);
     window.once("ready-to-show", () => window.show());
     window.on("closed", () => {
       if (mainWindow === window) mainWindow = null;
@@ -264,6 +318,79 @@ function createApplication(
       });
     });
     ipcMain.handle("desktop:get-info", () => desktopInfo());
+    ipcMain.handle("desktop:choose-bundle-export-destination", async (_event, payload = {}) => {
+      const baseName = String(payload.suggestedName || "agent-kronig-results")
+        .replace(/[^a-z0-9._-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 96) || "agent-kronig-results";
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: "Export reproducibility bundle",
+        defaultPath: `${baseName.replace(/\.akbundle$/i, "")}.akbundle`,
+        filters: [{name: "Agent Kronig reproducibility bundle", extensions: ["akbundle"]}],
+      });
+      return Object.freeze({
+        cancelled: result.canceled || !result.filePath,
+        path: result.canceled ? null : result.filePath || null,
+      });
+    });
+    ipcMain.handle("desktop:copy-diagnostic-summary", (_event, payload = {}) => {
+      const summary = sanitizeDiagnosticSummary(payload);
+      clipboard.writeText(summary);
+      return Object.freeze({copied: true});
+    });
+    ipcMain.handle("desktop:open-diagnostics", async () => {
+      const directory = path.join(app.getPath("userData"), "diagnostics");
+      fs.mkdirSync(directory, {recursive: true});
+      const error = await shell.openPath(directory);
+      if (error) throw new Error("The diagnostics folder could not be opened.");
+      return Object.freeze({opened: true});
+    });
+    ipcMain.handle("desktop:open-results-window", async (_event, payload = {}) => {
+      if (!supervisor?.readiness) throw new Error("The local result service is unavailable.");
+      const destination = resultWindowUrl(supervisor.readiness.url, payload);
+      const resultWindow = new BrowserWindow({
+        width: 1280,
+        height: 860,
+        minWidth: 900,
+        minHeight: 600,
+        backgroundColor: "#0b0f14",
+        title: "Agent Kronig Results",
+        icon: windowIcon,
+        parent: mainWindow,
+        webPreferences: {
+          preload: path.join(__dirname, "preload.js"),
+          contextIsolation: true,
+          sandbox: true,
+          nodeIntegration: false,
+          webSecurity: true,
+          devTools: !app.isPackaged,
+        },
+      });
+      attachNavigationPolicy(resultWindow.webContents, supervisor.readiness.url);
+      await resultWindow.loadURL(destination);
+      return Object.freeze({opened: true});
+    });
+    ipcMain.handle("desktop:export-results-pdf", async (event, payload = {}) => {
+      const baseName = String(payload.suggestedName || "agent-kronig-results")
+        .replace(/[^a-z0-9._-]+/gi, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 96) || "agent-kronig-results";
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: "Export scientific results PDF",
+        defaultPath: `${baseName.replace(/\.pdf$/i, "")}.pdf`,
+        filters: [{name: "PDF document", extensions: ["pdf"]}],
+      });
+      if (result.canceled || !result.filePath) {
+        return Object.freeze({cancelled: true, path: null});
+      }
+      const pdf = await event.sender.printToPDF({
+        printBackground: true,
+        preferCSSPageSize: true,
+        pageSize: "A4",
+      });
+      fs.writeFileSync(result.filePath, pdf, {mode: 0o600});
+      return Object.freeze({cancelled: false, path: result.filePath});
+    });
     ipcMain.handle("desktop:get-settings", () => settingsStore.getPublicSettings());
     ipcMain.handle("desktop:save-settings", async (_event, payload) => {
       await assertBackendIdle();
@@ -310,12 +437,18 @@ function createApplication(
         mainWindow.focus();
       }
     });
-    installGracefulQuit(app, stopBackendWhenIdle, async (error) => {
-      await dialog.showMessageBox(mainWindow, {
+    isShutdownComplete = installGracefulQuit(app, stopBackendWhenIdle, async (error) => {
+      const result = await dialog.showMessageBox(mainWindow, {
         type: "warning",
+        title: "Agent Kronig could not finish closing",
         message: error.message,
+        detail: "Project files remain in place. You can retry cleanup, keep working, or quit the application anyway.",
+        buttons: ["Retry", "Quit anyway", "Keep working"],
+        defaultId: 0,
+        cancelId: 2,
       });
-    });
+      return ["retry", "quit-anyway", "keep-working"][result.response] || "keep-working";
+    }, stopBackend);
     app.on("window-all-closed", () => app.quit());
     await app.whenReady();
     if (windowIcon && app.dock?.setIcon) app.dock.setIcon(windowIcon);
@@ -343,6 +476,9 @@ module.exports = {
   createLaunchToken,
   developmentIconPath,
   installGracefulQuit,
+  installWindowCloseGuard,
   installPermissionPolicy,
+  resultWindowUrl,
+  sanitizeDiagnosticSummary,
   shouldAutoStart,
 };

@@ -92,6 +92,11 @@ assertEqual(
   "approval waits should continue background synchronization",
 );
 assertEqual(
+  globalThis.AgentKronigIDEState.isActiveState("waiting_for_plan_approval"),
+  true,
+  "plan review remains part of the active run lifecycle",
+);
+assertEqual(
   globalThis.AgentKronigIDEState.isActiveState("completed"),
   false,
   "terminal runs should not trigger active-run polling",

@@ -12,6 +12,8 @@ contacts: [ohmic, ideal_gate, metal_work_function, insulating]
 studies: [equilibrium, dc, dc_points, ac, frequency, transient, temperature, parameter]
 observables:
   - terminal_current
+  - terminal_current_density
+  - absolute_terminal_current
   - terminal_charge
   - potential
   - electric_field

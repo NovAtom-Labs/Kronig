@@ -14,6 +14,9 @@ from openhands.tools.terminal.definition import TerminalAction
 
 from tcad_agent.agent.events import AgentEventBridge, structured_action_metadata
 from tcad_agent.agent.tools import TcadDomainAction, TcadDomainObservation
+from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.ide.changes import WorkspaceChangeTracker
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
@@ -413,6 +416,185 @@ def test_domain_refusal_is_failed_activity_without_workspace_validation_claims(
     completed = events.list_after(conversation.id, 0)[-1]
     assert completed.payload["is_error"] is True
     assert "validated_files" not in completed.payload
+
+
+def test_prepared_experiment_observation_creates_typed_plan_gate(
+    tmp_path: Path,
+    valid_spec: ExperimentSpec,
+) -> None:
+    store, events, conversations, conversation, run = _services(tmp_path)
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+    artifacts = ExperimentPlanArtifactWriter(tmp_path).write(prepared)
+    bridge = AgentEventBridge(
+        conversation.id,
+        run.id,
+        store,
+        events,
+        conversations,
+        workspace=tmp_path,
+    )
+    action = _domain_action("prepare_experiment", risk=SecurityRisk.LOW)
+    bridge(action)
+    bridge(
+        ObservationEvent(
+            tool_name="tcad_domain",
+            tool_call_id=action.tool_call_id,
+            action_id=action.id,
+            observation=TcadDomainObservation.from_text(
+                text="prepared payload deliberately omitted from transcript",
+                status="ok",
+                code="experiment_prepared",
+                message="Experiment plan is ready.",
+                data={
+                    "prepared": prepared.model_dump(mode="json"),
+                    "plan_artifacts": {
+                        "plan": str(artifacts.markdown_path),
+                        "structured_plan": str(artifacts.json_path),
+                    },
+                },
+            ),
+        )
+    )
+    bridge(
+        MessageEvent(
+            source="agent",
+            llm_message=Message(
+                role="assistant",
+                content=[TextContent(text="# Giant duplicate plan")],
+            ),
+        )
+    )
+
+    pending = store.get_prepared_plan(run.id)
+    assert pending.plan_digest == prepared.plan_digest
+    assert store.get_run(run.id).state.value == "waiting_for_plan_approval"
+    assert conversations.messages(conversation.id) == ()
+    completed = [
+        event
+        for event in events.list_after(conversation.id, 0)
+        if event.kind == "tool_call_completed"
+    ][-1]
+    assert completed.payload["output"] == "Experiment plan prepared for review."
+
+
+def test_executed_experiment_observation_registers_managed_result(
+    tmp_path: Path,
+) -> None:
+    store, events, conversations, conversation, run = _services(tmp_path)
+    project_root = tmp_path / "experiments" / "bias-study"
+    project_root.mkdir(parents=True)
+    bridge = AgentEventBridge(
+        conversation.id,
+        run.id,
+        store,
+        events,
+        conversations,
+        workspace=tmp_path,
+    )
+    action = _domain_action("execute_experiment", risk=SecurityRisk.LOW)
+    bridge(action)
+    bridge(
+        ObservationEvent(
+            tool_name="tcad_domain",
+            tool_call_id=action.tool_call_id,
+            action_id=action.id,
+            observation=TcadDomainObservation.from_text(
+                text="managed bundle omitted",
+                status="ok",
+                code="experiment_executed",
+                message="Experiment completed.",
+                data={
+                    "bundle": {
+                        "run_id": "experiment-0001",
+                        "state": "failed",
+                        "execution_state": "completed",
+                        "validation_state": "needs_review",
+                    },
+                    "experiment": {"project_root": str(project_root)},
+                },
+            ),
+        )
+    )
+
+    record = store.get_experiment_result(run.id)
+    assert record.bundle_run_id == "experiment-0001"
+    assert record.execution_state == "completed"
+    assert record.validation_state == "needs_review"
+    result_event = [
+        event for event in events.list_after(conversation.id, 0)
+        if event.kind == "result_ready"
+    ][-1]
+    assert result_event.payload["run_id"] == str(run.id)
+    assert result_event.payload["validation_state"] == "needs_review"
+
+
+def test_executed_experiment_observation_records_structured_outcome(
+    tmp_path: Path,
+) -> None:
+    store, events, conversations, conversation, run = _services(tmp_path)
+    project_root = tmp_path / "experiments" / "bias-study"
+    project_root.mkdir(parents=True)
+    (project_root / "REPORT.md").write_text("# Evidence summary\n")
+    (project_root / "results.json").write_text('{"status":"completed"}\n')
+    (project_root / "validation.json").write_text(
+        '{"overall":"warning","checks":['
+        '{"id":"charge","level":"physical","status":"failed",'
+        '"message":"charge mismatch","evidence_origin":"derived",'
+        '"evidence_paths":[]}]}\n'
+    )
+    (project_root / "traceability.json").write_text(
+        '{"schema_version":"1.0","records":['
+        '{"deliverable":"potential","status":"satisfied",'
+        '"evidence_datasets":["potential"],"rationale":"present"},'
+        '{"deliverable":"current","status":"unmet",'
+        '"evidence_datasets":[],"rationale":"absent"}]}\n'
+    )
+    bridge = AgentEventBridge(
+        conversation.id,
+        run.id,
+        store,
+        events,
+        conversations,
+        workspace=tmp_path,
+    )
+    action = _domain_action("execute_experiment", risk=SecurityRisk.LOW)
+    bridge(action)
+    bridge(
+        ObservationEvent(
+            tool_name="tcad_domain",
+            tool_call_id=action.tool_call_id,
+            action_id=action.id,
+            observation=TcadDomainObservation.from_text(
+                text="managed bundle omitted",
+                status="ok",
+                code="experiment_executed",
+                message="Experiment completed.",
+                data={
+                    "bundle": {
+                        "run_id": "experiment-0001",
+                        "state": "failed",
+                        "execution_state": "completed",
+                        "validation_state": "needs_review",
+                    },
+                    "experiment": {"project_root": str(project_root)},
+                },
+            ),
+        )
+    )
+
+    outcome = store.get_run_outcome(run.id)
+    assert outcome.execution_state == "completed"
+    assert outcome.validation_state == "needs_review"
+    assert outcome.report_state == "complete"
+    assert outcome.deliverable_state == "incomplete"
+    assert outcome.failed_check_count == 1
+    assert outcome.unmet_deliverables == ("current",)
+    result_event = [
+        event for event in events.list_after(conversation.id, 0)
+        if event.kind == "result_ready"
+    ][-1]
+    assert result_event.payload["overall_state"] == "needs_attention"
+    assert result_event.payload["failed_check_count"] == 1
 
 
 def test_successful_action_observation_records_action_scoped_changed_paths(

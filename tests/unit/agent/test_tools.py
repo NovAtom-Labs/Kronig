@@ -64,6 +64,30 @@ def test_describe_spec_returns_the_authoritative_experiment_contract(
     assert response.data["usage"]["payload_shape"] == "direct ExperimentSpec object"
 
 
+def test_typed_bundle_inspection_returns_bounded_canonical_summary(
+    tmp_path: Path,
+    monkeypatch,
+    result_bundle_factory,
+) -> None:
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "app-data"))
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    tools = DomainTools(workspace)
+    from tcad_agent.runtime.paths import RuntimePaths
+
+    root = RuntimePaths.from_workspace(workspace).bundle_root
+    result_bundle_factory(root)
+
+    response = tools.inspect_bundle("run-0001")
+
+    assert response.status == "ok"
+    assert response.code == "bundle_inspected"
+    assert response.data["run_id"] == "run-0001"
+    assert response.data["dataset_count"] > 0
+    assert "values" not in response.data["datasets"][0]
+    assert response.data["validation"]["failed_count"] == 0
+
+
 def test_sentaurus_prepares_without_configured_remote(tmp_path: Path) -> None:
     response = build_tools(tmp_path).prepare_experiment(valid_spec_payload(), backend="sentaurus")
     assert response.status == "ok"
@@ -71,7 +95,9 @@ def test_sentaurus_prepares_without_configured_remote(tmp_path: Path) -> None:
     assert response.data["prepared"]["backend"] == "sentaurus"
 
 
-def test_execute_experiment_fixes_output_below_workspace(tmp_path: Path) -> None:
+def test_execute_experiment_keeps_runtime_bundle_outside_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
     class RecordingEngine:
         def __init__(self) -> None:
             self.delegate = ExperimentEngine()
@@ -92,10 +118,23 @@ def test_execute_experiment_fixes_output_below_workspace(tmp_path: Path) -> None
             del approved_plan_digest, budget, run_id
             self.output_root = output_root
             root = output_root / "run-recorded"
+            (root / "results").mkdir(parents=True)
+            (root / "validation").mkdir()
+            (root / "results" / "canonical.json").write_text(
+                '{"status":"completed"}\n'
+            )
+            (root / "validation" / "report.json").write_text(
+                '{"overall":"passed"}\n'
+            )
+            (root / "report.md").write_text("# Report\n")
+            (root / "traceability.json").write_text('{"records":[]}\n')
             return ExperimentBundle(run_id="run-recorded", state="completed", root=root)
 
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "app-data"))
+    workspace = tmp_path / "selected-project"
+    workspace.mkdir()
     engine = RecordingEngine()
-    tools = DomainTools(tmp_path, experiment_engine=engine)
+    tools = DomainTools(workspace, experiment_engine=engine)
     prepared = tools.prepare_experiment(valid_spec_payload(), backend="devsim").data["prepared"]
 
     response = tools.execute_experiment(
@@ -109,8 +148,88 @@ def test_execute_experiment_fixes_output_below_workspace(tmp_path: Path) -> None
 
     assert response.status == "ok"
     assert response.code == "experiment_executed"
-    assert engine.output_root == tmp_path.resolve() / "runs"
-    assert response.data["bundle"]["root"] == str(tmp_path.resolve() / "runs/run-recorded")
+    assert engine.output_root is not None
+    assert engine.output_root.is_relative_to((tmp_path / "app-data").resolve())
+    assert not (workspace / "runs").exists()
+    assert response.data["experiment"]["project_root"].startswith(
+        str(workspace.resolve() / "experiments")
+    )
+    assert "root" not in response.data["bundle"]
+    assert response.data["bundle"]["execution_state"] == "completed"
+    assert response.data["bundle"]["validation_state"] == "passed"
+
+
+def test_execute_approved_plan_loads_exact_repository_artifact_by_digest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class RecordingEngine:
+        def __init__(self) -> None:
+            self.delegate = ExperimentEngine()
+            self.executed_digest: str | None = None
+
+        def prepare(self, spec, backend, *, warnings=()):
+            return self.delegate.prepare(spec, backend, warnings=warnings)
+
+        def execute(
+            self,
+            prepared,
+            *,
+            approved_plan_digest,
+            output_root,
+            budget,
+            run_id=None,
+        ):
+            del budget, run_id
+            self.executed_digest = approved_plan_digest
+            root = output_root / "run-approved"
+            (root / "results").mkdir(parents=True)
+            (root / "validation").mkdir()
+            (root / "results" / "canonical.json").write_text(
+                '{"status":"completed"}\n'
+            )
+            (root / "validation" / "report.json").write_text(
+                '{"overall":"passed"}\n'
+            )
+            (root / "report.md").write_text("# Report\n")
+            (root / "traceability.json").write_text('{"records":[]}\n')
+            return ExperimentBundle(run_id="run-approved", state="completed", root=root)
+
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "app-data"))
+    workspace = tmp_path / "selected-project"
+    workspace.mkdir()
+    engine = RecordingEngine()
+    tools = DomainTools(workspace, experiment_engine=engine)
+    preparation = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+    prepared = preparation.data["prepared"]
+
+    response = tools.execute_approved_plan(
+        {
+            "approved_plan_digest": prepared["plan_digest"],
+            "structured_plan_path": preparation.data["plan_artifacts"][
+                "structured_plan"
+            ],
+            "timeout_seconds": 30,
+        }
+    )
+
+    assert response.status == "ok"
+    assert response.code == "experiment_executed"
+    assert engine.executed_digest == prepared["plan_digest"]
+
+
+def test_execute_approved_plan_refuses_unknown_digest(tmp_path: Path) -> None:
+    workspace = tmp_path / "selected-project"
+    workspace.mkdir()
+
+    response = DomainTools(workspace).execute_approved_plan(
+        {
+            "approved_plan_digest": "a" * 64,
+            "structured_plan_path": "experiments/missing/plan.json",
+        }
+    )
+
+    assert response.status == "refused"
+    assert response.code == "approved_plan_not_found"
 
 
 def test_tcad_executor_returns_llm_visible_refusal_for_missing_payload(

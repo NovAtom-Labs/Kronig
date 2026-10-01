@@ -178,6 +178,52 @@ def test_band_ordering_is_checked_from_canonical_energy_fields() -> None:
     assert report.checks_by_id["band-ordering"].status == "failed"
 
 
+def test_band_ordering_accepts_semantically_equal_axes_with_different_ids() -> None:
+    result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        axes={
+            "conduction_position": ScientificAxis(
+                id="conduction_position",
+                kind="position",
+                label="Position",
+                unit="m",
+                values=(0.0, 1.0),
+            ),
+            "valence_position": ScientificAxis(
+                id="valence_position",
+                kind="position",
+                label="Position",
+                unit="m",
+                values=(0.0, 1.0),
+            ),
+        },
+        datasets={
+            "conduction_band": Dataset(
+                id="conduction_band",
+                label="Conduction band",
+                unit="eV",
+                axes=("conduction_position",),
+                shape=(2,),
+                values=(0.6, 0.7),
+            ),
+            "valence_band": Dataset(
+                id="valence_band",
+                label="Valence band",
+                unit="eV",
+                axes=("valence_position",),
+                shape=(2,),
+                values=(-0.5, -0.4),
+            ),
+        },
+    )
+
+    report = ValidationEngine().validate(result)
+
+    assert report.checks_by_id["band-ordering"].status == "passed"
+
+
 def test_recombination_components_and_generation_are_checked() -> None:
     axis = ScientificAxis(
         id="x", kind="position", label="Position", unit="m", values=(0.0, 1.0)
@@ -211,6 +257,51 @@ def test_recombination_components_and_generation_are_checked() -> None:
 
     assert report.checks_by_id["recombination-component-balance"].status == "failed"
     assert report.checks_by_id["generation-recombination-sign"].status == "failed"
+
+
+def test_recombination_balance_accepts_semantically_equal_axes_with_different_ids() -> None:
+    axes = {
+        identifier: ScientificAxis(
+            id=identifier,
+            kind="position",
+            label="Position",
+            unit="m",
+            values=(0.0, 1.0),
+        )
+        for identifier in ("total_position", "srh_position", "auger_position")
+    }
+
+    def rate(identifier: str, axis: str, values: tuple[float, float]) -> Dataset:
+        return Dataset(
+            id=identifier,
+            label=identifier,
+            unit="m^-3/s",
+            axes=(axis,),
+            shape=(2,),
+            values=values,
+        )
+
+    result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        axes=axes,
+        datasets={
+            "srh_recombination_rate": rate(
+                "srh_recombination_rate", "srh_position", (2.0, 3.0)
+            ),
+            "auger_recombination_rate": rate(
+                "auger_recombination_rate", "auger_position", (1.0, 1.0)
+            ),
+            "total_recombination_rate": rate(
+                "total_recombination_rate", "total_position", (3.0, 4.0)
+            ),
+        },
+    )
+
+    report = ValidationEngine().validate(result)
+
+    assert report.checks_by_id["recombination-component-balance"].status == "passed"
 
 
 def test_requested_bidirectional_bias_order_is_checked_without_forcing_monotonicity() -> None:

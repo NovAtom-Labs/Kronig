@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from uuid import UUID
 
@@ -27,7 +28,9 @@ from tcad_agent.ide.models import RunState
 from tcad_agent.ide.paths import WorkspacePathError
 from tcad_agent.ide.sessions import WorkspaceSessionBusyError
 from tcad_agent.ide.store import ConversationNotFoundError, WorkspaceNotFoundError
+from tcad_agent.observability.diagnostics import DiagnosticStore
 from tcad_agent.prompting.service import build_default_prompt_preparation
+from tcad_agent.web.errors import map_exception
 from tcad_agent.web.ide_routes import (
     AgentAPIError,
     IDEServices,
@@ -63,6 +66,9 @@ def create_app(
         app.add_middleware(DesktopSessionMiddleware, auth=desktop_auth)
     app.mount("/static", StaticFiles(directory=package_root / "static"), name="static")
     app.include_router(build_ide_router(ide_services, active_supervisor))
+    diagnostic_store = DiagnosticStore(
+        Path(os.getenv("AGENT_KRONIG_DATA_DIR", str(ide_services.runtime_root)))
+    )
 
     @app.exception_handler(AgentAPIError)
     async def agent_api_error(_request: Request, exc: AgentAPIError) -> JSONResponse:
@@ -113,13 +119,20 @@ def create_app(
         )
 
     @app.exception_handler(Exception)
-    async def internal_error(_request: Request, _exc: Exception) -> JSONResponse:
+    async def internal_error(request: Request, exc: Exception) -> JSONResponse:
+        mapped = map_exception(exc, operation=f"{request.method} {request.url.path}")
+        try:
+            diagnostic_store.write(
+                diagnostic_id=mapped.envelope.diagnostic_id,
+                category=mapped.envelope.category.value,
+                operation=mapped.envelope.operation,
+                detail=exc,
+            )
+        except Exception:
+            pass
         return JSONResponse(
-            status_code=500,
-            content={
-                "code": "internal_error",
-                "message": ("The request failed without exposing provider or credential details."),
-            },
+            status_code=mapped.status_code,
+            content=mapped.envelope.model_dump(mode="json"),
         )
 
     @app.get("/health")

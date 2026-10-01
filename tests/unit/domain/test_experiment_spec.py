@@ -82,6 +82,13 @@ def test_normalized_spec_round_trips_through_persistence() -> None:
     assert ExperimentSpec.model_validate(spec.normalized()) == spec
 
 
+def test_legacy_terminal_current_maps_to_explicit_current_density() -> None:
+    spec = ExperimentSpec.model_validate(minimal_spec())
+
+    assert Observable.TERMINAL_CURRENT not in spec.observables
+    assert Observable.TERMINAL_CURRENT_DENSITY in spec.observables
+
+
 def test_canonical_quantity_accepts_equivalent_dimensionality_factor_order() -> None:
     quantity = QuantityValue.model_validate(
         {

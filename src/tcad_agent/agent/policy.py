@@ -58,6 +58,7 @@ _SAFE_GIT_COMMANDS = {"branch", "diff", "log", "rev-parse", "show", "status"}
 _KNOWN_TOOL_NAMES = {
     "file_editor",
     "finish",
+    "invoke_skill",
     "task",
     "task_tracker",
     "tcad_domain",
@@ -246,6 +247,7 @@ def classify_action(workspace: Path, event: ActionEvent) -> SecurityRisk:
     if isinstance(action, TcadDomainAction):
         if action.operation in {
             "execute_experiment",
+            "execute_approved_plan",
             "search_web",
             "fetch_source",
         }:
@@ -290,7 +292,10 @@ def permission_category(workspace: Path, event: ActionEvent) -> PermissionCatego
         "fetch_source",
     }:
         return PermissionCategory.NETWORK_ACCESS
-    if isinstance(action, TcadDomainAction) and action.operation == "execute_experiment":
+    if isinstance(action, TcadDomainAction) and action.operation in {
+        "execute_experiment",
+        "execute_approved_plan",
+    }:
         return PermissionCategory.SIMULATION_EXECUTION
     return PermissionCategory.UNRECOGNIZED_ACTION
 

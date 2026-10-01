@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -12,6 +13,7 @@ from uuid import UUID
 
 from openhands.sdk.conversation import ConversationExecutionStatus
 from openhands.sdk.event import Event
+from pydantic import JsonValue
 
 from tcad_agent.agent.events import AgentEventBridge, safe_event_text
 from tcad_agent.ide.changes import WorkspaceChangeTracker, attribute_changes
@@ -21,6 +23,8 @@ from tcad_agent.ide.models import (
     AgentRunRecord,
     ApprovalDecision,
     PermissionCategory,
+    PlanApprovalMode,
+    PreparedPlanRecord,
     RunState,
     WorkspaceBaseline,
 )
@@ -88,6 +92,15 @@ _ACTIVE_STATES = {
     RunState.WAITING_FOR_APPROVAL,
     RunState.WAITING_FOR_USER,
     RunState.PAUSED,
+    RunState.WAITING_FOR_PLAN_APPROVAL,
+}
+
+_CONTEXTUAL_APPROVALS = {
+    "approve",
+    "approved",
+    "go ahead",
+    "looks good",
+    "run it",
 }
 
 
@@ -226,6 +239,114 @@ class AgentSupervisor:
         self._launch_preparation(run_id, workspace.root)
         return queued
 
+    def approve_plan(
+        self,
+        run_id: UUID,
+        expected_revision: int,
+        plan_digest: str,
+        *,
+        mode: PlanApprovalMode = PlanApprovalMode.REVIEW_EACH_RISK,
+    ) -> AgentRunRecord:
+        run = self.services.store.get_run(run_id)
+        if run.state is not RunState.WAITING_FOR_PLAN_APPROVAL:
+            raise IDEStoreError("run is not waiting for plan approval")
+        plan = self.services.store.approve_prepared_plan(
+            run_id,
+            expected_revision,
+            plan_digest,
+            mode=mode,
+        )
+        category = PermissionCategory.SIMULATION_EXECUTION
+        self.services.store.grant_run_permission(run_id, category)
+        self._grants_for(run_id).add(category)
+        runtime = self._runtime_for(run_id)
+        runtime.send_message(self._approved_plan_continuation(plan))
+        self.services.events.append(
+            run.conversation_id,
+            "plan_approved",
+            {
+                "run_id": str(run_id),
+                "plan_digest": plan.plan_digest,
+                "approval_mode": mode.value,
+                "revision": plan.revision,
+            },
+        )
+        return self._continue(run_id, runtime=runtime)
+
+    def approve_contextual_plan(
+        self,
+        workspace_id: UUID,
+        content: str,
+    ) -> AgentRunRecord | None:
+        normalized = " ".join(content.strip().lower().split()).rstrip(".!?")
+        if normalized not in _CONTEXTUAL_APPROVALS:
+            return None
+        plan = self.services.store.pending_plan_for_workspace(workspace_id)
+        if plan is None:
+            return None
+        return self.approve_plan(
+            plan.run_id,
+            plan.revision,
+            plan.plan_digest,
+            mode=PlanApprovalMode.REVIEW_EACH_RISK,
+        )
+
+    def revise_plan(
+        self,
+        run_id: UUID,
+        expected_revision: int,
+        instruction: str,
+    ) -> AgentRunRecord:
+        run = self.services.store.get_run(run_id)
+        if run.state is not RunState.WAITING_FOR_PLAN_APPROVAL:
+            raise IDEStoreError("run is not waiting for plan approval")
+        request = instruction.strip()
+        if not request:
+            raise IDEStoreError("plan revision instruction is empty")
+        plan = self.services.store.request_plan_revision(run_id, expected_revision)
+        runtime = self._runtime_for(run_id)
+        runtime.send_message(
+            "The researcher requested a revision to the prepared experiment plan: "
+            f"{safe_event_text(request)}\n"
+            "Revise the ExperimentSpec only as requested, rerun deterministic completeness "
+            "and capability checks, and prepare a replacement plan artifact. Do not execute "
+            "the previous plan."
+        )
+        self.services.events.append(
+            run.conversation_id,
+            "plan_revision_requested",
+            {
+                "run_id": str(run_id),
+                "previous_plan_digest": plan.plan_digest,
+                "revision": plan.revision,
+            },
+        )
+        return self._continue(run_id, runtime=runtime)
+
+    @staticmethod
+    def _approved_plan_continuation(plan: PreparedPlanRecord) -> str:
+        execution_action = json.dumps(
+            {
+                "operation": "execute_approved_plan",
+                "payload": {
+                    "approved_plan_digest": plan.plan_digest,
+                    "structured_plan_path": str(plan.structured_plan_path),
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return (
+            "The researcher approved the exact prepared experiment plan with digest "
+            f"{plan.plan_digest}. Continue this same run by executing the unchanged "
+            "repository artifact. Call tcad_domain directly with the exact action JSON below. "
+            "Do not reconstruct it with the terminal or file editor, prepare another plan, "
+            "repeat the plan in chat, or request simulation permission again. After execution, "
+            "use typed result inspection and keep full reports in project artifacts.\n"
+            f"{execution_action}"
+        )
+
     def approve(self, approval_id: UUID, expected_revision: int) -> AgentRunRecord:
         approval = self.services.store.resolve_approval(
             approval_id, expected_revision, ApprovalDecision.APPROVE
@@ -362,6 +483,7 @@ class AgentSupervisor:
             runtime = self.runtime_factory.create(
                 workspace.root, run.sdk_conversation_id, bridge
             )
+            bridge.bind_plan_pause(runtime.pause)
             self._runtimes[run_id] = runtime
             return runtime
 
@@ -393,6 +515,7 @@ class AgentSupervisor:
         runtime = self.runtime_factory.create(
             workspace, run.sdk_conversation_id, bridge
         )
+        bridge.bind_plan_pause(runtime.pause)
         with self._guard:
             self._runtimes[run.id] = runtime
         runtime.send_message(compiled_prompt)
@@ -486,6 +609,8 @@ class AgentSupervisor:
             current = self.services.store.get_run(run_id)
             if current.state is RunState.CANCELLED:
                 return
+            if current.state is RunState.WAITING_FOR_PLAN_APPROVAL:
+                return
             failed = self._transition(run_id, RunState.FAILED)
             self.services.events.append(
                 failed.conversation_id,
@@ -521,9 +646,12 @@ class AgentSupervisor:
         workspace_lock: threading.Lock,
     ) -> None:
         try:
+            terminal_detail: str | None = None
             runtime.run()
             current = self.services.store.get_run(run_id)
             if current.state is RunState.CANCELLED:
+                return
+            if current.state is RunState.WAITING_FOR_PLAN_APPROVAL:
                 return
             status = runtime.state.execution_status
             if status is ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
@@ -544,21 +672,49 @@ class AgentSupervisor:
                 kind = "run_failed"
             else:
                 self._persist_change_manifest(run_id)
-                final = self._transition(run_id, RunState.COMPLETED)
-                kind = "run_completed"
+                try:
+                    prepared_plan = self.services.store.get_prepared_plan(run_id)
+                except IDEStoreError:
+                    prepared_plan = None
+                outcome = self.services.store.find_run_outcome(run_id)
+                if prepared_plan is not None and (
+                    outcome is None
+                    or outcome.overall_state != "completed"
+                    or prepared_plan.status != "consumed"
+                ):
+                    final = self._transition(run_id, RunState.BLOCKED)
+                    kind = "run_blocked"
+                    terminal_detail = (
+                        "The agent stopped before producing a verified experiment outcome."
+                        if outcome is None
+                        else (
+                            "The experiment finished, but validation, reporting, or "
+                            "requested deliverables still need attention."
+                        )
+                    )
+                else:
+                    final = self._transition(run_id, RunState.COMPLETED)
+                    kind = "run_completed"
+            terminal_payload: dict[str, JsonValue] = {"run_id": str(run_id)}
+            if terminal_detail is not None:
+                terminal_payload["detail"] = terminal_detail
             self.services.events.append(
-                final.conversation_id, kind, {"run_id": str(run_id)}
+                final.conversation_id, kind, terminal_payload
             )
         except Exception as error:
             current = self.services.store.get_run(run_id)
-            if current.state is not RunState.CANCELLED:
-                self._persist_change_manifest(run_id)
-                failed = self._transition(run_id, RunState.FAILED)
-                self.services.events.append(
-                    failed.conversation_id,
-                    "run_failed",
-                    {"run_id": str(run_id), "detail": safe_event_text(error)},
-                )
+            if current.state in {
+                RunState.CANCELLED,
+                RunState.WAITING_FOR_PLAN_APPROVAL,
+            }:
+                return
+            self._persist_change_manifest(run_id)
+            failed = self._transition(run_id, RunState.FAILED)
+            self.services.events.append(
+                failed.conversation_id,
+                "run_failed",
+                {"run_id": str(run_id), "detail": safe_event_text(error)},
+            )
         finally:
             workspace_lock.release()
 

@@ -28,6 +28,8 @@ class BundleManifest(StrictModel):
     schema_version: Literal["1.0"] = "1.0"
     run_id: str
     state: Literal["failed", "completed"]
+    execution_state: Literal["failed", "completed"] | None = None
+    validation_state: Literal["passed", "needs_review", "failed"] | None = None
     backend: Literal["devsim", "sentaurus"]
     simulator_version: str | None
     compiler_version: str
@@ -39,4 +41,6 @@ class BundleManifest(StrictModel):
 class ExperimentBundle(StrictModel):
     run_id: str
     state: Literal["failed", "completed"]
+    execution_state: Literal["failed", "completed"] | None = None
+    validation_state: Literal["passed", "needs_review", "failed"] | None = None
     root: Path

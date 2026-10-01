@@ -1,6 +1,24 @@
 "use strict";
 
 (() => {
+  function tableCells(line) {
+    const trimmed = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+    return trimmed.split("|").map((cell) => cell.trim());
+  }
+
+  function isTableSeparator(line) {
+    const cells = tableCells(line);
+    return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  }
+
+  function tableAlignment(separator) {
+    const value = String(separator || "").trim();
+    if (value.startsWith(":") && value.endsWith(":")) return "center";
+    if (value.endsWith(":")) return "right";
+    if (value.startsWith(":")) return "left";
+    return null;
+  }
+
   function blocks(source) {
     const output = [];
     const lines = String(source || "").split(/\r?\n/);
@@ -27,6 +45,32 @@
         }
         if (index < lines.length) index += 1;
         output.push({type: "code", language, text: content.join("\n")});
+        continue;
+      }
+      if (
+        line.includes("|")
+        && index + 1 < lines.length
+        && isTableSeparator(lines[index + 1])
+      ) {
+        const headers = tableCells(line);
+        const separators = tableCells(lines[index + 1]);
+        const rows = [];
+        index += 2;
+        while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+          rows.push(tableCells(lines[index]));
+          index += 1;
+        }
+        output.push({
+          type: "table",
+          headers,
+          rows,
+          alignments: separators.map(tableAlignment),
+        });
+        continue;
+      }
+      if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+        output.push({type: "rule"});
+        index += 1;
         continue;
       }
       if (/^\s*[-*+]\s+/.test(line)) {
@@ -56,6 +100,12 @@
         && !/^\s*[-*+]\s+/.test(lines[index])
         && !/^>\s?/.test(lines[index])
         && !lines[index].startsWith("```")
+        && !/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(lines[index])
+        && !(
+          lines[index].includes("|")
+          && index + 1 < lines.length
+          && isTableSeparator(lines[index + 1])
+        )
       ) {
         paragraph.push(lines[index]);
         index += 1;
@@ -138,6 +188,31 @@
       } else if (block.type === "quote") {
         element = documentRef.createElement("blockquote");
         appendInline(element, block.text, documentRef);
+      } else if (block.type === "table") {
+        element = documentRef.createElement("table");
+        const head = documentRef.createElement("thead");
+        const headRow = documentRef.createElement("tr");
+        block.headers.forEach((header, column) => {
+          const cell = documentRef.createElement("th");
+          if (block.alignments[column]) cell.setAttribute("data-align", block.alignments[column]);
+          appendInline(cell, header, documentRef);
+          headRow.append(cell);
+        });
+        head.append(headRow);
+        const body = documentRef.createElement("tbody");
+        block.rows.forEach((values) => {
+          const row = documentRef.createElement("tr");
+          block.headers.forEach((_header, column) => {
+            const cell = documentRef.createElement("td");
+            if (block.alignments[column]) cell.setAttribute("data-align", block.alignments[column]);
+            appendInline(cell, values[column] || "", documentRef);
+            row.append(cell);
+          });
+          body.append(row);
+        });
+        element.append(head, body);
+      } else if (block.type === "rule") {
+        element = documentRef.createElement("hr");
       } else {
         element = documentRef.createElement("p");
         appendInline(element, block.text, documentRef);

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.domain.models import ExperimentSpec, Observable
 from tcad_agent.recovery.models import FailureKind
 from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries
 from tcad_agent.validation.engine import ValidationEngine
@@ -199,3 +199,25 @@ def test_missing_requested_observable_fails_validation() -> None:
     assert check.status == "failed"
     assert check.measured_value == "missing: electron_density"
     assert FailureKind.MALFORMED_OUTPUT in {failure.kind for failure in failures}
+
+
+def test_terminal_current_density_is_satisfied_by_canonical_terminal_currents() -> None:
+    spec = equilibrium_spec().model_copy(
+        update={"observables": (Observable.TERMINAL_CURRENT_DENSITY,)}
+    )
+
+    report = ValidationEngine().validate(equilibrium_result(), spec=spec)
+
+    assert report.checks_by_id["requested-observables-present"].status == "passed"
+
+
+def test_absolute_terminal_current_requires_area_scaled_canonical_datasets() -> None:
+    spec = equilibrium_spec().model_copy(
+        update={"observables": (Observable.ABSOLUTE_TERMINAL_CURRENT,)}
+    )
+
+    report = ValidationEngine().validate(equilibrium_result(), spec=spec)
+
+    check = report.checks_by_id["requested-observables-present"]
+    assert check.status == "failed"
+    assert check.measured_value == "missing: absolute_terminal_current"

@@ -40,6 +40,14 @@ def workspace() -> WorkspaceContext:
     )
 
 
+def test_system_policy_distinguishes_absolute_current_from_current_density() -> None:
+    policy = OpenHandsPreparationModel._system_policy()
+
+    assert "absolute terminal current" in policy
+    assert "contact area" in policy
+    assert "current density" in policy
+
+
 def test_gateway_parses_a_generic_clarification_decision() -> None:
     response = json.dumps(
         {

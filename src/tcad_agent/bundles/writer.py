@@ -15,6 +15,7 @@ from tcad_agent.bundles.models import (
 )
 from tcad_agent.reporting.artifacts import FieldArtifactWriter
 from tcad_agent.reporting.markdown import MarkdownReport
+from tcad_agent.reporting.traceability import build_traceability
 
 
 class BundleWriter:
@@ -27,50 +28,80 @@ class BundleWriter:
         staging = self.root / f".{inputs.run_id}.staging"
         if final.exists() or staging.exists():
             raise FileExistsError(f"bundle run ID already exists: {inputs.run_id}")
-        for directory in ("compiled", "logs", "native", "results", "validation"):
-            (staging / directory).mkdir(parents=True, exist_ok=False)
-        self._write_json(staging / "experiment.json", inputs.spec.model_dump_json(indent=2))
-        for source in inputs.job.input_files:
-            shutil.copy2(source, staging / "compiled" / source.name)
-        shutil.copy2(inputs.native.stdout_path, staging / "logs" / "stdout.log")
-        shutil.copy2(inputs.native.stderr_path, staging / "logs" / "stderr.log")
-        if inputs.native.result_path is not None and inputs.native.result_path.exists():
-            shutil.copy2(inputs.native.result_path, staging / "native" / "native_result.json")
-        self._write_json(
-            staging / "results" / "canonical.json",
-            inputs.result.model_dump_json(indent=2),
-        )
-        FieldArtifactWriter().write(inputs.result, staging / "results")
-        self._write_json(
-            staging / "validation" / "report.json",
-            inputs.validation.model_dump_json(indent=2),
-        )
-        if not inputs.events_path.is_file():
-            raise FileNotFoundError(f"event ledger does not exist: {inputs.events_path}")
-        shutil.copy2(inputs.events_path, staging / "events.jsonl")
-        report = MarkdownReport().render(inputs.spec, inputs.result, inputs.validation)
-        (staging / "report.md").write_text(report)
-        state: Literal["failed", "completed"] = (
-            "completed"
-            if inputs.native.status == "completed"
-            and inputs.result.status == "completed"
-            and inputs.validation.overall == "passed"
-            else "failed"
-        )
-        artifacts = self._hash_artifacts(staging)
-        manifest = BundleManifest(
+        try:
+            for directory in ("compiled", "logs", "native", "results", "validation"):
+                (staging / directory).mkdir(parents=True, exist_ok=False)
+            self._write_json(staging / "experiment.json", inputs.spec.model_dump_json(indent=2))
+            for source in inputs.job.input_files:
+                shutil.copy2(source, staging / "compiled" / source.name)
+            shutil.copy2(inputs.native.stdout_path, staging / "logs" / "stdout.log")
+            shutil.copy2(inputs.native.stderr_path, staging / "logs" / "stderr.log")
+            if inputs.native.result_path is not None and inputs.native.result_path.exists():
+                shutil.copy2(inputs.native.result_path, staging / "native" / "native_result.json")
+            self._write_json(
+                staging / "results" / "canonical.json",
+                inputs.result.model_dump_json(indent=2),
+            )
+            FieldArtifactWriter().write(inputs.result, staging / "results")
+            self._write_json(
+                staging / "validation" / "report.json",
+                inputs.validation.model_dump_json(indent=2),
+            )
+            if not inputs.events_path.is_file():
+                raise FileNotFoundError(f"event ledger does not exist: {inputs.events_path}")
+            shutil.copy2(inputs.events_path, staging / "events.jsonl")
+            traceability = build_traceability(inputs.spec, inputs.result)
+            self._write_json(
+                staging / "traceability.json", traceability.model_dump_json(indent=2)
+            )
+            report = MarkdownReport().render(
+                inputs.spec,
+                inputs.result,
+                inputs.validation,
+                traceability=traceability,
+            )
+            (staging / "report.md").write_text(report)
+            state: Literal["failed", "completed"] = (
+                "completed"
+                if inputs.native.status == "completed"
+                and inputs.result.status == "completed"
+                and inputs.validation.overall == "passed"
+                else "failed"
+            )
+            execution_state: Literal["failed", "completed"] = (
+                "completed"
+                if inputs.native.status == "completed"
+                and inputs.result.status == "completed"
+                else "failed"
+            )
+            validation_state: Literal["passed", "needs_review"] = (
+                "passed" if inputs.validation.overall == "passed" else "needs_review"
+            )
+            artifacts = self._hash_artifacts(staging)
+            manifest = BundleManifest(
+                run_id=inputs.run_id,
+                state=state,
+                execution_state=execution_state,
+                validation_state=validation_state,
+                backend=inputs.result.backend,
+                simulator_version=inputs.result.simulator_version,
+                compiler_version=inputs.job.compiler_version,
+                input_digest=inputs.job.input_digest,
+                runtime_digest=inputs.job.runtime_digest,
+                artifacts=artifacts,
+            )
+            self._write_json(staging / "manifest.json", manifest.model_dump_json(indent=2))
+            staging.replace(final)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+        return ExperimentBundle(
             run_id=inputs.run_id,
             state=state,
-            backend=inputs.result.backend,
-            simulator_version=inputs.result.simulator_version,
-            compiler_version=inputs.job.compiler_version,
-            input_digest=inputs.job.input_digest,
-            runtime_digest=inputs.job.runtime_digest,
-            artifacts=artifacts,
+            execution_state=execution_state,
+            validation_state=validation_state,
+            root=final,
         )
-        self._write_json(staging / "manifest.json", manifest.model_dump_json(indent=2))
-        staging.replace(final)
-        return ExperimentBundle(run_id=inputs.run_id, state=state, root=final)
 
     @staticmethod
     def _write_json(path: Path, content: str) -> None:

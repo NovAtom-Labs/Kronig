@@ -1,10 +1,13 @@
 import json
 from types import SimpleNamespace
 
+import pytest
 from openhands.sdk import Message, TextContent
 
 from tcad_agent.capabilities.descriptors import CapabilityCatalog
-from tcad_agent.capabilities.models import CapabilityManifest
+from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
+from tcad_agent.capabilities.service import CapabilityService
+from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.prompting.gateway import OpenHandsPreparationModel
 from tcad_agent.prompting.models import WorkspaceContext
 
@@ -79,3 +82,44 @@ def test_system_policy_distinguishes_researcher_inputs_from_expert_defaults() ->
     assert "failed operating points" in policy.lower()
     assert "simulator or backend explicitly named" in policy.lower()
     assert "interface coupling" in policy.lower()
+
+
+def test_system_policy_does_not_turn_conversation_into_scientific_clarification() -> None:
+    policy = OpenHandsPreparationModel._system_policy().lower()
+
+    assert "greetings, thanks, or casual conversation" in policy
+    assert "do not ask for a simulation objective" in policy
+    assert "ready explanation" in policy
+
+
+def test_absolute_terminal_current_without_area_remains_unresolved() -> None:
+    payload = {
+        "schema_version": "1.0",
+        "name": "absolute-current-needs-area",
+        "dimension": 1,
+        "regions": [
+            {
+                "id": "silicon",
+                "material": "silicon",
+                "x0": "0 um",
+                "x1": "1 um",
+            }
+        ],
+        "profiles": [],
+        "contacts": [
+            {"id": "left", "location": "x_min", "kind": "ohmic"},
+            {"id": "right", "location": "x_max", "kind": "ohmic"},
+        ],
+        "physics": {"equations": ["poisson"]},
+        "study": {"kind": "equilibrium"},
+        "observables": ["absolute_terminal_current"],
+    }
+    try:
+        spec = ExperimentSpec.model_validate(payload)
+    except ValueError:
+        pytest.fail("absolute terminal current must be a portable observable")
+
+    decision = CapabilityService().check(spec, CapabilityManifest.from_backend("devsim"))
+
+    assert decision.status is CapabilityStatus.NEEDS_INPUT
+    assert any(issue.code == "missing_contact_area" for issue in decision.issues)

@@ -17,10 +17,14 @@ from openhands.sdk.tool import Observation
 from openhands.tools.terminal.definition import TerminalAction
 
 from tcad_agent.agent.supervisor import AgentRunConflictError, AgentSupervisor
+from tcad_agent.agent.tools import TcadDomainAction, TcadDomainObservation
+from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.ide.changes import WorkspaceChangeTracker
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
-from tcad_agent.ide.models import ApprovalDecision, RunState
+from tcad_agent.ide.models import ApprovalDecision, PlanApprovalMode, RunState
 from tcad_agent.ide.store import SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 
@@ -92,6 +96,8 @@ class ScriptedConversation:
             self.gate.wait(timeout=2)
         for item in self.events:
             self.callback(item)
+            if self.state.execution_status is ConversationExecutionStatus.PAUSED:
+                return
         self.state.execution_status = self.final_status
 
     def pause(self) -> None:
@@ -215,6 +221,145 @@ def test_supervisor_runs_in_background_and_persists_final_answer(services) -> No
         "run_completed",
     ):
         assert expected in kinds
+
+
+def test_contextual_approved_resumes_same_run_without_second_simulation_prompt(
+    services,
+    valid_spec: ExperimentSpec,
+) -> None:
+    workspace = services.workspaces.get(services.conversation.workspace_id).root
+    supervisor = AgentSupervisor(services, ScriptedRuntimeFactory([]))
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+    artifacts = ExperimentPlanArtifactWriter(workspace).write(prepared)
+    action = ActionEvent(
+        thought=[],
+        action=TcadDomainAction(
+            operation="prepare_experiment",
+            payload=valid_spec.normalized(),
+            backend="devsim",
+        ),
+        tool_name="tcad_domain",
+        tool_call_id="prepare-1",
+        tool_call=MessageToolCall(
+            id="prepare-1", name="tcad_domain", arguments="{}", origin="completion"
+        ),
+        llm_response_id="response-prepare",
+        security_risk=SecurityRisk.LOW,
+    )
+    observation = ObservationEvent(
+        tool_name="tcad_domain",
+        tool_call_id=action.tool_call_id,
+        action_id=action.id,
+        observation=TcadDomainObservation.from_text(
+            text="large prepared payload",
+            status="ok",
+            code="experiment_prepared",
+            message="ready",
+            data={
+                "prepared": prepared.model_dump(mode="json"),
+                "plan_artifacts": {
+                    "plan": str(artifacts.markdown_path),
+                    "structured_plan": str(artifacts.json_path),
+                },
+            },
+        ),
+    )
+    runtime = ScriptedRuntimeFactory([action, observation])
+    supervisor = AgentSupervisor(services, runtime)
+
+    run = supervisor.start(services.conversation.id, "Run a simulation")
+    supervisor.join(run.id, timeout=2)
+    assert services.store.get_run(run.id).state is RunState.WAITING_FOR_PLAN_APPROVAL
+    assert runtime.created[0].state.execution_status is ConversationExecutionStatus.PAUSED
+    runtime.created[0].events.clear()
+
+    resumed = supervisor.approve_contextual_plan(
+        services.conversation.workspace_id, "approved"
+    )
+    assert resumed is not None
+    supervisor.join(run.id, timeout=2)
+
+    assert resumed.id == run.id
+    assert services.store.get_run(run.id).state is RunState.BLOCKED
+    assert services.store.list_run_permission_grants(run.id) == ()
+    assert prepared.plan_digest in runtime.created[0].messages[-1]
+    assert '"operation":"execute_approved_plan"' in runtime.created[0].messages[-1]
+    assert '"prepared":{' not in runtime.created[0].messages[-1]
+    assert len(runtime.created[0].messages[-1]) < 2_000
+    assert len(services.store.list_runs(services.conversation.id)) == 1
+
+
+def test_plan_revision_resumes_same_run_with_bounded_instruction(
+    services,
+    valid_spec: ExperimentSpec,
+) -> None:
+    workspace = services.workspaces.get(services.conversation.workspace_id).root
+    supervisor = AgentSupervisor(services, ScriptedRuntimeFactory([]))
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+    artifacts = ExperimentPlanArtifactWriter(workspace).write(prepared)
+    run = services.store.create_run(
+        services.conversation.id,
+        services.conversation.id,
+    )
+    pending = services.store.save_prepared_plan(
+        run.id,
+        prepared,
+        plan_path=artifacts.markdown_path,
+        structured_plan_path=artifacts.json_path,
+    )
+    runtime = ScriptedConversation(
+        run.sdk_conversation_id,
+        lambda _event: None,
+        [],
+        ConversationExecutionStatus.FINISHED,
+    )
+    supervisor._runtimes[run.id] = runtime
+
+    resumed = supervisor.revise_plan(
+        run.id,
+        pending.revision,
+        "Keep the same sweep but request current density only.",
+    )
+    supervisor.join(run.id, timeout=2)
+
+    assert resumed.id == run.id
+    assert len(services.store.list_runs(services.conversation.id)) == 1
+    assert "request current density only" in runtime.messages[-1]
+    assert services.store.get_prepared_plan(run.id).status == "revision_requested"
+
+
+def test_approved_experiment_without_verified_outcome_cannot_complete(
+    services,
+    valid_spec: ExperimentSpec,
+) -> None:
+    workspace = services.workspaces.get(services.conversation.workspace_id).root
+    supervisor = AgentSupervisor(services, ScriptedRuntimeFactory([]))
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+    artifacts = ExperimentPlanArtifactWriter(workspace).write(prepared)
+    run = services.store.create_run(
+        services.conversation.id,
+        services.conversation.id,
+    )
+    pending = services.store.save_prepared_plan(
+        run.id,
+        prepared,
+        plan_path=artifacts.markdown_path,
+        structured_plan_path=artifacts.json_path,
+    )
+    supervisor.approve_plan(
+        run.id,
+        pending.revision,
+        pending.plan_digest,
+        mode=PlanApprovalMode.UNATTENDED_LOCAL,
+    )
+    supervisor.join(run.id, timeout=2)
+
+    assert services.store.get_run(run.id).state is RunState.BLOCKED
+    assert any(
+        event.kind == "run_blocked"
+        and "verified experiment outcome" in str(event.payload.get("detail", ""))
+        for event in services.events.iter_after(services.conversation.id, 0)
+    )
 
 
 def test_supervisor_rejects_a_second_active_writer(services) -> None:

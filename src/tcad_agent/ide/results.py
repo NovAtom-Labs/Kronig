@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from tcad_agent.bundles.models import BundleManifest
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
 from tcad_agent.ide.paths import canonical_directory, resolve_workspace_path
+from tcad_agent.results.catalog import DatasetCatalogEntry, build_dataset_catalog
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.models import ValidationReport
 
@@ -27,6 +28,7 @@ class WorkspaceResultView(StrictModel):
     result: CanonicalResult
     validation: ValidationReport
     manifest: BundleManifest
+    catalog: tuple[DatasetCatalogEntry, ...]
 
 
 class WorkspaceResultComparison(StrictModel):
@@ -74,13 +76,43 @@ class WorkspaceResultReader:
         if not bundle_root.is_relative_to(workspace_root):
             raise WorkspaceResultError("result bundle resolves outside the workspace")
 
+        return self._read_verified_bundle(
+            bundle_root,
+            bundle_path=bundle_root.relative_to(workspace_root).as_posix(),
+            canonical_path=canonical_target.relative_to(workspace_root).as_posix(),
+        )
+
+    def read_bundle(self, bundle_root: Path) -> WorkspaceResultView:
+        """Read an application-managed bundle without projecting internals into a repo."""
+
+        try:
+            resolved = bundle_root.expanduser().resolve(strict=True)
+        except OSError as exc:
+            raise WorkspaceResultError("result bundle is unavailable") from exc
+        if bundle_root.is_symlink() or not resolved.is_dir():
+            raise WorkspaceResultError("result bundle must be a real directory")
+        return self._read_verified_bundle(
+            resolved,
+            bundle_path=resolved.name,
+            canonical_path="results/canonical.json",
+        )
+
+    def _read_verified_bundle(
+        self,
+        bundle_root: Path,
+        *,
+        bundle_path: str,
+        canonical_path: str,
+    ) -> WorkspaceResultView:
+
         manifest_payload = self._read_object(bundle_root / "manifest.json")
         try:
             manifest = BundleManifest.model_validate(manifest_payload)
         except ValidationError as exc:
             raise WorkspaceResultError("result manifest is malformed") from exc
-        if manifest.state != "completed":
-            raise WorkspaceResultError("result bundle is not completed")
+        execution_state = manifest.execution_state or manifest.state
+        if execution_state != "completed":
+            raise WorkspaceResultError("result execution is not completed")
 
         for artifact in self.required_artifacts:
             record = manifest.artifacts.get(artifact)
@@ -127,12 +159,13 @@ class WorkspaceResultReader:
             )
 
         return WorkspaceResultView(
-            bundle_path=bundle_root.relative_to(workspace_root).as_posix(),
-            canonical_path=canonical_target.relative_to(workspace_root).as_posix(),
+            bundle_path=bundle_path,
+            canonical_path=canonical_path,
             experiment=experiment,
             result=result,
             validation=validation,
             manifest=manifest,
+            catalog=build_dataset_catalog(result),
         )
 
     def _read_object(self, path: Path) -> dict[str, Any]:

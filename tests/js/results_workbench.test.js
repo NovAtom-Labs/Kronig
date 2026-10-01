@@ -77,6 +77,13 @@ assertEqual(empty.potentialRange, null, "missing potential is unavailable rather
 assertEqual(empty.peakElectricField, null, "missing electric field is unavailable rather than zero");
 assertEqual(empty.maximumTerminalCurrent, null, "missing current is unavailable rather than zero");
 assertEqual(results.formatNumber(null), "Unavailable", "a missing metric must never format as zero");
+const reviewStatus = results.resultStatus({
+  execution_state: "completed",
+  validation_state: "needs_review",
+  validation: {overall: "failed"},
+});
+assertEqual(reviewStatus.title, "Execution completed · validation needs review", "execution and validation states remain distinct");
+assertEqual(reviewStatus.tone, "warning", "failed validation never receives success styling");
 
 const fields = results.fieldOptions(payload);
 assertEqual(fields.length, 2, "only finite aligned field series are graphable");

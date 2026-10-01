@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "name": "compensated-gaussian-three-point",
+  "dimension": 1,
+  "regions": [
+    {
+      "id": "silicon",
+      "material": "silicon",
+      "x0": "0 um",
+      "x1": "2 um",
+      "mesh_spacing": "0.01 um"
+    }
+  ],
+  "profiles": [
+    {
+      "kind": "constant",
+      "region": "silicon",
+      "species": "acceptor",
+      "value": "2e16 cm^-3"
+    },
+    {
+      "kind": "gaussian",
+      "region": "silicon",
+      "species": "donor",
+      "peak": "8e17 cm^-3",
+      "center": "1.1 um",
+      "standard_deviation": "0.12 um"
+    }
+  ],
+  "contacts": [
+    {"id": "left", "location": "x_min", "kind": "ohmic"},
+    {"id": "right", "location": "x_max", "kind": "ohmic"}
+  ],
+  "physics": {
+    "equations": ["poisson", "electron_continuity", "hole_continuity"],
+    "models": ["boltzmann", "constant_mobility", "srh"],
+    "temperature": "300 K"
+  },
+  "study": {
+    "kind": "dc_points",
+    "contact": "right",
+    "values": ["-1 V", "0 V", "0.6 V"]
+  },
+  "observables": [
+    "terminal_current",
+    "potential",
+    "electric_field",
+    "electron_density",
+    "hole_density"
+  ]
+}

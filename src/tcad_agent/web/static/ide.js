@@ -8,6 +8,9 @@ const workspaceContextName = document.querySelector("#workspace-context-name");
 const workspaceContextState = document.querySelector("#workspace-context-state");
 const gitState = document.querySelector("#git-state");
 const repositoryTree = document.querySelector("#repository-tree");
+const experimentProjects = document.querySelector("#experiment-projects");
+const experimentProjectList = document.querySelector("#experiment-project-list");
+const experimentProjectCount = document.querySelector("#experiment-project-count");
 const ideShell = document.querySelector(".ide-shell");
 const agentPanel = document.querySelector("#agent-panel");
 const toggleAgentPanel = document.querySelector("#toggle-agent-panel");
@@ -21,6 +24,18 @@ const clarificationSummary = document.querySelector("#clarification-summary");
 const clarificationForm = document.querySelector("#clarification-form");
 const clarificationQuestions = document.querySelector("#clarification-questions");
 const submitClarification = document.querySelector("#submit-clarification");
+const planReviewCard = document.querySelector("#plan-review-card");
+const planReviewTitle = document.querySelector("#plan-review-title");
+const planReviewSummary = document.querySelector("#plan-review-summary");
+const planReviewFacts = document.querySelector("#plan-review-facts");
+const planReviewPath = document.querySelector("#plan-review-path");
+const openPlan = document.querySelector("#open-plan");
+const revisePlan = document.querySelector("#revise-plan");
+const approvePlan = document.querySelector("#approve-plan");
+const approvePlanUnattended = document.querySelector("#approve-plan-unattended");
+const planRevisionForm = document.querySelector("#plan-revision-form");
+const planRevisionInstruction = document.querySelector("#plan-revision-instruction");
+const cancelPlanRevision = document.querySelector("#cancel-plan-revision");
 const agentTabs = Array.from(document.querySelectorAll("[data-agent-view]"));
 const agentViews = Array.from(document.querySelectorAll("[data-agent-panel]"));
 const agentActivity = document.querySelector("#agent-activity");
@@ -105,6 +120,9 @@ let approvalQueueSignature = "";
 let approvalDrawerMinimized = false;
 let approvalPreviousFocus = null;
 let activePreparation = null;
+let activePlan = null;
+let clarificationRenderSignature = "";
+let lastErrorEnvelope = null;
 const navigationGuard = window.AgentKronigIDEState.createNavigationGuard();
 const repositoryRequests = window.AgentKronigIDEState.createRepositoryRequestCoordinator();
 const submissions = window.AgentKronigIDEState.createSubmissionTracker();
@@ -124,14 +142,45 @@ async function api(path, options = {}) {
     const error = new Error(data.message || detail || "Request failed");
     error.code = data.code || null;
     error.payload = data;
+    lastErrorEnvelope = data;
     throw error;
   }
   return data;
 }
 
 function showError(message = "") {
-  errorNotice.textContent = message;
-  errorNotice.classList.toggle("hidden", !message);
+  const text = typeof message === "string" ? message : message?.message || "";
+  errorNotice.replaceChildren();
+  errorNotice.classList.toggle("hidden", !text);
+  if (!text) {
+    lastErrorEnvelope = null;
+    return;
+  }
+  const copy = document.createElement("span");
+  copy.textContent = text;
+  errorNotice.append(copy);
+  const envelope = lastErrorEnvelope;
+  if (!envelope?.diagnostic_id || !window.agentKronigDesktop) return;
+  const actions = document.createElement("span");
+  actions.className = "ide-error-actions";
+  const copyDiagnostic = document.createElement("button");
+  copyDiagnostic.type = "button";
+  copyDiagnostic.textContent = "Copy diagnostic summary";
+  copyDiagnostic.addEventListener("click", () => {
+    void window.agentKronigDesktop.copyDiagnosticSummary({
+      diagnosticId: envelope.diagnostic_id,
+      code: envelope.code,
+      message: envelope.message,
+    });
+  });
+  const openDiagnostics = document.createElement("button");
+  openDiagnostics.type = "button";
+  openDiagnostics.textContent = "Open diagnostics";
+  openDiagnostics.addEventListener("click", () => {
+    void window.agentKronigDesktop.openDiagnostics();
+  });
+  actions.append(copyDiagnostic, openDiagnostics);
+  errorNotice.append(actions);
 }
 
 function renderUpdateState(state) {
@@ -611,6 +660,19 @@ async function openCanonicalResult(preview, workspaceId) {
   );
 }
 
+async function openManagedResult(runId) {
+  const payload = await api(`/api/runs/${runId}/result`);
+  const projectPath = payload.project_result_path || "results.json";
+  showCanonicalResult(
+    {
+      path: projectPath,
+      name: projectPath.split("/").at(-1),
+      size: 0,
+    },
+    payload,
+  );
+}
+
 async function openFile(entry) {
   const requestGeneration = ++fileRequestGeneration;
   const workspaceId = activeWorkspace.id;
@@ -716,6 +778,55 @@ async function refreshCurrentRepository() {
   }
 }
 
+function renderExperimentProjects(experiments = []) {
+  clearNode(experimentProjectList);
+  experimentProjectCount.textContent = String(experiments.length);
+  experimentProjects.hidden = experiments.length === 0;
+  experiments.forEach((experiment) => {
+    const article = document.createElement("article");
+    const header = document.createElement("header");
+    const title = document.createElement("strong");
+    const status = document.createElement("span");
+    const actions = document.createElement("div");
+    article.className = "experiment-project";
+    title.textContent = String(experiment.name || "Experiment");
+    title.title = String(experiment.project_path || "");
+    status.className = `experiment-project-status is-${String(experiment.validation_state || "unknown").replaceAll("_", "-")}`;
+    status.textContent = experiment.validation_state === "needs_review"
+      ? "CHECKS NEED ATTENTION"
+      : String(experiment.validation_state || experiment.execution_state || "unknown").replaceAll("_", " ").toUpperCase();
+    actions.className = "experiment-project-actions";
+    const addFileAction = (label, path) => {
+      if (!path) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => void openFile({path}));
+      actions.append(button);
+    };
+    addFileAction("Plan", experiment.artifacts?.plan);
+    addFileAction("Report", experiment.artifacts?.report);
+    const resultButton = document.createElement("button");
+    resultButton.type = "button";
+    resultButton.textContent = "Results";
+    resultButton.addEventListener("click", () => void openManagedResult(experiment.run_id));
+    actions.append(resultButton);
+    addFileAction("Validation", experiment.artifacts?.validation);
+    header.append(title, status);
+    article.append(header, actions);
+    experimentProjectList.append(article);
+  });
+}
+
+async function loadExperimentProjects(workspaceId = activeWorkspace?.id) {
+  if (!workspaceId) {
+    renderExperimentProjects([]);
+    return;
+  }
+  const experiments = await api(`/api/workspaces/${workspaceId}/experiments`);
+  if (activeWorkspace?.id === workspaceId) renderExperimentProjects(experiments);
+}
+
 function appendMessage(message) {
   if (sessionMessages.querySelector(`[data-message-id="${message.id}"]`)) return null;
   const article = document.createElement("article");
@@ -803,6 +914,21 @@ function renderChatProgress(snapshot, {allowFollow = true, wasNearBottom = null}
   heading.append(title, meta);
   narrative.prepend(heading);
   narrative.append(stages);
+  if (trail.recent?.length) {
+    const recent = document.createElement("div");
+    recent.className = "research-trail-recent";
+    trail.recent.forEach((update) => {
+      const row = document.createElement("div");
+      const phase = document.createElement("span");
+      const label = document.createElement("strong");
+      row.className = `is-${update.status}`;
+      phase.textContent = update.phase;
+      label.textContent = update.label;
+      row.append(phase, label);
+      recent.append(row);
+    });
+    narrative.append(recent);
+  }
   if (trail.recovery) {
     const recovery = document.createElement("p");
     recovery.className = "research-trail-recovery";
@@ -858,9 +984,29 @@ function renderMessages(messages, {forceScroll = false} = {}) {
 function renderClarification(preparation) {
   activePreparation = preparation;
   const view = window.AgentKronigClarification.view(preparation);
-  clearNode(clarificationQuestions);
+  const nextSignature = window.AgentKronigClarification.signature(preparation);
   clarificationCard.classList.toggle("hidden", !view.visible);
-  if (!view.visible) return;
+  if (!view.visible) {
+    clarificationRenderSignature = "";
+    clearNode(clarificationQuestions);
+    return;
+  }
+  if (nextSignature === clarificationRenderSignature) return;
+
+  const drafts = {};
+  clarificationQuestions.querySelectorAll("textarea[data-question-id]").forEach((input) => {
+    drafts[input.dataset.questionId] = input.value;
+  });
+  const focusedInput = document.activeElement?.closest?.(
+    "#clarification-questions textarea[data-question-id]",
+  );
+  const focusedQuestionId = focusedInput?.dataset.questionId || null;
+  const focusedSelection = focusedInput
+    ? {end: focusedInput.selectionEnd, start: focusedInput.selectionStart}
+    : null;
+  const wasVisible = Boolean(clarificationRenderSignature);
+
+  clearNode(clarificationQuestions);
   clarificationSummary.textContent = view.summary;
   view.questions.forEach((question, index) => {
     const field = document.createElement("div");
@@ -878,13 +1024,101 @@ function renderClarification(preparation) {
     answer.rows = 2;
     answer.autocomplete = "off";
     answer.placeholder = question.required ? "Your answer" : "Optional";
+    answer.value = drafts[question.id] || "";
     field.append(label, reason, answer);
     clarificationQuestions.append(field);
   });
+  clarificationRenderSignature = nextSignature;
   requestAnimationFrame(() => {
-    clarificationQuestions.querySelector("textarea")?.focus({preventScroll: true});
-    scrollSessionToBottom();
+    const focusTarget = focusedQuestionId
+      ? Array.from(
+        clarificationQuestions.querySelectorAll("textarea[data-question-id]"),
+      ).find((input) => input.dataset.questionId === focusedQuestionId)
+      : null;
+    if (focusTarget) {
+      focusTarget.focus({preventScroll: true});
+      if (focusedSelection) {
+        focusTarget.setSelectionRange(focusedSelection.start, focusedSelection.end);
+      }
+    } else if (!wasVisible) {
+      clarificationQuestions.querySelector("textarea")?.focus({preventScroll: true});
+      scrollSessionToBottom();
+    }
   });
+}
+
+function renderPlan(plan) {
+  activePlan = plan;
+  const view = window.AgentKronigAgentView.planReview(plan);
+  planReviewCard.classList.toggle("hidden", !view.visible);
+  if (!view.visible) {
+    clearNode(planReviewFacts);
+    planRevisionForm.classList.add("hidden");
+    planRevisionInstruction.value = "";
+    return;
+  }
+  planReviewTitle.textContent = view.title;
+  planReviewSummary.textContent = (
+    `${view.backend.toUpperCase()} · ${view.study} · `
+    + `${view.regionCount} region${view.regionCount === 1 ? "" : "s"} · `
+    + `${view.observableCount} requested output${view.observableCount === 1 ? "" : "s"}`
+  );
+  clearNode(planReviewFacts);
+  [
+    ["Scientific inputs", view.unresolvedCount ? `${view.unresolvedCount} unresolved` : "Complete"],
+    ["Contacts", String(view.contactCount)],
+    ["Warnings", String(view.warningCount)],
+  ].forEach(([label, value]) => {
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = label;
+    description.textContent = value;
+    planReviewFacts.append(term, description);
+  });
+  planReviewPath.textContent = view.planPath;
+  planReviewCard.scrollIntoView({block: "nearest"});
+}
+
+async function approvePreparedPlan(mode) {
+  if (!activeRun?.id || !activePlan) return;
+  const view = window.AgentKronigAgentView.planReview(activePlan);
+  [approvePlan, approvePlanUnattended, revisePlan].forEach((button) => {
+    button.disabled = true;
+  });
+  showError();
+  try {
+    const run = await api(`/api/runs/${activeRun.id}/plan/approve`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_revision: view.revision,
+        plan_digest: view.planDigest,
+        mode,
+      }),
+    });
+    renderPlan(null);
+    setRun(run);
+  } catch (error) {
+    showError(error.message);
+    await loadPlan(activeRun);
+  } finally {
+    [approvePlan, approvePlanUnattended, revisePlan].forEach((button) => {
+      button.disabled = false;
+    });
+  }
+}
+
+async function loadPlan(run = activeRun) {
+  if (!run?.id || run.state !== "waiting_for_plan_approval") {
+    renderPlan(null);
+    return;
+  }
+  try {
+    const plan = await api(`/api/runs/${run.id}/plan`);
+    if (activeRun?.id === run.id) renderPlan(plan);
+  } catch (error) {
+    renderPlan(null);
+    showError(error.message);
+  }
 }
 
 async function loadPreparation(run = activeRun) {
@@ -932,6 +1166,7 @@ async function synchronizeSession(sessionKey) {
   renderMessages(messages);
   setRun(run);
   await loadPreparation(run);
+  await loadPlan(run);
   renderApprovals(approvals);
 }
 
@@ -972,6 +1207,7 @@ function setRun(run) {
   if (state !== "waiting_for_user" && activePreparation?.run_id !== run?.id) {
     renderClarification(null);
   }
+  if (state !== "waiting_for_plan_approval") renderPlan(null);
 }
 
 function activateAgentView(name, {focus = false} = {}) {
@@ -998,7 +1234,9 @@ function renderRunSummary(snapshot) {
   const detail = document.createElement("span");
   agentRunSummary.className = `agent-run-summary is-${summary.tone}`;
   title.textContent = summary.title;
-  detail.textContent = summary.failedStep
+  detail.textContent = summary.executionState
+    ? `${summary.failedCheckCount} failed checks · ${summary.unmetDeliverables.length} unmet outputs`
+    : summary.failedStep
     ? `${summary.failedStep}${summary.failureOutput ? `: ${String(summary.failureOutput).slice(0, 180)}` : ""}`
     : `${summary.completedSteps} actions completed · ${summary.changedFiles} files changed`;
   agentRunSummary.append(title, detail);
@@ -1012,6 +1250,11 @@ function renderRunSummary(snapshot) {
     ["Provenance", summary.provenance?.join("\n")],
     ["Warnings", summary.warnings?.join("\n")],
     ["Next", summary.nextActions?.join("\n")],
+    ["Execution", summary.executionState],
+    ["Validation", summary.validationState],
+    ["Deliverables", summary.deliverableState],
+    ["Report", summary.reportState],
+    ["Unmet requested outputs", summary.unmetDeliverables?.join("\n")],
   ].filter(([, value]) => value);
   if (evidence.length) {
     const details = document.createElement("details");
@@ -1477,6 +1720,10 @@ function updateRunFromEvent(event) {
     setRun({...activeRun, id: event.payload.run_id, state: event.payload.state});
   } else if (event.kind === "approval_requested") {
     setRun({...activeRun, id: event.payload?.run_id, state: "waiting_for_approval"});
+  } else if (event.kind === "plan_ready") {
+    setRun({...activeRun, id: event.payload?.run_id, state: "waiting_for_plan_approval"});
+  } else if (event.kind === "plan_approved" || event.kind === "plan_revision_requested") {
+    setRun({...activeRun, id: event.payload?.run_id, state: "running"});
   } else if (terminalStates[event.kind]) {
     setRun({...activeRun, id: event.payload?.run_id, state: terminalStates[event.kind]});
   }
@@ -1513,6 +1760,12 @@ function connectEvents(sessionKey) {
     updateRunFromEvent(event);
     if (event.kind === "message_created") void refreshMessages(sessionKey);
     if (event.kind === "clarification_required") void loadPreparation(activeRun);
+    if (event.kind === "plan_ready") void loadPlan(activeRun);
+    if (["plan_approved", "plan_revision_requested"].includes(event.kind)) renderPlan(null);
+    if (event.kind === "result_ready") {
+      void openManagedResult(eventRunId).catch((error) => showError(error.message));
+      void loadExperimentProjects(workspaceId).catch((error) => showError(error.message));
+    }
     if (["clarification_answered", "prompt_compiled"].includes(event.kind)) {
       renderClarification(null);
     }
@@ -1546,6 +1799,7 @@ function connectEvents(sessionKey) {
     "agent_progress_started", "agent_progress_interrupted",
     "prompt_preparation_started", "prompt_preparation_progress",
     "clarification_required", "clarification_answered", "prompt_compiled",
+    "plan_ready", "plan_approved", "plan_revision_requested", "result_ready",
   ].forEach((kind) => eventSource.addEventListener(kind, receive));
   eventSource.onopen = () => {
     streamState.textContent = "LIVE";
@@ -1563,6 +1817,7 @@ async function bindSession(session, workspaceId, routeToken) {
   if (!navigationGuard.isCurrent(routeToken) || activeSession?.id !== session.id) return;
   setRun(run);
   await loadPreparation(run);
+  await loadPlan(run);
   await loadApprovals(session.id);
   if (!navigationGuard.isCurrent(routeToken) || activeSession?.id !== session.id) return;
   connectEvents(session.id);
@@ -1574,7 +1829,10 @@ function clearSession() {
   selectedRunId = null;
   activeChangeSet = null;
   activePreparation = null;
+  activePlan = null;
   renderClarification(null);
+  renderPlan(null);
+  renderExperimentProjects([]);
   submissions.reset();
   runPresentation.reset();
   setRun(null);
@@ -1628,8 +1886,13 @@ async function restoreRoute() {
     clearSession();
     renderWorkspace(workspace);
     await loadEntries(".", routeToken);
+    await loadExperimentProjects(workspace.id);
     if (!navigationGuard.isCurrent(routeToken)) return;
     await bindSession(session, route.workspaceId, routeToken);
+    const requestedResult = new URLSearchParams(window.location.search).get("result_run_id");
+    if (/^[0-9a-f-]{36}$/i.test(requestedResult || "")) {
+      await openManagedResult(requestedResult);
+    }
   } catch (error) {
     if (!navigationGuard.isCurrent(routeToken)) return;
     if (error.code === "workspace_session_busy" && previousWorkspaceId && activeSession) {
@@ -1705,6 +1968,48 @@ clarificationForm.addEventListener("submit", async (event) => {
   } finally {
     submitClarification.disabled = false;
     submitClarification.textContent = "Continue";
+  }
+});
+
+openPlan.addEventListener("click", () => {
+  if (!activePlan) return;
+  const view = window.AgentKronigAgentView.planReview(activePlan);
+  void openFile({path: view.planPath});
+});
+approvePlan.addEventListener("click", () => {
+  void approvePreparedPlan("review_each_risk");
+});
+approvePlanUnattended.addEventListener("click", () => {
+  void approvePreparedPlan("unattended_local");
+});
+revisePlan.addEventListener("click", () => {
+  planRevisionForm.classList.remove("hidden");
+  planRevisionInstruction.focus();
+});
+cancelPlanRevision.addEventListener("click", () => {
+  planRevisionForm.classList.add("hidden");
+  planRevisionInstruction.value = "";
+});
+planRevisionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const instruction = planRevisionInstruction.value.trim();
+  if (!instruction || !activeRun?.id || !activePlan) return;
+  const view = window.AgentKronigAgentView.planReview(activePlan);
+  const submit = planRevisionForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  showError();
+  try {
+    const run = await api(`/api/runs/${activeRun.id}/plan/revise`, {
+      method: "POST",
+      body: JSON.stringify({expected_revision: view.revision, instruction}),
+    });
+    renderPlan(null);
+    setRun(run);
+  } catch (error) {
+    showError(error.message);
+    await loadPlan(activeRun);
+  } finally {
+    submit.disabled = false;
   }
 });
 

@@ -135,6 +135,14 @@ def test_catalog_can_project_legacy_manifest_without_losing_limits() -> None:
         "operating-points-converged",
     }
     assert ac.sentaurus_mapping == "pending-reviewed-mapping"
+    absolute_current = next(
+        item
+        for item in catalog.descriptors
+        if item.id == "observable.absolute_terminal_current"
+    )
+    assert {item.path for item in absolute_current.required_inputs} == {
+        "contacts.area"
+    }
 
 
 def test_material_and_physics_registries_are_evidence_gated() -> None:

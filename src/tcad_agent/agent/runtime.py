@@ -61,10 +61,14 @@ Agent Kronig scientific research policy:
 - Evidence guides execution rather than blocking it. Do not stop merely because a
   perfect source is unavailable. Build the strongest defensible candidate, compile or
   run it, inspect the evidence, repair failures, and validate canonical results.
-- For a controlled simulation, call prepare_experiment first. Present its deterministic
-  plan for approval, then pass that exact prepared record and exact plan_digest to
-  execute_experiment. Never edit a prepared plan after approval or choose an output
-  directory from model-generated input.
+- For a controlled simulation, call prepare_experiment first. The product stores and
+  opens PLAN.md and owns the approval gate. After prepare_experiment succeeds, do not
+  dump the plan into chat and do not execute until the product sends the exact approved
+  digest. Then pass that unchanged prepared record and digest to execute_experiment.
+- Use inspect_bundle, read_canonical_summary, and validate_bundle for post-run evidence.
+  Do not inspect canonical bundles with ad hoc shell or inline Python commands.
+- Never install plotting or reporting packages during a run. The native Results
+  Workbench renders canonical data using packaged application components.
 - Stop only for unsupported physics, missing essential researcher intent, unavailable
   simulator or license, unsafe operations, or repeated validation failure.
 - Preserve source URLs, retrieval metadata, content hashes, backend versions, and

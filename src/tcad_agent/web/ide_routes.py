@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from tcad_agent.agent.supervisor import AgentRunConflictError, AgentSupervisor
+from tcad_agent.bundles.export import BundleArchiveService, BundleExportRecord
 from tcad_agent.ide.changes import WorkspaceChangeTracker, attribute_changes
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed, format_sse
@@ -25,6 +26,8 @@ from tcad_agent.ide.models import (
     AgentRunRecord,
     ApprovalRequestRecord,
     ConversationMessage,
+    ExperimentProjectSummary,
+    PreparedPlanRecord,
     RunState,
     WorkspaceChangeSet,
     WorkspaceEntry,
@@ -44,12 +47,22 @@ from tcad_agent.ide.sessions import WorkspaceSessionBusyError, WorkspaceSessionS
 from tcad_agent.ide.store import IDEStoreError, MessageNotFoundError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.prompting.models import PromptPreparationRecord
+from tcad_agent.results.models import CanonicalResult
+from tcad_agent.results.query import (
+    DatasetQueryError,
+    DatasetQueryResult,
+    query_dataset,
+)
+from tcad_agent.runtime.paths import RuntimePaths
 from tcad_agent.web.schemas import (
     AnswerClarificationRequest,
+    ApprovePlanRequest,
     CreateMessageRequest,
     DenyAgentApprovalRequest,
+    ExportBundleRequest,
     OpenWorkspaceRequest,
     ResolveAgentApprovalRequest,
+    RevisePlanRequest,
     SaveWorkspaceFileRequest,
     StartAgentRunRequest,
 )
@@ -76,6 +89,7 @@ class IDEServices:
     events: EventFeed
     changes: WorkspaceChangeTracker = field(default_factory=WorkspaceChangeTracker)
     results: WorkspaceResultReader = field(default_factory=WorkspaceResultReader)
+    bundle_archives: BundleArchiveService = field(default_factory=BundleArchiveService)
     store: SqliteIDEStore = field(init=False)
     runtime_root: Path = field(init=False)
     sessions: WorkspaceSessionService = field(init=False)
@@ -239,6 +253,47 @@ def build_ide_router(
     ) -> tuple[WorkspaceEntry, ...]:
         return services.workspaces.entries(workspace_id, path)
 
+    @router.get("/workspaces/{workspace_id}/experiments")
+    def workspace_experiments(
+        workspace_id: UUID,
+    ) -> tuple[ExperimentProjectSummary, ...]:
+        workspace = services.workspaces.get(workspace_id)
+        root = workspace.root.resolve()
+        summaries: list[ExperimentProjectSummary] = []
+        for record in services.store.list_experiment_results_for_workspace(
+            workspace_id
+        ):
+            project = record.project_root.resolve(strict=False)
+            if not project.is_relative_to(root):
+                raise AgentAPIError(
+                    409,
+                    "invalid_result_project",
+                    "A recorded experiment no longer belongs to this repository.",
+                )
+            relative = project.relative_to(root).as_posix()
+            artifacts = {
+                key: f"{relative}/{name}"
+                for key, name in {
+                    "plan": "PLAN.md",
+                    "report": "REPORT.md",
+                    "results": "results.json",
+                    "validation": "validation.json",
+                }.items()
+                if (project / name).is_file()
+            }
+            summaries.append(
+                ExperimentProjectSummary(
+                    run_id=record.run_id,
+                    bundle_run_id=record.bundle_run_id,
+                    name=project.name,
+                    project_path=relative,
+                    execution_state=record.execution_state,
+                    validation_state=record.validation_state,
+                    artifacts=artifacts,
+                )
+            )
+        return tuple(summaries)
+
     @router.get("/workspaces/{workspace_id}/files/preview")
     def workspace_file_preview(
         workspace_id: UUID, path: str
@@ -384,6 +439,18 @@ def build_ide_router(
                 "The run must reference a user message in this workspace session.",
             )
         try:
+            contextual = supervisor.approve_contextual_plan(
+                workspace_id, message.content
+            )
+        except IDEStoreError as exc:
+            raise AgentAPIError(
+                409,
+                "plan_approval_conflict",
+                "The pending plan changed. Refresh it before approving.",
+            ) from exc
+        if contextual is not None:
+            return contextual
+        try:
             return supervisor.start(
                 session.id, message.content, persist_message=False
             )
@@ -402,6 +469,132 @@ def build_ide_router(
     @router.get("/runs/{run_id}/preparation")
     def prompt_preparation(run_id: UUID) -> PromptPreparationRecord:
         return services.store.get_prompt_preparation(run_id)
+
+    @router.get("/runs/{run_id}/plan")
+    def prepared_plan(run_id: UUID) -> PreparedPlanRecord:
+        return services.store.get_prepared_plan(run_id)
+
+    @router.get("/runs/{run_id}/result")
+    def managed_run_result(run_id: UUID) -> dict[str, object]:
+        run = services.store.get_run(run_id)
+        conversation = services.conversations.get(run.conversation_id)
+        workspace = services.workspaces.get(conversation.workspace_id)
+        result = services.store.get_experiment_result(run_id)
+        bundle_root = (
+            RuntimePaths.from_workspace(workspace.root).bundle_root
+            / result.bundle_run_id
+        )
+        try:
+            view = services.results.read_bundle(bundle_root)
+        except WorkspaceResultError as exc:
+            raise AgentAPIError(
+                409,
+                "invalid_result_bundle",
+                "The managed result is incomplete, malformed, or failed provenance checks.",
+            ) from exc
+        project_root = result.project_root.resolve()
+        if not project_root.is_relative_to(workspace.root.resolve()):
+            raise AgentAPIError(
+                409,
+                "invalid_result_project",
+                "The result project no longer belongs to the selected repository.",
+            )
+        payload = view.model_dump(mode="json")
+        payload["project_result_path"] = (
+            project_root / "results.json"
+        ).relative_to(workspace.root.resolve()).as_posix()
+        payload["execution_state"] = result.execution_state
+        payload["validation_state"] = result.validation_state
+        payload["agent_run_id"] = str(run_id)
+        payload["workspace_id"] = str(workspace.id)
+        return payload
+
+    @router.get("/runs/{run_id}/result/datasets/{dataset_id}")
+    def managed_run_dataset(
+        run_id: UUID,
+        dataset_id: str,
+        max_points: Annotated[int, Query(ge=4, le=50_000)] = 2_000,
+        slice_axis: str | None = None,
+        slice_index: Annotated[int | None, Query(ge=0)] = None,
+    ) -> DatasetQueryResult:
+        payload = managed_run_result(run_id)
+        result = CanonicalResult.model_validate(payload["result"])
+        try:
+            return query_dataset(
+                result,
+                dataset_id,
+                max_points=max_points,
+                slice_axis=slice_axis,
+                slice_index=slice_index,
+            )
+        except DatasetQueryError as exc:
+            raise AgentAPIError(
+                422,
+                "invalid_dataset_query",
+                str(exc),
+            ) from exc
+
+    @router.post(
+        "/runs/{run_id}/bundle/export",
+        status_code=201,
+        response_model=BundleExportRecord,
+    )
+    def export_managed_bundle(
+        run_id: UUID, payload: ExportBundleRequest
+    ) -> BundleExportRecord:
+        run = services.store.get_run(run_id)
+        conversation = services.conversations.get(run.conversation_id)
+        workspace = services.workspaces.get(conversation.workspace_id)
+        result = services.store.get_experiment_result(run_id)
+        bundle_root = (
+            RuntimePaths.from_workspace(workspace.root).bundle_root
+            / result.bundle_run_id
+        )
+        try:
+            return services.bundle_archives.export(
+                bundle_root, Path(payload.destination)
+            )
+        except (OSError, ValueError) as exc:
+            raise AgentAPIError(
+                409,
+                "bundle_export_failed",
+                "The verified reproducibility bundle could not be exported to that location.",
+            ) from exc
+
+    @router.post("/runs/{run_id}/plan/approve", status_code=202)
+    def approve_prepared_plan(
+        run_id: UUID, payload: ApprovePlanRequest
+    ) -> AgentRunRecord:
+        try:
+            return supervisor.approve_plan(
+                run_id,
+                payload.expected_revision,
+                payload.plan_digest,
+                mode=payload.mode,
+            )
+        except IDEStoreError as exc:
+            raise AgentAPIError(
+                409,
+                "plan_approval_conflict",
+                "The pending plan changed. Refresh it before approving.",
+            ) from exc
+
+    @router.post("/runs/{run_id}/plan/revise", status_code=202)
+    def revise_prepared_plan(
+        run_id: UUID, payload: RevisePlanRequest
+    ) -> AgentRunRecord:
+        try:
+            return supervisor.revise_plan(
+                run_id,
+                payload.expected_revision,
+                payload.instruction,
+            )
+        except IDEStoreError as exc:
+            raise AgentAPIError(
+                409,
+                "plan_revision_conflict",
+                "The pending plan changed. Refresh it before requesting a revision.",
+            ) from exc
 
     @router.post("/runs/{run_id}/clarifications", status_code=202)
     def answer_prompt_clarification(

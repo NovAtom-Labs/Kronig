@@ -52,6 +52,8 @@ _PLOT_FIELDS = {
     Observable.HOLE_MOBILITY: ("hMobility",),
     Observable.RECOMBINATION_RATE: ("TotalRecombination",),
     Observable.TERMINAL_CURRENT: (),
+    Observable.TERMINAL_CURRENT_DENSITY: (),
+    Observable.ABSOLUTE_TERMINAL_CURRENT: (),
     Observable.TERMINAL_CHARGE: (),
 }
 _EXPECTED_OUTPUTS = ("sdevice.log", "sdevice.plt", "sdevice.tdr")

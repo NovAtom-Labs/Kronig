@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -82,3 +83,35 @@ def test_reader_rejects_path_outside_workspace(tmp_path: Path) -> None:
         WorkspaceResultReader().read(
             tmp_path, "../outside-result/results/canonical.json"
         )
+
+
+def test_reader_opens_managed_bundle_without_workspace_projection(
+    tmp_path: Path, result_bundle_factory
+) -> None:
+    bundle = result_bundle_factory(tmp_path / "managed")
+
+    view = WorkspaceResultReader().read_bundle(bundle)
+
+    assert view.bundle_path == "run-0001"
+    assert view.canonical_path == "results/canonical.json"
+
+
+def test_reader_allows_completed_execution_that_needs_validation_review(
+    tmp_path: Path, result_bundle_factory
+) -> None:
+    bundle = result_bundle_factory(tmp_path)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(
+        {
+            "state": "failed",
+            "execution_state": "completed",
+            "validation_state": "needs_review",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+    view = WorkspaceResultReader().read_bundle(bundle)
+
+    assert view.manifest.execution_state == "completed"
+    assert view.manifest.validation_state == "needs_review"

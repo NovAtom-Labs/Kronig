@@ -19,6 +19,24 @@
   assert(view.questions.length === 2, "all questions should be retained");
   assert(view.questions[0].reason === "Controls statistics.", "rationale should be visible");
 
+  const firstSignature = AgentKronigClarification.signature(preparation);
+  const refreshedPreparation = JSON.parse(JSON.stringify(preparation));
+  assert(
+    AgentKronigClarification.signature(refreshedPreparation) === firstSignature,
+    "an unchanged server refresh must not rebuild the clarification form",
+  );
+  refreshedPreparation.revision = 4;
+  assert(
+    AgentKronigClarification.signature(refreshedPreparation) !== firstSignature,
+    "a new clarification revision must rebuild the form",
+  );
+  refreshedPreparation.revision = preparation.revision;
+  refreshedPreparation.decision.questions[1].prompt = "What label should be used?";
+  assert(
+    AgentKronigClarification.signature(refreshedPreparation) !== firstSignature,
+    "changed clarification content must rebuild the form",
+  );
+
   const payload = AgentKronigClarification.submission(preparation, {
     temperature: "300 K",
     label: "",

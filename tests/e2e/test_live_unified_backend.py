@@ -12,7 +12,6 @@ from tcad_agent.agent.supervisor import AgentSupervisor
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
 from tcad_agent.ide.models import PermissionCategory, RunState, is_run_grantable
-from tcad_agent.ide.results import WorkspaceResultReader
 from tcad_agent.ide.store import SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.web.app import create_app
@@ -68,6 +67,18 @@ def _run_live_prompt(
             break
         if run.state is RunState.RUNNING:
             continue
+        if run.state is RunState.WAITING_FOR_PLAN_APPROVAL:
+            plan = web.get(f"/api/runs/{run_id}/plan").json()
+            response = web.post(
+                f"/api/runs/{run_id}/plan/approve",
+                json={
+                    "expected_revision": plan["revision"],
+                    "plan_digest": plan["plan_digest"],
+                    "mode": "review_each_risk",
+                },
+            )
+            assert response.status_code == 202, response.text
+            continue
         assert run.state is RunState.WAITING_FOR_APPROVAL
         approvals = web.get(f"{session_url}/approvals").json()
         assert approvals, "waiting run must expose a pending approval"
@@ -85,7 +96,11 @@ def _run_live_prompt(
     assert services.store.get_run(run_id).state is RunState.COMPLETED
     messages = web.get(f"{session_url}/messages").json()
     assert messages[-1]["role"] == "assistant"
-    return services, web, {"workspace": workspace, "message": messages[-1]}
+    return services, web, {
+        "workspace": workspace,
+        "message": messages[-1],
+        "run_id": str(run_id),
+    }
 
 
 @pytest.mark.live_bedrock
@@ -105,20 +120,25 @@ def test_live_model_runs_devsim_and_produces_a_verified_result_workbench_bundle(
         "concentration, and terminal current."
     )
 
-    _run_live_prompt(repository, tmp_path / "live-simulation", prompt)
+    services, web, context = _run_live_prompt(
+        repository, tmp_path / "live-simulation", prompt
+    )
 
-    results = tuple(repository.glob("runs/*/results/canonical.json"))
-    assert len(results) == 1
-    relative = results[0].relative_to(repository).as_posix()
-    view = WorkspaceResultReader().read(repository, relative)
-    assert view.result.backend == "devsim"
-    assert view.validation.overall == "passed"
+    run_id = UUID(str(context["run_id"]))
+    record = services.store.get_experiment_result(run_id)
+    response = web.get(f"/api/runs/{run_id}/result")
+    assert response.status_code == 200, response.text
+    view = response.json()
+    assert view["result"]["backend"] == "devsim"
+    assert view["validation"]["overall"] == "passed"
     assert {
         "potential",
         "electric_field",
         "electron_density",
         "hole_density",
-    }.issubset(view.result.fields)
+    }.issubset(view["result"]["fields"])
+    assert record.project_root.is_relative_to(repository)
+    assert not (repository / "runs").exists()
 
 
 @pytest.mark.live_bedrock

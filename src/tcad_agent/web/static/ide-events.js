@@ -29,6 +29,8 @@
       approvalsById: new Map(),
       technicalEvents: [],
       inference: null,
+      plan: null,
+      resultReady: null,
     };
   }
 
@@ -126,7 +128,9 @@
 
     function updateRunState(state, event) {
       const payload = event.payload || {};
-      if (event.kind === "run_state_changed" && payload.state) {
+      if (event.kind === "run_created") {
+        state.runState = String(payload.state || "queued");
+      } else if (event.kind === "run_state_changed" && payload.state) {
         state.runState = String(payload.state);
       } else if (terminalStates[event.kind]) {
         state.runState = terminalStates[event.kind];
@@ -136,6 +140,10 @@
         state.runState = "waiting_for_approval";
       } else if (event.kind === "clarification_required") {
         state.runState = "waiting_for_user";
+      } else if (event.kind === "plan_ready") {
+        state.runState = "waiting_for_plan_approval";
+      } else if (["plan_approved", "plan_revision_requested"].includes(event.kind)) {
+        state.runState = "running";
       }
       const labels = {
         completed: "Run completed",
@@ -144,7 +152,8 @@
         cancelled: "Run cancelled",
         paused: "Run paused",
         waiting_for_approval: "Waiting for approval",
-        waiting_for_user: "Waiting for input",
+        waiting_for_plan_approval: "Experiment plan ready for review",
+        waiting_for_user: "Waiting for your response",
       };
       if (labels[state.runState]) state.currentOperation = labels[state.runState];
     }
@@ -189,6 +198,31 @@
       } else if (event.kind === "prompt_compiled") {
         state.currentOperation = "Request prepared";
       }
+      else if (event.kind === "plan_ready") {
+        state.plan = {
+          planDigest: String(event.payload?.plan_digest || ""),
+          planPath: String(event.payload?.plan_path || ""),
+          revision: Number(event.payload?.revision || 0),
+          status: "pending",
+        };
+      } else if (event.kind === "plan_approved") {
+        if (state.plan) state.plan.status = "approved";
+      } else if (event.kind === "plan_revision_requested") {
+        if (state.plan) state.plan.status = "revision_requested";
+      } else if (event.kind === "result_ready") {
+        state.resultReady = {
+          bundleRunId: String(event.payload?.bundle_run_id || ""),
+          executionState: String(event.payload?.execution_state || ""),
+          validationState: String(event.payload?.validation_state || ""),
+          deliverableState: String(event.payload?.deliverable_state || ""),
+          reportState: String(event.payload?.report_state || ""),
+          overallState: String(event.payload?.overall_state || ""),
+          failedCheckCount: Number(event.payload?.failed_check_count || 0),
+          unmetDeliverables: Array.isArray(event.payload?.unmet_deliverables)
+            ? event.payload.unmet_deliverables.map(String)
+            : [],
+        };
+      }
       else if (event.kind === "approval_requested") {
         const payload = event.payload || {};
         const approvalId = String(payload.approval_id || event.id);
@@ -217,6 +251,7 @@
         "run_blocked", "run_cancelled", "run_paused", "run_recovered_paused",
         "permission_grant_created", "permission_grant_used",
         "agent_progress_started", "agent_progress_interrupted",
+        "plan_ready", "plan_approved", "plan_revision_requested", "result_ready",
       ].includes(event.kind)) {
         state.technicalEvents.push(event);
       }
@@ -235,6 +270,8 @@
           steps: [],
           reasoning: [],
           inference: null,
+          plan: null,
+          resultReady: null,
           pendingApprovals: [],
           approvalHistory: [],
           technicalEvents: [],
@@ -248,6 +285,8 @@
         steps: state.steps,
         reasoning: [],
         inference: state.inference,
+        plan: state.plan,
+        resultReady: state.resultReady,
         pendingApprovals: Array.from(state.pendingApprovals.values()),
         approvalHistory: state.approvalHistory,
         technicalEvents: state.technicalEvents,

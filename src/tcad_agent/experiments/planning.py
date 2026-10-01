@@ -7,18 +7,25 @@ from typing import cast
 from pydantic import JsonValue
 
 from tcad_agent.capabilities.models import CapabilityManifest
-from tcad_agent.domain.models import DCStudy, ExperimentSpec
+from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.domain.studies import expand_study_points
+from tcad_agent.science.models import ScientificCompletenessReport
 
 
 def build_plan(
     spec: ExperimentSpec,
     backend: str,
     warnings: tuple[str, ...],
+    completeness: ScientificCompletenessReport,
 ) -> dict[str, JsonValue]:
     return {
         "backend": backend,
         "spec": cast(dict[str, JsonValue], spec.normalized()),
         "warnings": list(warnings),
+        "scientific_input_ledger": [
+            record.model_dump(mode="json", exclude_none=True)
+            for record in completeness.records
+        ],
         "portable": True,
     }
 
@@ -42,9 +49,5 @@ def digest_capability(manifest: CapabilityManifest) -> str:
 
 
 def expected_bias_points(spec: ExperimentSpec) -> int:
-    if not isinstance(spec.study, DCStudy):
-        return 1
-    return round(
-        (spec.study.stop.to("V") - spec.study.start.to("V"))
-        / spec.study.step.to("V")
-    ) + 1
+    expanded = expand_study_points(spec.study)
+    return len(expanded) if expanded else 1

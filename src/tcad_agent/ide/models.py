@@ -146,12 +146,64 @@ class RunState(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     WAITING_FOR_APPROVAL = "waiting_for_approval"
+    WAITING_FOR_PLAN_APPROVAL = "waiting_for_plan_approval"
     WAITING_FOR_USER = "waiting_for_user"
     PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     BLOCKED = "blocked"
     CANCELLED = "cancelled"
+
+
+class PlanApprovalMode(StrEnum):
+    REVIEW_EACH_RISK = "review_each_risk"
+    UNATTENDED_LOCAL = "unattended_local"
+
+
+class PreparedPlanRecord(StrictModel):
+    run_id: UUID
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    prepared: dict[str, JsonValue]
+    plan_path: Path
+    structured_plan_path: Path
+    status: Literal["pending", "approved", "revision_requested", "consumed"]
+    approval_mode: PlanApprovalMode | None = None
+    revision: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ExperimentResultRecord(StrictModel):
+    run_id: UUID
+    bundle_run_id: str = Field(min_length=1, max_length=160)
+    project_root: Path
+    execution_state: Literal["failed", "completed"]
+    validation_state: Literal["passed", "needs_review", "failed"]
+    created_at: datetime
+
+
+class ExperimentProjectSummary(StrictModel):
+    run_id: UUID
+    bundle_run_id: str
+    name: str
+    project_path: str
+    execution_state: Literal["failed", "completed"]
+    validation_state: Literal["passed", "needs_review", "failed"]
+    artifacts: dict[str, str]
+
+
+class RunOutcomeRecord(StrictModel):
+    run_id: UUID
+    execution_state: Literal["failed", "completed"]
+    validation_state: Literal["passed", "needs_review", "failed"]
+    deliverable_state: Literal["complete", "incomplete"]
+    report_state: Literal["complete", "missing", "failed"]
+    overall_state: Literal["completed", "needs_attention", "failed"]
+    failed_check_count: int = Field(ge=0)
+    unmet_deliverables: tuple[str, ...] = ()
+    project_root: Path
+    created_at: datetime
+    updated_at: datetime
 
 
 class ApprovalDecision(StrEnum):

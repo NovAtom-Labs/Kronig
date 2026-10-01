@@ -28,6 +28,7 @@ from tcad_agent.experiments.planning import (
     expected_bias_points,
 )
 from tcad_agent.runners.models import RunBudget
+from tcad_agent.science.completeness import ScientificCompletenessEngine
 from tcad_agent.validation.engine import ValidationEngine
 
 
@@ -52,13 +53,15 @@ class ExperimentEngine:
         decision = CapabilityService().check(spec, manifest)
         if decision.status is not CapabilityStatus.SUPPORTED:
             raise ExperimentCapabilityError(decision)
-        plan = build_plan(spec, backend, warnings)
+        completeness = ScientificCompletenessEngine().evaluate(spec, backend)
+        plan = build_plan(spec, backend, warnings, completeness)
         return PreparedExperiment(
             backend=backend,
             spec=spec,
             plan=plan,
             plan_digest=digest_plan(plan),
             capability_digest=digest_capability(manifest),
+            completeness=completeness,
             warnings=warnings,
         )
 
@@ -145,8 +148,9 @@ class ExperimentEngine:
         except PlanDigestMismatchError:
             raise
         except Exception as exc:
-            shutil.rmtree(work, ignore_errors=True)
-            shutil.rmtree(staging, ignore_errors=True)
             raise ExperimentExecutionError(
                 f"Simulator execution failed: {exc}"
             ) from exc
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+            shutil.rmtree(staging, ignore_errors=True)

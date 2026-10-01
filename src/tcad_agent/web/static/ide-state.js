@@ -175,7 +175,11 @@
 
   function controlsForState(state) {
     const running = state === "queued" || state === "running";
-    const waiting = state === "waiting_for_approval" || state === "waiting_for_user";
+    const waiting = [
+      "waiting_for_approval",
+      "waiting_for_plan_approval",
+      "waiting_for_user",
+    ].includes(state);
     const paused = state === "paused";
     const active = isActiveState(state);
     return {
@@ -187,7 +191,14 @@
   }
 
   function isActiveState(state) {
-    return ["queued", "running", "waiting_for_approval", "waiting_for_user", "paused"].includes(state);
+    return [
+      "queued",
+      "running",
+      "waiting_for_approval",
+      "waiting_for_plan_approval",
+      "waiting_for_user",
+      "paused",
+    ].includes(state);
   }
 
   function createRefreshCoordinator(refresh) {

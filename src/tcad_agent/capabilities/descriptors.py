@@ -480,6 +480,14 @@ def _legacy_required_inputs(
             ),
         }
         return interface_inputs.get(value, ())
+    if category == "observable" and value == "absolute_terminal_current":
+        return (
+            _researcher_input(
+                "contacts.area",
+                "Physical contact cross-sectional area for conversion from current density",
+                unit="m^2",
+            ),
+        )
     if category in {"equation", "model"}:
         return (
             CapabilityInputDescriptor(

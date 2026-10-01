@@ -54,3 +54,19 @@ markdown.render(relative, "[Open file](src/model.py)");
 const relativeLink = walk(relative).find((node) => node.tagName === "a");
 assertEqual(relativeLink.attributes.href, "src/model.py", "workspace-relative links remain local");
 assertEqual(relativeLink.attributes.target, undefined, "local links do not open a new tab");
+
+const scientific = new FakeNode("div");
+const scientificBlocks = markdown.blocks(
+  "## Sweep\n\n| Bias (V) | Current density (A/m²) |\n| ---: | ---: |\n| -1.0 | 2.4e-9 |\n| 0.6 | 1.1e4 |\n\n---\n",
+);
+assertEqual(scientificBlocks[1].type, "table", "GFM-style result tables are recognized");
+assertEqual(scientificBlocks[2].type, "rule", "horizontal rules are recognized");
+markdown.render(
+  scientific,
+  "| Quantity | Value |\n| --- | --- |\n| Peak field | 4.2e6 V/m |\n\n---",
+);
+const scientificNodes = walk(scientific);
+assertEqual(scientificNodes.some((node) => node.tagName === "table"), true, "tables render structurally");
+assertEqual(scientificNodes.filter((node) => node.tagName === "th").length, 2, "table headers render");
+assertEqual(scientificNodes.filter((node) => node.tagName === "td").length, 2, "table cells render");
+assertEqual(scientificNodes.some((node) => node.tagName === "hr"), true, "rules render structurally");

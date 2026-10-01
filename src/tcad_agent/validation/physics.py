@@ -6,6 +6,7 @@ import statistics
 
 from tcad_agent.results.datasets import AxisKind, Dataset
 from tcad_agent.results.models import CanonicalResult
+from tcad_agent.validation.datasets import axes_compatible
 from tcad_agent.validation.models import ValidationCheck
 
 
@@ -456,8 +457,7 @@ def band_checks(result: CanonicalResult) -> tuple[ValidationCheck, ...]:
     compatible = (
         conduction.unit == "eV"
         and valence.unit == "eV"
-        and conduction.axes == valence.axes
-        and conduction.shape == valence.shape
+        and axes_compatible(result, conduction, valence)
     )
     if not compatible:
         return (
@@ -528,6 +528,7 @@ def recombination_checks(
         signs=(1.0, 1.0),
         relative_tolerance=relative_tolerance,
         absolute_tolerance=absolute_tolerance,
+        result=result,
     )
     generation_check = _rate_identity_check(
         "generation-recombination-sign",
@@ -538,6 +539,7 @@ def recombination_checks(
         signs=(-1.0, -1.0),
         relative_tolerance=relative_tolerance,
         absolute_tolerance=absolute_tolerance,
+        result=result,
     )
     return component_check, generation_check
 
@@ -552,6 +554,7 @@ def _rate_identity_check(
     signs: tuple[float, float],
     relative_tolerance: float,
     absolute_tolerance: float,
+    result: CanonicalResult,
 ) -> ValidationCheck:
     if reference is None or first is None or second is None:
         return ValidationCheck(
@@ -563,8 +566,8 @@ def _rate_identity_check(
         )
     compatible = (
         reference.unit == first.unit == second.unit
-        and reference.axes == first.axes == second.axes
-        and reference.shape == first.shape == second.shape
+        and axes_compatible(result, reference, first)
+        and axes_compatible(result, reference, second)
     )
     if not compatible:
         return ValidationCheck(
