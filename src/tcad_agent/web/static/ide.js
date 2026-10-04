@@ -783,37 +783,50 @@ function renderExperimentProjects(experiments = []) {
   experimentProjectCount.textContent = String(experiments.length);
   experimentProjects.hidden = experiments.length === 0;
   experiments.forEach((experiment) => {
+    const view = window.AgentKronigAgentView.experimentProjectView(experiment);
     const article = document.createElement("article");
-    const header = document.createElement("header");
+    const summary = document.createElement("div");
+    const primary = document.createElement("button");
+    const identity = document.createElement("span");
     const title = document.createElement("strong");
     const status = document.createElement("span");
+    const disclosure = document.createElement("button");
     const actions = document.createElement("div");
-    article.className = "experiment-project";
-    title.textContent = String(experiment.name || "Experiment");
-    title.title = String(experiment.project_path || "");
-    status.className = `experiment-project-status is-${String(experiment.validation_state || "unknown").replaceAll("_", "-")}`;
-    status.textContent = experiment.validation_state === "needs_review"
-      ? "CHECKS NEED ATTENTION"
-      : String(experiment.validation_state || experiment.execution_state || "unknown").replaceAll("_", " ").toUpperCase();
+    article.className = `experiment-project is-${view.statusTone}`;
+    summary.className = "experiment-project-summary";
+    primary.type = "button";
+    primary.className = "experiment-project-primary";
+    primary.title = view.path;
+    primary.setAttribute("aria-label", `${view.primaryAction}: ${view.name}`);
+    identity.className = "experiment-project-identity";
+    title.textContent = view.name;
+    status.className = "experiment-project-status";
+    status.textContent = view.statusLabel;
+    identity.append(title, status);
+    primary.append(identity);
+    primary.addEventListener("click", () => void openManagedResult(experiment.run_id));
+    disclosure.type = "button";
+    disclosure.className = "experiment-project-disclosure";
+    disclosure.textContent = "›";
+    disclosure.title = "Show result files";
+    disclosure.setAttribute("aria-label", `Show files for ${view.name}`);
+    disclosure.setAttribute("aria-expanded", "false");
     actions.className = "experiment-project-actions";
-    const addFileAction = (label, path) => {
-      if (!path) return;
+    actions.hidden = true;
+    view.secondaryActions.forEach(({label, path}) => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
       button.addEventListener("click", () => void openFile({path}));
       actions.append(button);
-    };
-    addFileAction("Plan", experiment.artifacts?.plan);
-    addFileAction("Report", experiment.artifacts?.report);
-    const resultButton = document.createElement("button");
-    resultButton.type = "button";
-    resultButton.textContent = "Results";
-    resultButton.addEventListener("click", () => void openManagedResult(experiment.run_id));
-    actions.append(resultButton);
-    addFileAction("Validation", experiment.artifacts?.validation);
-    header.append(title, status);
-    article.append(header, actions);
+    });
+    disclosure.addEventListener("click", () => {
+      actions.hidden = !actions.hidden;
+      disclosure.textContent = actions.hidden ? "›" : "⌄";
+      disclosure.setAttribute("aria-expanded", String(!actions.hidden));
+    });
+    summary.append(primary, disclosure);
+    article.append(summary, actions);
     experimentProjectList.append(article);
   });
 }
@@ -888,13 +901,12 @@ function renderChatProgress(snapshot, {allowFollow = true, wasNearBottom = null}
   stages.className = "research-trail-stages";
   if (trail.current) {
     const current = document.createElement("div");
-    const marker = document.createElement("span");
     const label = document.createElement("strong");
+    const detail = document.createElement("small");
     current.className = `research-trail-current is-${trail.current.status}`;
-    marker.className = "research-trail-current-marker";
-    marker.setAttribute("aria-hidden", "true");
     label.textContent = trail.current.label;
-    current.append(marker, label);
+    detail.textContent = trail.current.detail || "";
+    current.append(label, detail);
     narrative.append(current);
   }
   trail.stages.forEach((stage) => {

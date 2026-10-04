@@ -59,6 +59,8 @@ def test_workspace_route_restores_current_process_session_activity(
     assert 'id="close-workspace-browser"' in restored_page.text
     assert 'id="experiment-projects"' in restored_page.text
     assert 'id="experiment-project-list"' in restored_page.text
+    assert "RECENT RESULTS" in restored_page.text
+    assert "Unattended covers this approved local simulation" in restored_page.text
     assert 'data-agent-view="chat"' in restored_page.text
     assert 'data-agent-view="activity"' in restored_page.text
     assert 'data-agent-view="changes"' in restored_page.text
@@ -76,6 +78,10 @@ def test_workspace_route_restores_current_process_session_activity(
     assert 'id="agent-run-summary"' in restored_page.text
     assert 'id="agent-reasoning"' in restored_page.text
     assert 'id="agent-changes"' in restored_page.text
+    assert 'href="/static/ide.css?v=20261004-1"' in restored_page.text
+    assert 'src="/static/ide-events.js?v=20261004-1"' in restored_page.text
+    assert 'src="/static/ide-agent.js?v=20261004-1"' in restored_page.text
+    assert 'src="/static/ide.js?v=20261004-1"' in restored_page.text
     assert 'src="/static/scientific-chart.js?v=20260929-1"' in restored_page.text
     assert 'src="/static/results-workbench.js?v=20260929-1"' in restored_page.text
     assert "Foundation slice" not in restored_page.text

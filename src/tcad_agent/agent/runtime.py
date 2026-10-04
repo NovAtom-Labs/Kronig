@@ -65,8 +65,14 @@ Agent Kronig scientific research policy:
   opens PLAN.md and owns the approval gate. After prepare_experiment succeeds, do not
   dump the plan into chat and do not execute until the product sends the exact approved
   digest. Then pass that unchanged prepared record and digest to execute_experiment.
-- Use inspect_bundle, read_canonical_summary, and validate_bundle for post-run evidence.
-  Do not inspect canonical bundles with ad hoc shell or inline Python commands.
+- After execute_approved_plan returns, stop. The product records the typed outcome and
+  opens the Results Workbench for the researcher, including failed executions.
+- Do not search Agent Kronig source, previous run bundles, application data, or external
+  files to improvise a recovery after controlled execution. Numerical recovery belongs
+  inside the deterministic adapter and its reviewed recovery budget.
+- Use inspect_bundle, read_canonical_summary, and validate_bundle only for an explicit
+  later inspection request. Do not inspect canonical bundles with ad hoc shell or inline
+  Python commands.
 - Never install plotting or reporting packages during a run. The native Results
   Workbench renders canonical data using packaged application components.
 - Stop only for unsupported physics, missing essential researcher intent, unavailable

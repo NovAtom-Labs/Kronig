@@ -139,14 +139,26 @@ assertEqual(
 );
 preparationView.accept(event(203, "prompt_preparation_progress", {
   run_id: "run-prep",
-  phase: "checking_local_evidence",
+  phase: "reviewing_workspace",
 }));
 assertEqual(
   preparationView.snapshot().currentOperation,
-  "Checking local scientific evidence",
-  "scientific preparation progress remains visible while the model is working",
+  "Reviewing repository context",
+  "workspace review remains visible while preparation is running",
 );
-preparationView.accept(event(204, "clarification_required", {
+preparationView.accept(event(204, "prompt_preparation_progress", {
+  run_id: "run-prep",
+  phase: "consulting_local_knowledge",
+}));
+preparationView.accept(event(205, "prompt_preparation_progress", {
+  run_id: "run-prep",
+  phase: "reasoning_about_scientific_intent",
+}));
+snapshot = preparationView.snapshot();
+assertEqual(snapshot.preparationStages.length, 4, "preparation milestones are preserved instead of overwritten");
+assertEqual(snapshot.preparationStages[0].label, "Understanding the research request", "request intake is the first milestone");
+assertEqual(snapshot.preparationStages[3].label, "Resolving the scientific intent", "model reasoning has a safe public label");
+preparationView.accept(event(206, "clarification_required", {
   run_id: "run-prep",
   question_count: 2,
 }));

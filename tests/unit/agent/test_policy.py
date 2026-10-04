@@ -6,6 +6,7 @@ from openhands.sdk.llm.message import MessageToolCall
 from openhands.sdk.security import SecurityRisk
 from openhands.sdk.tool import Action
 from openhands.sdk.tool.builtins.finish import FinishAction
+from openhands.sdk.tool.builtins.invoke_skill import InvokeSkillAction
 from openhands.sdk.tool.builtins.think import ThinkAction
 from openhands.tools.file_editor.definition import CommandLiteral, FileEditorAction
 from openhands.tools.task.definition import TaskAction
@@ -249,6 +250,16 @@ def test_task_tracker_is_low_risk_workspace_metadata(workspace: Path) -> None:
 
     assert classify_action(workspace, event) is SecurityRisk.LOW
     assert action_summary(event) == "task_tracker: update 1 task"
+
+
+def test_skill_invocation_is_low_risk_context_loading(workspace: Path) -> None:
+    event = action_event(
+        "invoke_skill",
+        InvokeSkillAction(name="devsim-compilation"),
+    )
+
+    assert classify_action(workspace, event) is SecurityRisk.LOW
+    assert action_summary(event) == "invoke_skill: devsim-compilation"
 
 
 @pytest.mark.parametrize(

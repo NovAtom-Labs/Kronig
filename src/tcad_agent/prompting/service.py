@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -87,11 +87,19 @@ class PromptPreparationService:
         root: Path,
         original_prompt: str,
         answers: Sequence[ClarificationAnswer],
+        on_progress: Callable[[str], None] | None = None,
     ) -> PreparationOutcome:
+        def report(phase: str) -> None:
+            if on_progress is not None:
+                on_progress(phase)
+
+        report("reviewing_workspace")
         workspace = self.workspace_collector.collect(root)
+        report("consulting_local_knowledge")
         evidence = self.evidence_collector.collect(
             original_prompt, tuple(answer.answer for answer in answers)
         )
+        report("reasoning_about_scientific_intent")
         decision = self.model.prepare(
             original_prompt=original_prompt,
             answers=answers,
@@ -105,6 +113,7 @@ class PromptPreparationService:
         )
         compiled = None
         if decision.status == "ready":
+            report("compiling_request")
             compiled = self.compiler.compile(
                 original_prompt=original_prompt,
                 answers=answers,

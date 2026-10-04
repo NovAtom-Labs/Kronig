@@ -484,6 +484,7 @@ class AgentSupervisor:
                 workspace.root, run.sdk_conversation_id, bridge
             )
             bridge.bind_plan_pause(runtime.pause)
+            bridge.bind_result_pause(runtime.pause)
             self._runtimes[run_id] = runtime
             return runtime
 
@@ -516,6 +517,7 @@ class AgentSupervisor:
             workspace, run.sdk_conversation_id, bridge
         )
         bridge.bind_plan_pause(runtime.pause)
+        bridge.bind_result_pause(runtime.pause)
         with self._guard:
             self._runtimes[run.id] = runtime
         runtime.send_message(compiled_prompt)
@@ -542,15 +544,20 @@ class AgentSupervisor:
             return
         try:
             record = self.services.store.get_prompt_preparation(run_id)
-            self.services.events.append(
-                self.services.store.get_run(run_id).conversation_id,
-                "prompt_preparation_progress",
-                {"run_id": str(run_id), "phase": "checking_local_evidence"},
-            )
+            conversation_id = self.services.store.get_run(run_id).conversation_id
+
+            def report_progress(phase: str) -> None:
+                self.services.events.append(
+                    conversation_id,
+                    "prompt_preparation_progress",
+                    {"run_id": str(run_id), "phase": phase},
+                )
+
             outcome = self.preparation.prepare(
                 root=workspace,
                 original_prompt=record.original_prompt,
                 answers=record.answers,
+                on_progress=report_progress,
             )
             current_run = self.services.store.get_run(run_id)
             if current_run.state is RunState.CANCELLED:
@@ -654,6 +661,40 @@ class AgentSupervisor:
             if current.state is RunState.WAITING_FOR_PLAN_APPROVAL:
                 return
             status = runtime.state.execution_status
+            outcome = self.services.store.find_run_outcome(run_id)
+            if outcome is not None:
+                self._persist_change_manifest(run_id)
+                if outcome.overall_state == "completed":
+                    final = self._transition(run_id, RunState.COMPLETED)
+                    kind = "run_completed"
+                    terminal_detail = (
+                        "The approved simulation completed and passed deterministic "
+                        "validation. Results are ready in the Results Workbench."
+                    )
+                elif outcome.overall_state == "needs_attention":
+                    final = self._transition(run_id, RunState.BLOCKED)
+                    kind = "run_blocked"
+                    terminal_detail = (
+                        "The simulation finished, but validation or requested "
+                        "deliverables need attention. Open Results to review the evidence."
+                    )
+                else:
+                    final = self._transition(run_id, RunState.FAILED)
+                    kind = "run_failed"
+                    terminal_detail = (
+                        "The simulation failed. Open Results to review the failure "
+                        "evidence and diagnostics."
+                    )
+                self.services.conversations.add_assistant_message(
+                    final.conversation_id,
+                    terminal_detail,
+                )
+                self.services.events.append(
+                    final.conversation_id,
+                    kind,
+                    {"run_id": str(run_id), "detail": terminal_detail},
+                )
+                return
             if status is ConversationExecutionStatus.WAITING_FOR_CONFIRMATION:
                 if current.state is not RunState.WAITING_FOR_APPROVAL:
                     self._transition(run_id, RunState.WAITING_FOR_APPROVAL)

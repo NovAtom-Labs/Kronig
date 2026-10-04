@@ -379,7 +379,9 @@ def test_repository_agent_prepares_executes_and_opens_canonical_tcad_result(
     assert messages[-1]["role"] == "assistant"
     assert "passed deterministic validation" in messages[-1]["content"]
     assert UUID(str(conversation["id"])) == services.sessions.current().id
-    assert llm.remaining_responses == 0
+    # A typed result is the terminal product handoff. The model must not consume
+    # follow-up inspection or prose turns after deterministic execution finishes.
+    assert llm.remaining_responses == 2
 
 
 @pytest.mark.live_bedrock

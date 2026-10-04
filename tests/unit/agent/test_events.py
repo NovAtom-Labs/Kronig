@@ -528,6 +528,52 @@ def test_executed_experiment_observation_registers_managed_result(
     assert result_event.payload["validation_state"] == "needs_review"
 
 
+def test_executed_experiment_observation_pauses_agent_after_result_handoff(
+    tmp_path: Path,
+) -> None:
+    store, events, conversations, conversation, run = _services(tmp_path)
+    project_root = tmp_path / "experiments" / "failed-study"
+    project_root.mkdir(parents=True)
+    bridge = AgentEventBridge(
+        conversation.id,
+        run.id,
+        store,
+        events,
+        conversations,
+        workspace=tmp_path,
+    )
+    pauses: list[str] = []
+    bridge.bind_result_pause(lambda: pauses.append("paused"))
+    action = _domain_action("execute_experiment", risk=SecurityRisk.LOW)
+
+    bridge(action)
+    bridge(
+        ObservationEvent(
+            tool_name="tcad_domain",
+            tool_call_id=action.tool_call_id,
+            action_id=action.id,
+            observation=TcadDomainObservation.from_text(
+                text="execution failed",
+                status="ok",
+                code="experiment_executed",
+                message="Experiment finished with a failed execution state.",
+                data={
+                    "bundle": {
+                        "run_id": "experiment-failed",
+                        "execution_state": "failed",
+                        "validation_state": "failed",
+                    },
+                    "experiment": {"project_root": str(project_root)},
+                },
+            ),
+        )
+    )
+
+    assert pauses == ["paused"]
+    kinds = [event.kind for event in events.list_after(conversation.id, 0)]
+    assert kinds.index("result_ready") < len(kinds)
+
+
 def test_executed_experiment_observation_records_structured_outcome(
     tmp_path: Path,
 ) -> None:

@@ -10,6 +10,7 @@ from pathlib import Path
 from openhands.sdk.event import ActionEvent
 from openhands.sdk.security import SecurityAnalyzerBase, SecurityRisk
 from openhands.sdk.tool.builtins.finish import FinishAction
+from openhands.sdk.tool.builtins.invoke_skill import InvokeSkillAction
 from openhands.sdk.tool.builtins.think import ThinkAction
 from openhands.tools.file_editor.definition import FileEditorAction
 from openhands.tools.task.definition import TaskAction
@@ -244,6 +245,8 @@ def classify_action(workspace: Path, event: ActionEvent) -> SecurityRisk:
         return _terminal_risk(workspace, action)
     if isinstance(action, TaskTrackerAction):
         return SecurityRisk.LOW
+    if isinstance(action, InvokeSkillAction):
+        return SecurityRisk.LOW
     if isinstance(action, TcadDomainAction):
         if action.operation in {
             "execute_experiment",
@@ -368,6 +371,8 @@ def action_summary(event: ActionEvent) -> str:
         count = len(action.task_list or ())
         noun = "task" if count == 1 else "tasks"
         return f"task_tracker: update {count} {noun}"
+    if isinstance(action, InvokeSkillAction):
+        return f"invoke_skill: {action.name}"
     if isinstance(action, ThinkAction):
         return "think: internal planning"
     if isinstance(action, FinishAction):

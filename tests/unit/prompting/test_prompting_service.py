@@ -87,3 +87,36 @@ def test_service_compiles_after_structured_answers(tmp_path: Path) -> None:
 
     assert outcome.compiled_request is not None
     assert outcome.compiled_request.answers[0].answer == "300 K"
+
+
+def test_service_reports_safe_preparation_phases_in_order(tmp_path: Path) -> None:
+    ready = PreparationDecision(
+        status="ready",
+        summary="The request is ready.",
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Run the specified study.",
+        ),
+    )
+    service = PromptPreparationService(
+        model=ScriptedPreparationModel([ready]),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={"devsim": "d" * 64},
+    )
+    phases: list[str] = []
+
+    service.prepare(
+        root=tmp_path,
+        original_prompt="Run the specified study",
+        answers=(),
+        on_progress=phases.append,
+    )
+
+    assert phases == [
+        "reviewing_workspace",
+        "consulting_local_knowledge",
+        "reasoning_about_scientific_intent",
+        "compiling_request",
+    ]

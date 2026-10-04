@@ -178,6 +178,17 @@ def test_complete_request_compiles_without_clarification(tmp_path: Path) -> None
     assert preparation.compiled_request is not None
     kinds = [event.kind for event in services.events.iter_after(conversation.id, 0)]
     assert "prompt_compiled" in kinds
+    phases = [
+        event.payload["phase"]
+        for event in services.events.iter_after(conversation.id, 0)
+        if event.kind == "prompt_preparation_progress"
+    ]
+    assert phases == [
+        "reviewing_workspace",
+        "consulting_local_knowledge",
+        "reasoning_about_scientific_intent",
+        "compiling_request",
+    ]
     assert len(runtime.created) == 1
 
 

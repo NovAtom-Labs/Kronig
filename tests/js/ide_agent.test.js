@@ -142,11 +142,20 @@ assertEqual(queuedTrail.current.label, "Preparing the research approach", "a new
 
 const preparingTrail = agent.researchTrail({
   runState: "queued",
-  currentOperation: "Checking local scientific evidence",
+  currentOperation: "Resolving the scientific intent",
+  preparationStages: [
+    {phase: "understanding_request", label: "Understanding the research request", status: "completed", startedAt: "2026-10-04T10:00:00Z"},
+    {phase: "reviewing_workspace", label: "Reviewing repository context", status: "completed", startedAt: "2026-10-04T10:00:01Z"},
+    {phase: "consulting_local_knowledge", label: "Consulting local TCAD knowledge", status: "completed", startedAt: "2026-10-04T10:00:02Z"},
+    {phase: "reasoning_about_scientific_intent", label: "Resolving the scientific intent", status: "running", startedAt: "2026-10-04T10:00:03Z"},
+  ],
   steps: [],
   pendingApprovals: [],
-});
-assertEqual(preparingTrail.current.label, "Checking local scientific evidence", "preparation events drive the notebook narrative");
+}, new Date("2026-10-04T10:00:15Z").getTime());
+assertEqual(preparingTrail.current.label, "Resolving the scientific intent", "preparation events drive the notebook narrative");
+assertEqual(preparingTrail.current.detail, "Still working · 12s", "quiet model time remains visibly alive without fake actions");
+assertEqual(preparingTrail.stages.length, 4, "pre-plan milestones remain visible in sequence");
+assertEqual(preparingTrail.stages[2].label, "Consulting local TCAD knowledge", "local knowledge retrieval is distinguishable");
 assertEqual(preparingTrail.title, "Preparing request", "preprocessing uses a task-neutral title");
 assertEqual(preparingTrail.meta, "Live", "preparation does not claim that zero actions is useful progress");
 
@@ -183,6 +192,27 @@ assertEqual(planReview.title, "Compensated silicon implant", "plan review uses t
 assertEqual(planReview.study, "DC points", "study kind is presented plainly");
 assertEqual(planReview.planPath, "experiments/implant-study/PLAN.md", "plan path is repository relative");
 assertEqual(planReview.warningCount, 1, "plan warnings remain visible before execution");
+
+const failedExperiment = agent.experimentProjectView({
+  name: "si-pn-junction-1d-dc-study",
+  project_path: "experiments/si-pn-junction-1d-dc-study",
+  execution_state: "failed",
+  validation_state: "failed",
+  artifacts: {plan: "experiments/si-pn-junction-1d-dc-study/PLAN.md"},
+});
+assertEqual(failedExperiment.statusLabel, "Simulation failed", "execution failure takes priority over validation wording");
+assertEqual(failedExperiment.statusTone, "failed", "failed simulation receives a clear failure tone");
+assertEqual(failedExperiment.primaryAction, "Open results", "the compact row has one obvious primary action");
+assertEqual(failedExperiment.secondaryActions.length, 1, "available supporting artifacts remain accessible on demand");
+
+const reviewedExperiment = agent.experimentProjectView({
+  name: "bias-study",
+  execution_state: "completed",
+  validation_state: "needs_review",
+  artifacts: {report: "experiments/bias-study/REPORT.md", validation: "experiments/bias-study/validation.json"},
+});
+assertEqual(reviewedExperiment.statusLabel, "Review needed", "completed execution preserves validation attention state");
+assertEqual(reviewedExperiment.secondaryActions.length, 2, "secondary artifact links are data driven");
 
 const planTrail = agent.researchTrail({
   runState: "waiting_for_plan_approval",

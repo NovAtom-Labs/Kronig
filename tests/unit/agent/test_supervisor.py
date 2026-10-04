@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -360,6 +360,51 @@ def test_approved_experiment_without_verified_outcome_cannot_complete(
         and "verified experiment outcome" in str(event.payload.get("detail", ""))
         for event in services.events.iter_after(services.conversation.id, 0)
     )
+
+
+def test_paused_runtime_with_failed_typed_result_terminates_without_recovery_loop(
+    services,
+) -> None:
+    supervisor = AgentSupervisor(services, ScriptedRuntimeFactory([]))
+    run = services.store.create_run(
+        services.conversation.id,
+        services.conversation.id,
+    )
+    running = services.store.transition_run(run.id, run.revision, RunState.RUNNING)
+    services.store.save_run_outcome(
+        running.id,
+        execution_state="failed",
+        validation_state="failed",
+        deliverable_state="incomplete",
+        report_state="complete",
+        overall_state="failed",
+        failed_check_count=3,
+        unmet_deliverables=("potential", "current_density"),
+        project_root=services.workspaces.get(
+            services.conversation.workspace_id
+        ).root / "experiments" / "failed-study",
+    )
+    runtime = ScriptedConversation(
+        running.sdk_conversation_id,
+        lambda _event: None,
+        [],
+        ConversationExecutionStatus.PAUSED,
+    )
+    lock = Lock()
+    lock.acquire()
+
+    supervisor._execute(running.id, runtime, lock)
+
+    assert services.store.get_run(running.id).state is RunState.FAILED
+    assert any(
+        event.kind == "run_failed"
+        and "simulation failed" in str(event.payload.get("detail", "")).lower()
+        for event in services.events.iter_after(services.conversation.id, 0)
+    )
+    terminal_message = services.store.list_messages(services.conversation.id)[-1]
+    assert terminal_message.role == "assistant"
+    assert "Open Results" in terminal_message.content
+    assert services.store.list_pending_approvals(services.conversation.id) == ()
 
 
 def test_supervisor_rejects_a_second_active_writer(services) -> None:

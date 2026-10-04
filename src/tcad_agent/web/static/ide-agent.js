@@ -149,7 +149,17 @@
     return chatTimeline(snapshot).slice(-6);
   }
 
-  function researchTrail(snapshot) {
+  function liveDuration(startedAt, nowMs) {
+    if (!startedAt) return null;
+    const elapsed = Math.floor((nowMs - new Date(startedAt).getTime()) / 1_000);
+    if (!Number.isFinite(elapsed) || elapsed < 8) return null;
+    if (elapsed < 60) return `Still working · ${elapsed}s`;
+    const minutes = Math.floor(elapsed / 60);
+    const seconds = elapsed % 60;
+    return `Still working · ${minutes}m ${seconds}s`;
+  }
+
+  function researchTrail(snapshot, nowMs = Date.now()) {
     const state = snapshot?.runState || "idle";
     if (state === "idle") return {
       visible: false, stages: [], recent: [], current: null, recovery: null,
@@ -183,7 +193,7 @@
       steps.slice(failedIndex + 1).some((step) => ["completed", "running"].includes(step.status))
       && state !== "failed"
     ));
-    const stages = groups.slice(-4).map((group) => {
+    let stages = groups.slice(-4).map((group) => {
       const [phase, activeLabel, completedLabel] = phaseLabels[group.key] || phaseLabels.Unclassified;
       const running = group.steps.some((step) => step.status === "running");
       const terminalFailure = state === "failed" && group.steps.at(-1)?.status === "failed";
@@ -196,6 +206,29 @@
         status: running ? "running" : terminalFailure ? "failed" : "completed",
       };
     });
+    const preparationPhaseLabels = {
+      understanding_request: "Request",
+      reviewing_workspace: "Context",
+      consulting_local_knowledge: "Knowledge",
+      reasoning_about_scientific_intent: "Intent",
+      compiling_request: "Compile",
+      checking_local_evidence: "Evidence",
+    };
+    const preparationStages = Array.isArray(snapshot?.preparationStages)
+      ? snapshot.preparationStages
+      : [];
+    if (!steps.length && preparationStages.length) {
+      stages = preparationStages.slice(-5).map((stage) => ({
+        id: `preparation-${stage.phase}`,
+        phase: preparationPhaseLabels[stage.phase] || "Request",
+        label: stage.label,
+        detail: stage.status === "running"
+          ? liveDuration(stage.startedAt, nowMs) || "In progress"
+          : "Complete",
+        actionCount: 0,
+        status: stage.status,
+      }));
+    }
     let current = stages.find((stage) => stage.status === "running") || null;
     const pendingApproval = (snapshot?.pendingApprovals || []).at(-1);
     if (pendingApproval || state === "waiting_for_approval") {
@@ -208,10 +241,13 @@
         status: "waiting",
       };
     } else if (["queued", "running"].includes(state) && !steps.length) {
+      const activePreparation = preparationStages.find((stage) => stage.status === "running");
       current = {
-        label: snapshot?.currentOperation && snapshot.currentOperation !== "Idle"
-          ? snapshot.currentOperation
-          : "Preparing the research approach",
+        label: activePreparation?.label
+          || (snapshot?.currentOperation && snapshot.currentOperation !== "Idle"
+            ? snapshot.currentOperation
+            : "Preparing the research approach"),
+        detail: activePreparation ? liveDuration(activePreparation.startedAt, nowMs) : null,
         status: "running",
       };
     } else if (state === "running" && !current) {
@@ -487,6 +523,40 @@
     };
   }
 
+  function experimentProjectView(experiment) {
+    let statusLabel = "Result available";
+    let statusTone = "neutral";
+    if (experiment?.execution_state === "failed") {
+      statusLabel = "Simulation failed";
+      statusTone = "failed";
+    } else if (experiment?.validation_state === "passed") {
+      statusLabel = "Validated";
+      statusTone = "success";
+    } else if (experiment?.validation_state === "needs_review") {
+      statusLabel = "Review needed";
+      statusTone = "warning";
+    } else if (experiment?.validation_state === "failed") {
+      statusLabel = "Checks failed";
+      statusTone = "failed";
+    }
+    const labels = {
+      plan: "Plan",
+      report: "Report",
+      validation: "Validation",
+    };
+    const secondaryActions = Object.entries(labels)
+      .filter(([key]) => Boolean(experiment?.artifacts?.[key]))
+      .map(([key, label]) => ({key, label, path: experiment.artifacts[key]}));
+    return {
+      name: String(experiment?.name || "Experiment result"),
+      path: String(experiment?.project_path || ""),
+      statusLabel,
+      statusTone,
+      primaryAction: "Open results",
+      secondaryActions,
+    };
+  }
+
   globalThis.AgentKronigAgentView = {
     affectedFilePaths,
     activityRows,
@@ -494,6 +564,7 @@
     approvalKeyAction,
     chatTimeline,
     durationText,
+    experimentProjectView,
     moveApproval,
     outcomeSummary,
     operationalUpdates,

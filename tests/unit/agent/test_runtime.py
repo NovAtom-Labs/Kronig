@@ -85,3 +85,15 @@ def test_runtime_carries_adaptive_scientific_research_policy(
     assert "untrusted evidence" in suffix
     assert "do not stop merely because" in suffix
     assert "compile" in suffix and "validate" in suffix
+
+
+def test_runtime_hands_typed_simulation_results_back_to_product_ui(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TCAD_SKILLS_ROOT", str(ROOT / "skills"))
+
+    suffix = (build_runtime(tmp_path).context.system_message_suffix or "").lower()
+
+    assert "after execute_approved_plan returns, stop" in suffix
+    assert "do not search agent kronig source" in suffix
+    assert "deterministic adapter" in suffix

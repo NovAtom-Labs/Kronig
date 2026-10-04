@@ -303,7 +303,7 @@ def test_responsive_styles_keep_agent_panel_available_as_a_drawer() -> None:
     assert ".chat-timeline" not in source
     assert "border-left-color: var(--blue)" not in source
     assert "border-left-color: #6b8f83" not in source
-    assert ".research-trail-current-marker" in source
+    assert ".research-trail-current-marker" not in source
     assert ".results-workbench" in source
     assert ".result-chart" in source
     assert ".result-validation" in source

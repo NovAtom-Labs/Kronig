@@ -29,6 +29,7 @@
       approvalsById: new Map(),
       technicalEvents: [],
       inference: null,
+      preparationStages: [],
       plan: null,
       resultReady: null,
     };
@@ -126,6 +127,42 @@
       state.currentOperation = step.isError ? `${step.summary} failed` : step.summary;
     }
 
+    const preparationLabels = {
+      understanding_request: "Understanding the research request",
+      reviewing_workspace: "Reviewing repository context",
+      consulting_local_knowledge: "Consulting local TCAD knowledge",
+      reasoning_about_scientific_intent: "Resolving the scientific intent",
+      compiling_request: "Compiling the executable request",
+      checking_local_evidence: "Checking local scientific evidence",
+    };
+
+    function setPreparationStage(state, phase, event) {
+      state.preparationStages.forEach((stage) => {
+        if (stage.status === "running") stage.status = "completed";
+      });
+      const label = preparationLabels[phase] || "Preparing the research request";
+      const existing = state.preparationStages.find((stage) => stage.phase === phase);
+      if (existing) {
+        existing.label = label;
+        existing.status = "running";
+        existing.startedAt = event.created_at || existing.startedAt;
+      } else {
+        state.preparationStages.push({
+          phase,
+          label,
+          status: "running",
+          startedAt: event.created_at || null,
+        });
+      }
+      state.currentOperation = label;
+    }
+
+    function completePreparation(state) {
+      state.preparationStages.forEach((stage) => {
+        if (stage.status === "running") stage.status = "completed";
+      });
+    }
+
     function updateRunState(state, event) {
       const payload = event.payload || {};
       if (event.kind === "run_created") {
@@ -186,16 +223,20 @@
       } else if (event.kind === "tool_call_started") startTool(state, event);
       else if (event.kind === "tool_call_completed") completeTool(state, event);
       else if (event.kind === "prompt_preparation_started") {
-        state.currentOperation = "Understanding the research request";
+        setPreparationStage(state, "understanding_request", event);
       } else if (event.kind === "prompt_preparation_progress") {
-        state.currentOperation = event.payload?.phase === "checking_local_evidence"
-          ? "Checking local scientific evidence"
-          : "Preparing the request";
+        setPreparationStage(
+          state,
+          String(event.payload?.phase || "preparing_request"),
+          event,
+        );
       } else if (event.kind === "clarification_required") {
+        completePreparation(state);
         state.currentOperation = "Waiting for research details";
       } else if (event.kind === "clarification_answered") {
         state.currentOperation = "Applying the confirmed details";
       } else if (event.kind === "prompt_compiled") {
+        completePreparation(state);
         state.currentOperation = "Request prepared";
       }
       else if (event.kind === "plan_ready") {
@@ -270,6 +311,7 @@
           steps: [],
           reasoning: [],
           inference: null,
+          preparationStages: [],
           plan: null,
           resultReady: null,
           pendingApprovals: [],
@@ -285,6 +327,7 @@
         steps: state.steps,
         reasoning: [],
         inference: state.inference,
+        preparationStages: state.preparationStages,
         plan: state.plan,
         resultReady: state.resultReady,
         pendingApprovals: Array.from(state.pendingApprovals.values()),

@@ -258,10 +258,9 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
 .repository-tree { padding: 8px 6px 24px; }
 .experiment-projects {
   margin: 5px 8px 0;
-  padding: 8px 7px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #0d1116;
+  padding: 6px 0 7px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 .experiment-projects > header {
   display: flex;
@@ -272,21 +271,33 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
   font: 0.58rem var(--font-mono);
   letter-spacing: 0.06em;
 }
-.experiment-project-list { display: grid; gap: 5px; }
+.experiment-project-list { display: grid; gap: 2px; }
 .experiment-project {
   display: grid;
-  gap: 5px;
-  padding: 7px;
-  border-radius: 6px;
-  background: #111720;
+  border-radius: var(--radius-small);
+  background: transparent;
 }
-.experiment-project > header { display: flex; gap: 6px; justify-content: space-between; min-width: 0; }
-.experiment-project strong { overflow: hidden; color: #d6dce3; font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
-.experiment-project-status { color: var(--muted); font: 0.54rem var(--font-mono); white-space: nowrap; }
-.experiment-project-status.is-needs-review { color: var(--amber); }
-.experiment-project-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.experiment-project:hover { background: var(--surface-hover); }
+.experiment-project-summary { display: grid; grid-template-columns: minmax(0, 1fr) 24px; align-items: stretch; }
+.experiment-project-primary, .experiment-project-disclosure {
+  min-width: 0;
+  padding: 6px 5px;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.experiment-project-disclosure { padding: 0; color: #77828d; text-align: center; }
+.experiment-project-identity { display: grid; min-width: 0; gap: 2px; }
+.experiment-project strong { overflow: hidden; color: #d6dce3; font-size: 0.64rem; text-overflow: ellipsis; white-space: nowrap; }
+.experiment-project-status { color: var(--muted); font: 0.51rem var(--font-mono); }
+.experiment-project.is-warning .experiment-project-status { color: var(--amber); }
+.experiment-project.is-failed .experiment-project-status { color: #d59da0; }
+.experiment-project.is-success .experiment-project-status { color: #8fb8a7; }
+.experiment-project-actions { display: flex; gap: 4px; padding: 0 5px 6px; }
+.experiment-project-actions[hidden] { display: none; }
 .experiment-project-actions button {
-  padding: 3px 6px;
+  padding: 2px 5px;
   color: #aeb8c3;
   border: 1px solid var(--border-strong);
   border-radius: 5px;
@@ -793,17 +804,9 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
 }
 .research-trail-header strong { color: #dce1e6; font-size: 0.72rem; font-weight: 620; }
 .research-trail-header span { color: var(--muted-dim); font: 0.54rem var(--font-mono); white-space: nowrap; }
-.research-trail-current { display: flex; align-items: center; gap: 8px; margin: 0 0 11px; color: #bec6ce; }
+.research-trail-current { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 11px; color: #bec6ce; }
 .research-trail-current strong { font-size: 0.67rem; font-weight: 590; }
-.research-trail-current-marker {
-  flex: 0 0 auto;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #89949e;
-}
-.research-trail-current.is-running .research-trail-current-marker { background: var(--blue-strong); }
-.research-trail-current.is-waiting .research-trail-current-marker { background: #a08c6b; }
+.research-trail-current small { color: var(--muted-dim); font: 0.51rem var(--font-mono); white-space: nowrap; }
 .research-trail-stages { display: grid; gap: 1px; }
 .research-trail-stage {
   display: grid;
@@ -910,6 +913,7 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
 .plan-review-facts dt { color: #717c87; font: 0.54rem var(--font-mono); }
 .plan-review-facts dd { margin: 0; color: #b4bdc6; font-size: 0.61rem; }
 .plan-review-path { margin: 8px 0 10px; overflow: hidden; color: #798591; font: 0.54rem var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
+.plan-review-consent { margin: 7px 0 10px; color: #87929d; font-size: 0.57rem; line-height: 1.45; }
 .plan-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .plan-review-actions button { padding: 5px 8px; font-size: 0.59rem; }
 #approve-plan, #approve-plan-unattended { color: #e5edf6; border-color: #526c8d; background: #27394f; }

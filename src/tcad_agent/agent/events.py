@@ -239,11 +239,17 @@ class AgentEventBridge:
         self._ambiguous_actions: set[str] = set()
         self._change_tracker = WorkspaceChangeTracker()
         self._plan_pause: Callable[[], None] | None = None
+        self._result_pause: Callable[[], None] | None = None
 
     def bind_plan_pause(self, callback: Callable[[], None]) -> None:
         """Bind the runtime pause used to enforce the prepared-plan review gate."""
 
         self._plan_pause = callback
+
+    def bind_result_pause(self, callback: Callable[[], None]) -> None:
+        """Bind the runtime pause used to hand typed results back to the product."""
+
+        self._result_pause = callback
 
     def __call__(self, event: Event) -> None:
         if isinstance(event, ActionEvent):
@@ -528,6 +534,8 @@ class AgentEventBridge:
         )
         if result_ready is not None:
             self.events.append(self.conversation_id, "result_ready", result_ready)
+            if self._result_pause is not None:
+                self._result_pause()
         if prepared_plan is not None and self._plan_pause is not None:
             self._plan_pause()
 
