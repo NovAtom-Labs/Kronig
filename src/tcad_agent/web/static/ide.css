@@ -1179,19 +1179,42 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
 .message-form > div > span { color: var(--muted-dim); font-size: 0.55rem; }
 #send-message { padding: 6px 14px; border: 0; border-radius: 7px; }
 
-.clarification-card { flex: 0 0 auto; margin: 0 8px 8px; padding: 12px; border: 1px solid rgba(118, 151, 196, 0.38); border-radius: 10px; background: #10161d; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2); }
-.clarification-card > header > span { color: #87a9d4; font: 600 0.52rem/1.2 var(--font-mono); letter-spacing: 0.12em; }
-.clarification-card h2 { margin: 5px 0 4px; font-size: 0.82rem; font-weight: 600; }
-.clarification-card header p { margin: 0 0 11px; color: var(--muted); font-size: 0.63rem; line-height: 1.5; }
-.clarification-questions { display: grid; gap: 10px; }
-.clarification-question { display: grid; gap: 4px; }
-.clarification-question label { color: var(--text); font-size: 0.64rem; font-weight: 600; }
-.clarification-question small { color: var(--muted-dim); font-size: 0.56rem; line-height: 1.4; }
-.clarification-question textarea { min-height: 52px; resize: vertical; padding: 7px 8px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 7px; outline: 0; background: #0c1117; font: 0.64rem/1.45 var(--font-sans); }
+.clarification-card { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; max-height: min(620px, 58vh); margin: 0 8px 8px; overflow: hidden; border: 1px solid rgba(118, 151, 196, 0.38); border-radius: 11px; background: #10161d; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2); }
+.clarification-card.hidden { display: none; }
+.clarification-header { flex: 0 0 auto; padding: 12px 12px 9px; border-bottom: 1px solid rgba(118, 151, 196, 0.15); }
+.clarification-heading-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.clarification-heading-line span { color: #87a9d4; font: 600 0.52rem/1.2 var(--font-mono); letter-spacing: 0.1em; }
+#clarification-progress { color: var(--muted); letter-spacing: 0.02em; text-transform: none; }
+.clarification-card h2 { margin: 5px 0 6px; font-size: 0.82rem; font-weight: 600; }
+.clarification-context { color: var(--muted); font-size: 0.59rem; }
+.clarification-context summary, .clarification-rationale summary { cursor: pointer; color: #9ba8b5; font-size: 0.57rem; }
+.clarification-context p { margin: 6px 0 0; color: var(--muted); font-size: 0.59rem; line-height: 1.45; }
+.clarification-steps { display: flex; gap: 5px; margin-top: 9px; overflow-x: auto; scrollbar-width: thin; }
+.clarification-steps button { display: grid; width: 21px; height: 21px; padding: 0; place-items: center; color: var(--muted-dim); border: 1px solid var(--border-strong); border-radius: 50%; background: transparent; font: 0.52rem var(--font-mono); }
+.clarification-steps button.is-answered { color: #b6c8c1; border-color: #5f8378; background: rgba(95, 131, 120, 0.15); }
+.clarification-steps button.is-active { color: var(--text-strong); border-color: #7899c4; background: rgba(120, 153, 196, 0.17); }
+.clarification-card form { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+.clarification-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px; scrollbar-gutter: stable; }
+.clarification-questions { display: grid; }
+.clarification-question { display: grid; gap: 7px; }
+.clarification-question[hidden] { display: none; }
+.clarification-question label { color: var(--text); font-size: 0.68rem; font-weight: 600; line-height: 1.45; }
+.clarification-rationale p { margin: 5px 0 1px; color: var(--muted-dim); font-size: 0.57rem; line-height: 1.45; }
+.clarification-question textarea { min-height: 68px; resize: vertical; padding: 8px 9px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 7px; outline: 0; background: #0c1117; font: 0.64rem/1.45 var(--font-sans); }
 .clarification-question textarea:focus { border-color: #7899c4; box-shadow: 0 0 0 2px rgba(120, 153, 196, 0.16); }
-.clarification-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 11px; }
+.clarification-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 10px; padding: 9px 12px 10px; border-top: 1px solid rgba(118, 151, 196, 0.15); background: #0e141a; }
 .clarification-actions span { color: var(--muted-dim); font-size: 0.54rem; }
+.clarification-actions > div { display: flex; gap: 6px; }
 .clarification-actions button { min-width: 88px; padding: 6px 12px; border: 0; border-radius: 7px; }
+.clarification-actions button:disabled { opacity: 0.35; }
+#clarification-back, #clarification-next { min-width: 62px; color: #bdc5ce; border: 1px solid var(--border-strong); background: transparent; }
+#submit-clarification { color: #eef4fb; background: #6688b8; }
+
+@media (max-height: 720px) {
+  .clarification-card { max-height: 54vh; }
+  .clarification-header { padding-block: 9px 7px; }
+  .clarification-scroll { padding-block: 9px; }
+}
 
 
 dialog {

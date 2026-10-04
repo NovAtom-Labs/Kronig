@@ -52,4 +52,39 @@
     rejected = true;
   }
   assert(rejected, "blank required answer should be rejected");
+
+  const firstStep = AgentKronigClarification.step(preparation, 0, {
+    temperature: "",
+    label: "",
+  });
+  assert(firstStep.index === 0, "the first question should remain selected");
+  assert(firstStep.position === 1 && firstStep.total === 2, "step progress should be one based");
+  assert(firstStep.question.id === "temperature", "the active question should be exposed");
+  assert(firstStep.isFirst === true && firstStep.isLast === false, "first-step navigation should be explicit");
+  assert(firstStep.answered === false, "a blank required answer should be incomplete");
+
+  const clampedStep = AgentKronigClarification.step(preparation, 99, {
+    temperature: "300 K",
+    label: "",
+  });
+  assert(clampedStep.index === 1, "an out-of-range step should clamp to the final question");
+  assert(clampedStep.isLast === true, "the clamped final step should be marked as final");
+  assert(clampedStep.answered === false, "an unanswered optional question should remain visibly unanswered");
+
+  assert(
+    AgentKronigClarification.firstIncomplete(preparation, {temperature: "", label: ""}) === 0,
+    "submission should navigate to the first unanswered required question",
+  );
+  assert(
+    AgentKronigClarification.firstIncomplete(preparation, {temperature: "300 K", label: ""}) === -1,
+    "blank optional questions should not block submission",
+  );
+  assert(
+    AgentKronigClarification.restoredIndex(preparation, "label", 0) === 1,
+    "a refresh should restore the focused question by its stable identifier",
+  );
+  assert(
+    AgentKronigClarification.restoredIndex(preparation, "removed-question", 8) === 1,
+    "a removed question should fall back to a safely clamped prior position",
+  );
 })();

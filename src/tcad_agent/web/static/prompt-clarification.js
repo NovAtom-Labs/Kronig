@@ -32,6 +32,40 @@
     return {expected_revision: model.revision, answers};
   }
 
+  function firstIncomplete(preparation, values) {
+    const model = view(preparation);
+    return model.questions.findIndex((question) => (
+      question.required && !String(values?.[question.id] || "").trim()
+    ));
+  }
+
+  function step(preparation, requestedIndex, values) {
+    const model = view(preparation);
+    if (!model.visible) throw new Error("No clarification is active.");
+    const index = Math.min(
+      Math.max(Number.isFinite(Number(requestedIndex)) ? Number(requestedIndex) : 0, 0),
+      model.questions.length - 1,
+    );
+    const question = model.questions[index];
+    return {
+      answered: Boolean(String(values?.[question.id] || "").trim()),
+      index,
+      isFirst: index === 0,
+      isLast: index === model.questions.length - 1,
+      position: index + 1,
+      question,
+      total: model.questions.length,
+    };
+  }
+
+  function restoredIndex(preparation, questionId, fallbackIndex = 0) {
+    const model = view(preparation);
+    if (!model.visible) return 0;
+    const matchingIndex = model.questions.findIndex((question) => question.id === questionId);
+    if (matchingIndex >= 0) return matchingIndex;
+    return Math.min(Math.max(Number(fallbackIndex) || 0, 0), model.questions.length - 1);
+  }
+
   function signature(preparation) {
     const model = view(preparation);
     if (!model.visible) return "";
@@ -42,5 +76,12 @@
     });
   }
 
-  globalThis.AgentKronigClarification = {signature, submission, view};
+  globalThis.AgentKronigClarification = {
+    firstIncomplete,
+    restoredIndex,
+    signature,
+    step,
+    submission,
+    view,
+  };
 })();

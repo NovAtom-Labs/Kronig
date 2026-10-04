@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark">
     <title>Agent Kronig workspace · NovAtom Labs</title>
     <link rel="stylesheet" href="/static/theme.css?v=20260928-1">
-    <link rel="stylesheet" href="/static/ide.css?v=20261004-2">
+    <link rel="stylesheet" href="/static/ide.css?v=20261004-3">
   </head>
   <body>
     <div class="ide-shell">
@@ -138,16 +138,29 @@
           </div>
           <button id="jump-to-latest" class="jump-to-latest hidden" type="button">Jump to latest</button>
           <section id="clarification-card" class="clarification-card hidden" aria-labelledby="clarification-title">
-            <header>
-              <span>REQUEST DETAILS</span>
+            <header class="clarification-header">
+              <div class="clarification-heading-line">
+                <span>REQUEST DETAILS</span>
+                <span id="clarification-progress">Question 1 of 1</span>
+              </div>
               <h2 id="clarification-title">Confirm the scientific intent</h2>
-              <p id="clarification-summary"></p>
+              <details class="clarification-context">
+                <summary>What Agent Kronig understood</summary>
+                <p id="clarification-summary"></p>
+              </details>
+              <nav id="clarification-steps" class="clarification-steps" aria-label="Clarification questions"></nav>
             </header>
             <form id="clarification-form">
-              <div id="clarification-questions" class="clarification-questions"></div>
+              <div class="clarification-scroll">
+                <div id="clarification-questions" class="clarification-questions"></div>
+              </div>
               <div class="clarification-actions">
                 <span>Answers apply to this run only.</span>
-                <button id="submit-clarification" type="submit">Continue</button>
+                <div>
+                  <button id="clarification-back" type="button">Back</button>
+                  <button id="clarification-next" type="button">Next</button>
+                  <button id="submit-clarification" type="submit">Continue</button>
+                </div>
               </div>
             </form>
           </section>
@@ -265,10 +278,10 @@
     <script src="/static/ide-layout.js?v=20260928-2" defer></script>
     <script src="/static/ide-agent.js?v=20261004-2" defer></script>
     <script src="/static/ide-changes.js?v=20260925-4" defer></script>
-    <script src="/static/prompt-clarification.js?v=20260929-1" defer></script>
+    <script src="/static/prompt-clarification.js?v=20261004-1" defer></script>
     <script src="/static/desktop-bridge.js?v=20260925-1" defer></script>
     <script src="/static/scientific-chart.js?v=20261004-2" defer></script>
     <script src="/static/results-workbench.js?v=20261004-2" defer></script>
-    <script src="/static/ide.js?v=20261004-2" defer></script>
+    <script src="/static/ide.js?v=20261004-3" defer></script>
   </body>
 </html>

@@ -20,9 +20,13 @@ const sessionState = document.querySelector("#session-state");
 const sessionMessages = document.querySelector("#session-messages");
 const jumpToLatest = document.querySelector("#jump-to-latest");
 const clarificationCard = document.querySelector("#clarification-card");
+const clarificationProgress = document.querySelector("#clarification-progress");
 const clarificationSummary = document.querySelector("#clarification-summary");
 const clarificationForm = document.querySelector("#clarification-form");
 const clarificationQuestions = document.querySelector("#clarification-questions");
+const clarificationSteps = document.querySelector("#clarification-steps");
+const clarificationBack = document.querySelector("#clarification-back");
+const clarificationNext = document.querySelector("#clarification-next");
 const submitClarification = document.querySelector("#submit-clarification");
 const planReviewCard = document.querySelector("#plan-review-card");
 const planReviewTitle = document.querySelector("#plan-review-title");
@@ -122,6 +126,7 @@ let approvalPreviousFocus = null;
 let activePreparation = null;
 let activePlan = null;
 let clarificationRenderSignature = "";
+let activeClarificationIndex = 0;
 let lastErrorEnvelope = null;
 const navigationGuard = window.AgentKronigIDEState.createNavigationGuard();
 const repositoryRequests = window.AgentKronigIDEState.createRepositoryRequestCoordinator();
@@ -1005,7 +1010,9 @@ function renderClarification(preparation) {
   clarificationCard.classList.toggle("hidden", !view.visible);
   if (!view.visible) {
     clarificationRenderSignature = "";
+    activeClarificationIndex = 0;
     clearNode(clarificationQuestions);
+    clearNode(clarificationSteps);
     return;
   }
   if (nextSignature === clarificationRenderSignature) return;
@@ -1022,18 +1029,31 @@ function renderClarification(preparation) {
     ? {end: focusedInput.selectionEnd, start: focusedInput.selectionStart}
     : null;
   const wasVisible = Boolean(clarificationRenderSignature);
+  const previousActiveIndex = activeClarificationIndex;
 
   clearNode(clarificationQuestions);
+  clearNode(clarificationSteps);
+  activeClarificationIndex = window.AgentKronigClarification.restoredIndex(
+    preparation,
+    focusedQuestionId,
+    wasVisible ? previousActiveIndex : 0,
+  );
   clarificationSummary.textContent = view.summary;
   view.questions.forEach((question, index) => {
     const field = document.createElement("div");
     const label = document.createElement("label");
-    const reason = document.createElement("small");
+    const rationale = document.createElement("details");
+    const rationaleLabel = document.createElement("summary");
+    const reason = document.createElement("p");
     const answer = document.createElement("textarea");
+    const stepButton = document.createElement("button");
     const inputId = `clarification-${question.id}`;
     field.className = "clarification-question";
+    field.dataset.questionIndex = String(index);
     label.htmlFor = inputId;
-    label.textContent = `${index + 1}. ${question.prompt}`;
+    label.textContent = question.prompt;
+    rationale.className = "clarification-rationale";
+    rationaleLabel.textContent = "Why this matters";
     reason.textContent = question.reason;
     answer.id = inputId;
     answer.dataset.questionId = question.id;
@@ -1042,10 +1062,23 @@ function renderClarification(preparation) {
     answer.autocomplete = "off";
     answer.placeholder = question.required ? "Your answer" : "Optional";
     answer.value = drafts[question.id] || "";
-    field.append(label, reason, answer);
+    answer.addEventListener("input", () => renderClarificationStep());
+    rationale.append(rationaleLabel, reason);
+    field.append(label, rationale, answer);
     clarificationQuestions.append(field);
+
+    stepButton.type = "button";
+    stepButton.dataset.questionIndex = String(index);
+    stepButton.setAttribute("aria-label", `Question ${index + 1} of ${view.questions.length}`);
+    stepButton.textContent = String(index + 1);
+    stepButton.addEventListener("click", () => {
+      activeClarificationIndex = index;
+      renderClarificationStep({focus: true});
+    });
+    clarificationSteps.append(stepButton);
   });
   clarificationRenderSignature = nextSignature;
+  renderClarificationStep();
   requestAnimationFrame(() => {
     const focusTarget = focusedQuestionId
       ? Array.from(
@@ -1062,6 +1095,59 @@ function renderClarification(preparation) {
       scrollSessionToBottom();
     }
   });
+}
+
+function clarificationValues() {
+  const values = {};
+  clarificationQuestions.querySelectorAll("textarea[data-question-id]").forEach((input) => {
+    values[input.dataset.questionId] = input.value;
+  });
+  return values;
+}
+
+function renderClarificationStep({focus = false} = {}) {
+  if (!activePreparation) return;
+  const values = clarificationValues();
+  const model = window.AgentKronigClarification.view(activePreparation);
+  const step = window.AgentKronigClarification.step(
+    activePreparation,
+    activeClarificationIndex,
+    values,
+  );
+  activeClarificationIndex = step.index;
+  clarificationProgress.textContent = `Question ${step.position} of ${step.total}`;
+  clarificationQuestions.querySelectorAll(".clarification-question").forEach((field, index) => {
+    field.hidden = index !== step.index;
+  });
+  clarificationSteps.querySelectorAll("button[data-question-index]").forEach((button, index) => {
+    const questionId = model.questions[index]?.id;
+    button.classList.toggle("is-active", index === step.index);
+    button.classList.toggle("is-answered", Boolean(String(values[questionId] || "").trim()));
+    if (index === step.index) button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+  });
+  clarificationBack.disabled = step.isFirst;
+  clarificationNext.hidden = step.isLast;
+  submitClarification.hidden = !step.isLast;
+  if (focus) {
+    const input = clarificationQuestions.querySelector(
+      `.clarification-question[data-question-index="${step.index}"] textarea`,
+    );
+    requestAnimationFrame(() => input?.focus({preventScroll: true}));
+  }
+}
+
+function advanceClarification() {
+  const activeField = clarificationQuestions.querySelector(
+    `.clarification-question[data-question-index="${activeClarificationIndex}"]`,
+  );
+  const input = activeField?.querySelector("textarea[data-question-id]");
+  if (input?.required && !input.value.trim()) {
+    input.reportValidity();
+    return;
+  }
+  activeClarificationIndex += 1;
+  renderClarificationStep({focus: true});
 }
 
 function renderPlan(plan) {
@@ -1960,14 +2046,31 @@ browseWorkspace.addEventListener("click", async () => {
   }
 });
 
+clarificationBack.addEventListener("click", () => {
+  activeClarificationIndex -= 1;
+  renderClarificationStep({focus: true});
+});
+clarificationNext.addEventListener("click", advanceClarification);
+
 clarificationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!activeRun?.id || !activePreparation) return;
   showError();
-  const values = {};
-  clarificationQuestions.querySelectorAll("textarea[data-question-id]").forEach((input) => {
-    values[input.dataset.questionId] = input.value;
-  });
+  const values = clarificationValues();
+  const incompleteIndex = window.AgentKronigClarification.firstIncomplete(
+    activePreparation,
+    values,
+  );
+  if (incompleteIndex >= 0) {
+    activeClarificationIndex = incompleteIndex;
+    renderClarificationStep({focus: true});
+    requestAnimationFrame(() => {
+      clarificationQuestions.querySelector(
+        `.clarification-question[data-question-index="${incompleteIndex}"] textarea`,
+      )?.reportValidity();
+    });
+    return;
+  }
   submitClarification.disabled = true;
   submitClarification.textContent = "Preparing…";
   try {
