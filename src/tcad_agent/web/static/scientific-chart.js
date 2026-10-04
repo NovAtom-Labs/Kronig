@@ -100,6 +100,16 @@
     return {minimum: Number(viewport.minimum), maximum: Number(viewport.maximum)};
   }
 
+  function viewportForAction(viewport, extent, action) {
+    if (action === "reset") {
+      return {minimum: Number(extent.minimum), maximum: Number(extent.maximum)};
+    }
+    const current = clampViewport(viewport, extent);
+    const center = (current.minimum + current.maximum) / 2;
+    const factor = action === "zoom_in" ? 0.7 : action === "zoom_out" ? 1.25 : 1;
+    return clampViewport(zoomViewport(current, center, factor), extent);
+  }
+
   function csvCell(value) {
     const text = String(value ?? "");
     return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -119,6 +129,7 @@
     segmentSeries,
     signedLogTransform,
     toCsv,
+    viewportForAction,
     zoomViewport,
   };
 })();

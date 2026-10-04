@@ -345,7 +345,7 @@ def test_experiment_tool_metadata_distinguishes_preparation_and_execution() -> N
         _domain_action("execute_experiment", risk=SecurityRisk.HIGH)
     )
 
-    assert prepared == {"phase": "validate", "evidence_kind": "validation"}
+    assert prepared == {"phase": "plan"}
     assert executed == {"phase": "execute", "evidence_kind": "simulation"}
 
 
@@ -474,7 +474,15 @@ def test_prepared_experiment_observation_creates_typed_plan_gate(
         for event in events.list_after(conversation.id, 0)
         if event.kind == "tool_call_completed"
     ][-1]
-    assert completed.payload["output"] == "Experiment plan prepared for review."
+    project_path = artifacts.markdown_path.parent.relative_to(tmp_path).as_posix()
+    assert completed.payload["output"] == (
+        f"Experiment project created at {project_path}. "
+        "The approval plan is ready for review."
+    )
+    assert completed.payload["artifact_paths"] == [
+        artifacts.markdown_path.relative_to(tmp_path).as_posix(),
+        artifacts.json_path.relative_to(tmp_path).as_posix(),
+    ]
 
 
 def test_executed_experiment_observation_registers_managed_result(
@@ -510,7 +518,12 @@ def test_executed_experiment_observation_registers_managed_result(
                         "execution_state": "completed",
                         "validation_state": "needs_review",
                     },
-                    "experiment": {"project_root": str(project_root)},
+                    "experiment": {
+                        "project_root": str(project_root),
+                        "report_path": str(project_root / "REPORT.md"),
+                        "result_path": str(project_root / "results.json"),
+                        "validation_path": str(project_root / "validation.json"),
+                    },
                 },
             ),
         )
@@ -526,6 +539,16 @@ def test_executed_experiment_observation_registers_managed_result(
     ][-1]
     assert result_event.payload["run_id"] == str(run.id)
     assert result_event.payload["validation_state"] == "needs_review"
+    completed = [
+        event
+        for event in events.list_after(conversation.id, 0)
+        if event.kind == "tool_call_completed"
+    ][-1]
+    assert completed.payload["artifact_paths"] == [
+        "experiments/bias-study/REPORT.md",
+        "experiments/bias-study/results.json",
+        "experiments/bias-study/validation.json",
+    ]
 
 
 def test_executed_experiment_observation_pauses_agent_after_result_handoff(

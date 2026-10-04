@@ -86,7 +86,7 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
         phases = {
             "describe_spec": "inspect",
             "validate_spec": "validate",
-            "prepare_experiment": "validate",
+            "prepare_experiment": "plan",
             "execute_experiment": "execute",
             "execute_approved_plan": "execute",
             "validate_result": "validate",
@@ -103,7 +103,6 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
         }
         if action.operation in {
             "validate_spec",
-            "prepare_experiment",
             "validate_result",
             "validate_bundle",
         }:
@@ -332,6 +331,7 @@ class AgentEventBridge:
         if normalized:
             payload["arguments"] = normalized
         if self.workspace is not None and metadata.get("phase") in {
+            "plan",
             "edit",
             "execute",
             "delegate",
@@ -382,6 +382,7 @@ class AgentEventBridge:
             and event.observation.status != "ok"
         )
         visible_output = self._safe(event.observation.text)
+        artifact_paths: list[str] = []
         prepared_plan: PreparedExperiment | None = None
         result_ready: dict[str, JsonValue] | None = None
         if (
@@ -409,7 +410,15 @@ class AgentEventBridge:
                 plan_path=plan_path,
                 structured_plan_path=structured_path,
             )
-            visible_output = "Experiment plan prepared for review."
+            artifact_paths = [
+                plan_path.relative_to(self.workspace).as_posix(),
+                structured_path.relative_to(self.workspace).as_posix(),
+            ]
+            project_path = plan_path.parent.relative_to(self.workspace).as_posix()
+            visible_output = (
+                f"Experiment project created at {project_path}. "
+                "The approval plan is ready for review."
+            )
         if (
             not observation_failed
             and isinstance(event.observation, TcadDomainObservation)
@@ -430,6 +439,23 @@ class AgentEventBridge:
             project_root = Path(str(project_data.get("project_root", ""))).resolve()
             if not bundle_run_id or not project_root.is_relative_to(self.workspace):
                 raise ValueError("completed experiment metadata escaped the workspace")
+            projected_paths: list[Path] = []
+            for key in (
+                "report_path",
+                "result_path",
+                "validation_path",
+                "traceability_path",
+            ):
+                value = project_data.get(key)
+                if value is None or value == "":
+                    continue
+                candidate = Path(str(value)).resolve()
+                if not candidate.is_relative_to(self.workspace):
+                    raise ValueError("completed experiment artifact escaped the workspace")
+                projected_paths.append(candidate)
+            artifact_paths = [
+                path.relative_to(self.workspace).as_posix() for path in projected_paths
+            ]
             if execution_state not in {"failed", "completed"}:
                 raise ValueError("completed experiment has an invalid execution state")
             if validation_state not in {"passed", "needs_review", "failed"}:
@@ -473,7 +499,11 @@ class AgentEventBridge:
                 "failed_check_count": outcome.failed_check_count,
                 "unmet_deliverables": list(outcome.unmet_deliverables),
             }
-            visible_output = "Experiment completed. Open the Results Workbench to review it."
+            project_path = project_root.relative_to(self.workspace).as_posix()
+            visible_output = (
+                f"Simulation evidence published to {project_path}. "
+                "Open the Results Workbench to review it."
+            )
         payload: dict[str, JsonValue] = {
             **self._base(event),
             "action_id": event.action_id,
@@ -485,6 +515,8 @@ class AgentEventBridge:
         if prepared_plan is not None:
             payload["plan_digest"] = prepared_plan.plan_digest
             payload["plan_ready"] = True
+        if artifact_paths:
+            payload["artifact_paths"] = cast(JsonValue, artifact_paths)
         if isinstance(event.observation, TaskObservation):
             payload.update(
                 {

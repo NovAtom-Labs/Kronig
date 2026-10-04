@@ -901,11 +901,16 @@ function renderChatProgress(snapshot, {allowFollow = true, wasNearBottom = null}
   stages.className = "research-trail-stages";
   if (trail.current) {
     const current = document.createElement("div");
+    const activity = document.createElement("span");
     const label = document.createElement("strong");
     const detail = document.createElement("small");
     current.className = `research-trail-current is-${trail.current.status}`;
+    activity.className = "research-trail-live-indicator";
+    activity.setAttribute("aria-label", "Agent activity in progress");
+    activity.append(document.createElement("i"), document.createElement("i"), document.createElement("i"));
     label.textContent = trail.current.label;
     detail.textContent = trail.current.detail || "";
+    if (trail.current.animated) current.append(activity);
     current.append(label, detail);
     narrative.append(current);
   }

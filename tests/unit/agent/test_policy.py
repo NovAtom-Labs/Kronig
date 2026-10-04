@@ -270,7 +270,7 @@ def test_skill_invocation_is_low_risk_context_loading(workspace: Path) -> None:
         (
             "tcad_domain",
             TcadDomainAction(operation="validate_spec"),
-            "tcad_domain: validate_spec",
+            "Checking the experiment specification",
         ),
     ],
 )
@@ -283,6 +283,23 @@ def test_builtin_and_tcad_actions_are_low_risk(
     event = action_event(tool_name, action)
 
     assert classify_action(workspace, event) is SecurityRisk.LOW
+    assert action_summary(event) == summary
+
+
+@pytest.mark.parametrize(
+    "operation,summary",
+    [
+        ("prepare_experiment", "Creating experiment project and approval plan"),
+        ("execute_experiment", "Running simulation and building scientific results"),
+        ("execute_approved_plan", "Running simulation and building scientific results"),
+        ("validate_bundle", "Validating canonical scientific results"),
+    ],
+)
+def test_tcad_actions_expose_scientific_progress_in_plain_language(
+    workspace: Path, operation: str, summary: str
+) -> None:
+    event = action_event("tcad_domain", TcadDomainAction(operation=operation))
+
     assert action_summary(event) == summary
 
 

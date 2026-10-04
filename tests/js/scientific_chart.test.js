@@ -45,6 +45,28 @@ const reset = chart.clampViewport({minimum: -5, maximum: 15}, {minimum: 0, maxim
 assertEqual(reset.minimum, 0, "an oversized viewport resets to the full extent");
 assertEqual(reset.maximum, 10, "an oversized viewport cannot exceed the full extent");
 
+const buttonZoomIn = chart.viewportForAction(
+  {minimum: 0, maximum: 10},
+  {minimum: 0, maximum: 10},
+  "zoom_in",
+);
+assertEqual(buttonZoomIn.minimum, 1.5, "zoom-in control contracts around the viewport center");
+assertEqual(buttonZoomIn.maximum, 8.5, "zoom-in control preserves the viewport center");
+const buttonZoomOut = chart.viewportForAction(
+  buttonZoomIn,
+  {minimum: 0, maximum: 10},
+  "zoom_out",
+);
+assertEqual(buttonZoomOut.minimum, 0.625, "zoom-out control expands the current viewport");
+assertEqual(buttonZoomOut.maximum, 9.375, "zoom-out control remains inside the data extent");
+const buttonReset = chart.viewportForAction(
+  buttonZoomIn,
+  {minimum: 0, maximum: 10},
+  "reset",
+);
+assertEqual(buttonReset.minimum, 0, "reset restores the complete horizontal extent");
+assertEqual(buttonReset.maximum, 10, "reset restores the complete horizontal extent");
+
 assertEqual(
   chart.toCsv([{x: 0, value: 1}, {x: 2, value: 3}], "Bias (V)", "Current (A/m^2)"),
   "Bias (V),Current (A/m^2)\n0,1\n2,3\n",

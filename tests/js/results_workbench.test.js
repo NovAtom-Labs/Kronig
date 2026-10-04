@@ -71,6 +71,59 @@ assertEqual(summary.maximumTerminalCurrent, 2e-16, "terminal current summary use
 assertEqual(summary.fieldCount, 3, "field count reports the canonical field inventory");
 assertEqual(summary.validationPassed, 2, "validation summary counts passed checks");
 assertEqual(summary.validationTotal, 2, "validation summary counts every check");
+assertEqual(summary.validationApplicable, 2, "validation summary counts only checks that apply");
+assertEqual(summary.validationFailed, 0, "validation summary keeps failures explicit");
+assertEqual(summary.validationNotApplicable, 0, "validation summary keeps skipped checks separate");
+
+const mixedValidation = results.summarize({
+  result: {fields: {}, bias_points: []},
+  validation: {
+    checks: [
+      {id: "convergence", status: "passed"},
+      {id: "conservation", status: "passed"},
+      {id: "band-ordering", status: "failed"},
+      {id: "unexpected", status: "unknown"},
+      {id: "ac-consistency", status: "not_applicable"},
+      {id: "sweep-continuity", status: "not_applicable"},
+    ],
+  },
+});
+assertEqual(mixedValidation.validationPassed, 2, "passed checks remain visible");
+assertEqual(mixedValidation.validationApplicable, 4, "not-applicable checks never dilute the applicable denominator");
+assertEqual(mixedValidation.validationFailed, 2, "every non-passing applicable status remains actionable");
+assertEqual(mixedValidation.validationNotApplicable, 2, "irrelevant checks are explained separately");
+
+const validationGroups = results.validationGroups([
+  {id: "pass", status: "passed"},
+  {id: "skip", status: "not_applicable"},
+  {id: "fail", status: "failed"},
+  {id: "review", status: "warning"},
+]);
+assertEqual(validationGroups.actionable.map((check) => check.id).join(","), "fail,review", "failures and warnings are prioritized");
+assertEqual(validationGroups.passed.map((check) => check.id).join(","), "pass", "passed evidence remains available");
+assertEqual(validationGroups.notApplicable.map((check) => check.id).join(","), "skip", "not-applicable evidence is isolated from failures");
+
+const passingPresentation = results.validationPresentation([
+  {id: "convergence", status: "passed"},
+  {id: "conservation", status: "passed"},
+  {id: "ac", status: "not_applicable"},
+  {id: "sweep", status: "not_applicable"},
+]);
+assertEqual(passingPresentation.headline, "All 2 applicable checks passed", "successful validation does not count irrelevant checks as missing passes");
+assertEqual(passingPresentation.summary, "2 passed · 0 failed · 2 not applicable", "validation status has an unambiguous breakdown");
+assertEqual(passingPresentation.tone, "success", "all applicable checks receive success styling");
+
+const failingPresentation = results.validationPresentation([
+  {id: "convergence", status: "passed"},
+  {id: "conservation", status: "failed"},
+  {id: "ac", status: "not_applicable"},
+]);
+assertEqual(failingPresentation.headline, "1 of 2 applicable checks passed", "failed applicable checks remain visible in the headline");
+assertEqual(failingPresentation.tone, "failed", "a failed scientific check cannot receive success styling");
+
+assertEqual(results.availableSelection("1", ["0", "1", "2"]), "1", "a redraw preserves the selected operating point");
+assertEqual(results.availableSelection("missing", ["0", "1", "2"]), "0", "a removed option falls back predictably");
+assertEqual(results.availableSelection("", []), "", "an empty control has no fabricated selection");
 
 const empty = results.summarize({result: {fields: {}, bias_points: []}, validation: {checks: []}});
 assertEqual(empty.potentialRange, null, "missing potential is unavailable rather than zero");

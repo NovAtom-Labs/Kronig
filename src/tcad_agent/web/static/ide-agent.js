@@ -96,6 +96,20 @@
           label = "Searching local TCAD references";
         }
         detail = null;
+      } else if (step.arguments?.operation === "prepare_experiment") {
+        label = step.status === "completed"
+          ? "Experiment project and plan created"
+          : "Creating experiment project and approval plan";
+        detail = step.status === "completed" && step.artifactPaths?.length
+          ? step.artifactPaths.join(" · ")
+          : null;
+      } else if (["execute_experiment", "execute_approved_plan"].includes(step.arguments?.operation)) {
+        label = step.status === "completed"
+          ? "Simulation and scientific results completed"
+          : "Running simulation and building scientific results";
+        detail = step.status === "completed" && step.artifactPaths?.length
+          ? step.artifactPaths.join(" · ")
+          : null;
       }
       updates.push({
         id: step.id,
@@ -230,15 +244,28 @@
       }));
     }
     let current = stages.find((stage) => stage.status === "running") || null;
+    const runningStep = [...steps].reverse().find((step) => step.status === "running");
+    if (runningStep) {
+      const update = [...chatTimeline({...snapshot, inference: null})]
+        .reverse()
+        .find((entry) => entry.id === runningStep.id);
+      current = {
+        label: update?.label || runningStep.summary || "Working on the research task",
+        detail: liveDuration(runningStep.startedAt, nowMs),
+        status: "running",
+        animated: true,
+      };
+    }
     const pendingApproval = (snapshot?.pendingApprovals || []).at(-1);
     if (pendingApproval || state === "waiting_for_approval") {
-      current = {label: "Waiting for researcher approval", status: "waiting"};
+      current = {label: "Waiting for researcher approval", status: "waiting", animated: false};
     } else if (state === "waiting_for_plan_approval") {
-      current = {label: "Review the prepared experiment", status: "waiting"};
+      current = {label: "Review the prepared experiment", status: "waiting", animated: false};
     } else if (state === "waiting_for_user") {
       current = {
         label: snapshot?.currentOperation || "Waiting for your response",
         status: "waiting",
+        animated: false,
       };
     } else if (["queued", "running"].includes(state) && !steps.length) {
       const activePreparation = preparationStages.find((stage) => stage.status === "running");
@@ -249,10 +276,16 @@
             : "Preparing the research approach"),
         detail: activePreparation ? liveDuration(activePreparation.startedAt, nowMs) : null,
         status: "running",
+        animated: true,
       };
     } else if (state === "running" && !current) {
-      current = {label: "Reviewing results and choosing the next action", status: "running"};
+      current = {
+        label: "Reviewing results and choosing the next action",
+        status: "running",
+        animated: true,
+      };
     }
+    if (current && current.animated === undefined) current.animated = current.status === "running";
     const titles = {
       queued: "Preparing request",
       completed: "Research record",

@@ -176,6 +176,13 @@
     const checks = Array.isArray(payload?.validation?.checks)
       ? payload.validation.checks
       : [];
+    const validationPassed = checks.filter((check) => check.status === "passed").length;
+    const validationFailed = checks.filter(
+      (check) => !["passed", "not_applicable"].includes(check.status),
+    ).length;
+    const validationNotApplicable = checks.filter(
+      (check) => check.status === "not_applicable",
+    ).length;
     return {
       potentialRange: potential.length
         ? Math.max(...potential) - Math.min(...potential)
@@ -188,9 +195,49 @@
         : null,
       operatingPointCount: (payload?.result?.bias_points || []).length,
       fieldCount: Object.keys(datasets).length || Object.keys(fields).length,
-      validationPassed: checks.filter((check) => check.status === "passed").length,
+      validationPassed,
+      validationApplicable: checks.length - validationNotApplicable,
+      validationFailed,
+      validationNotApplicable,
       validationTotal: checks.length,
     };
+  }
+
+  function validationGroups(checks) {
+    const values = Array.isArray(checks) ? checks : [];
+    return {
+      actionable: values.filter((check) => !["passed", "not_applicable"].includes(check.status)),
+      passed: values.filter((check) => check.status === "passed"),
+      notApplicable: values.filter((check) => check.status === "not_applicable"),
+    };
+  }
+
+  function validationPresentation(checks) {
+    const groups = validationGroups(checks);
+    const passed = groups.passed.length;
+    const failed = groups.actionable.length;
+    const notApplicable = groups.notApplicable.length;
+    const applicable = passed + failed;
+    let headline = "No applicable validation checks";
+    if (applicable && !failed) headline = `All ${applicable} applicable checks passed`;
+    else if (applicable) headline = `${passed} of ${applicable} applicable checks passed`;
+    return {
+      ...groups,
+      applicable,
+      failed,
+      headline,
+      notApplicable,
+      passed,
+      summary: `${passed} passed · ${failed} failed · ${notApplicable} not applicable`,
+      tone: failed ? "failed" : applicable ? "success" : "neutral",
+    };
+  }
+
+  function availableSelection(current, values) {
+    const options = Array.isArray(values) ? values.map(String) : [];
+    const selected = String(current || "");
+    if (options.includes(selected)) return selected;
+    return options[0] || "";
   }
 
   function resultStatus(payload) {
@@ -353,6 +400,23 @@
     return card;
   }
 
+  function controlField(name, control) {
+    const field = element("label", "result-control-field");
+    field.append(element("span", "", name), control);
+    return field;
+  }
+
+  function chartNavigation() {
+    const root = element("div", "result-chart-navigation");
+    const zoomIn = element("button", "result-chart-action", "Zoom in");
+    const zoomOut = element("button", "result-chart-action", "Zoom out");
+    const reset = element("button", "result-chart-action", "Reset view");
+    const status = element("span", "result-chart-viewport", "Full range");
+    [zoomIn, zoomOut, reset].forEach((button) => { button.type = "button"; });
+    root.append(zoomIn, zoomOut, reset, status);
+    return {root, zoomIn, zoomOut, reset, status};
+  }
+
   function renderStructure(payload) {
     const section = element("section", "result-section result-structure");
     const heading = element("div", "result-section-heading");
@@ -396,7 +460,11 @@
       metricCard("Potential range", formatNumber(values.potentialRange), values.potentialRange === null ? "" : "V"),
       metricCard("Peak electric field", formatNumber(values.peakElectricField), values.peakElectricField === null ? "" : "V/m"),
       metricCard("Maximum terminal current", formatNumber(values.maximumTerminalCurrent), values.maximumTerminalCurrent === null ? "" : "A/m²"),
-      metricCard("Validation", `${values.validationPassed} / ${values.validationTotal}`, "passed"),
+      metricCard(
+        "Validation",
+        `${values.validationPassed} passed`,
+        `${values.validationFailed} failed · ${values.validationNotApplicable} not applicable`,
+      ),
     );
     return grid;
   }
@@ -597,7 +665,11 @@
       ));
     });
     hitArea.addEventListener("dblclick", () => onViewportChange?.(fullExtent));
-    return {logAccepted: !scaleMode || scaleMode !== "log" || useLog};
+    return {
+      extent: fullExtent,
+      logAccepted: !scaleMode || scaleMode !== "log" || useLog,
+      viewport: currentViewport,
+    };
   }
 
   function renderFields(payload, comparisonRuns = []) {
@@ -632,7 +704,8 @@
       option.value = value;
       scale.append(option);
     });
-    controls.append(select, scale);
+    const navigation = chartNavigation();
+    controls.append(controlField("Dataset", select), controlField("Scale", scale), navigation.root);
     section.append(controls);
     const chart = element("div", "result-chart");
     const svg = svgNode("svg", {viewBox: "0 0 880 330", role: "img"});
@@ -640,9 +713,10 @@
     chart.append(svg, tooltip);
     section.append(chart);
     let viewport = null;
+    let chartState = null;
     const redraw = () => {
       const field = fields.find((candidate) => candidate.name === select.value) || fields[0];
-      const scaleResult = drawFieldChart(
+      chartState = drawFieldChart(
         svg,
         tooltip,
         {...field, axis: {kind: "position", unit: "m"}},
@@ -654,7 +728,8 @@
         },
         structureMarkers(payload),
       );
-      if (scale.value === "log" && !scaleResult.logAccepted) scale.value = "linear";
+      if (scale.value === "log" && !chartState.logAccepted) scale.value = "linear";
+      navigation.status.textContent = viewport ? "Zoomed range" : "Full range";
       svg.setAttribute("aria-label", `${label(field.name)} across device position`);
     };
     select.addEventListener("change", () => {
@@ -662,6 +737,19 @@
       redraw();
     });
     scale.addEventListener("change", redraw);
+    const navigate = (action) => {
+      if (!chartState?.extent) return;
+      viewport = globalThis.AgentKronigScientificChart.viewportForAction(
+        viewport || chartState.viewport,
+        chartState.extent,
+        action,
+      );
+      if (action === "reset") viewport = null;
+      redraw();
+    };
+    navigation.zoomIn.addEventListener("click", () => navigate("zoom_in"));
+    navigation.zoomOut.addEventListener("click", () => navigate("zoom_out"));
+    navigation.reset.addEventListener("click", () => navigate("reset"));
     redraw();
     return section;
   }
@@ -744,7 +832,23 @@
     exportPng.type = "button";
     const overlay = element("select", "hidden");
     overlay.setAttribute("aria-label", "Compatible result overlay");
-    controls.append(select, slice, mode, scale, overlay, exportCsv, exportSvg, exportPng);
+    const navigation = chartNavigation();
+    const exportGroup = element("div", "result-export-group");
+    exportGroup.append(exportCsv, exportSvg, exportPng);
+    const datasetField = controlField("Dataset", select);
+    const sliceField = controlField("Operating point", slice);
+    const modeField = controlField("Complex view", mode);
+    const scaleField = controlField("Scale", scale);
+    const overlayField = controlField("Overlay", overlay);
+    controls.append(
+      datasetField,
+      sliceField,
+      modeField,
+      scaleField,
+      overlayField,
+      navigation.root,
+      exportGroup,
+    );
     section.append(controls);
     const chartRoot = element("div", "result-chart");
     const svg = svgNode("svg", {viewBox: "0 0 880 330", role: "img"});
@@ -753,6 +857,7 @@
     section.append(chartRoot);
 
     let viewport = null;
+    let chartState = null;
     const redraw = () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       if (overlay.dataset.primary !== dataset.id) {
@@ -767,9 +872,10 @@
         });
         overlay.dataset.primary = dataset.id;
       }
-      overlay.classList.toggle("hidden", overlay.options.length <= 1);
-      mode.classList.toggle("hidden", dataset.plotKind !== "complex_response");
-      scale.classList.toggle("hidden", dataset.plotKind === "heatmap");
+      overlayField.classList.toggle("hidden", overlay.options.length <= 1);
+      modeField.classList.toggle("hidden", dataset.plotKind !== "complex_response");
+      scaleField.classList.toggle("hidden", dataset.plotKind === "heatmap");
+      const previousSlice = slice.value;
       slice.replaceChildren();
       if (dataset.plotKind === "profile_family") {
         const positionIndex = dataset.axes.findIndex((axis) => axis.kind === "position");
@@ -779,13 +885,20 @@
           option.value = String(index);
           slice.append(option);
         });
-        slice.classList.remove("hidden");
+        slice.value = availableSelection(
+          previousSlice,
+          Array.from(slice.options).map((option) => option.value),
+        );
+        sliceField.classList.remove("hidden");
       } else {
-        slice.classList.add("hidden");
+        sliceField.classList.add("hidden");
       }
       if (dataset.plotKind === "heatmap") {
         renderHeatmap(svg, dataset);
+        chartState = null;
+        navigation.root.classList.add("hidden");
       } else {
+        navigation.root.classList.remove("hidden");
         const series = seriesForDataset(dataset, slice.value, mode.value);
         const field = {
           positions: series.axis.values,
@@ -798,7 +911,7 @@
         const overlaySeries = overlayDataset
           ? seriesForDataset(overlayDataset, slice.value, mode.value)
           : null;
-        const scaleResult = drawFieldChart(
+        chartState = drawFieldChart(
           svg,
           tooltip,
           field,
@@ -815,8 +928,9 @@
             validity: overlaySeries.validity,
           }] : [],
         );
-        if (scale.value === "log" && !scaleResult.logAccepted) scale.value = "linear";
+        if (scale.value === "log" && !chartState.logAccepted) scale.value = "linear";
       }
+      navigation.status.textContent = viewport ? "Zoomed range" : "Full range";
       svg.setAttribute("aria-label", `${dataset.label} scientific plot`);
     };
     select.addEventListener("change", () => {
@@ -824,6 +938,19 @@
       redraw();
     });
     [slice, mode, scale, overlay].forEach((control) => control.addEventListener("change", redraw));
+    const navigate = (action) => {
+      if (!chartState?.extent) return;
+      viewport = globalThis.AgentKronigScientificChart.viewportForAction(
+        viewport || chartState.viewport,
+        chartState.extent,
+        action,
+      );
+      if (action === "reset") viewport = null;
+      redraw();
+    };
+    navigation.zoomIn.addEventListener("click", () => navigate("zoom_in"));
+    navigation.zoomOut.addEventListener("click", () => navigate("zoom_out"));
+    navigation.reset.addEventListener("click", () => navigate("reset"));
     exportCsv.addEventListener("click", () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
       const series = seriesForDataset(dataset, slice.value, mode.value);
@@ -910,10 +1037,16 @@
     heading.append(element("h2", "", "Validation"));
     heading.append(badge(label(payload.validation?.overall || "unavailable"), payload.validation?.overall || ""));
     section.append(heading);
-    const list = element("div", "result-validation-list");
-    for (const check of payload.validation?.checks || []) {
+    const presentation = validationPresentation(payload.validation?.checks || []);
+    const summary = element("div", `result-validation-summary is-${presentation.tone}`);
+    summary.append(
+      element("strong", "", presentation.headline),
+      element("span", "", presentation.summary),
+    );
+    section.append(summary);
+    const rowForCheck = (check) => {
       const row = element("article", `result-validation is-${check.status}`);
-      const mark = element("span", "result-validation-mark", check.status === "passed" ? "✓" : check.status === "failed" ? "×" : "!");
+      const mark = element("span", "result-validation-mark", check.status === "passed" ? "✓" : check.status === "not_applicable" ? "N/A" : check.status === "failed" ? "×" : "!");
       const copy = element("div");
       copy.append(element("strong", "", check.message || label(check.id)));
       const evidence = [label(check.level), label(check.evidence_origin)];
@@ -921,10 +1054,26 @@
       if (check.limit !== null && check.limit !== undefined) evidence.push(`limit ${check.limit}`);
       copy.append(element("small", "", evidence.join(" · ")));
       row.append(mark, copy, badge(label(check.status), check.status));
-      list.append(row);
+      return row;
+    };
+    const list = element("div", "result-validation-list");
+    [...presentation.actionable, ...presentation.passed].forEach((check) => list.append(rowForCheck(check)));
+    if (!list.children.length && !presentation.notApplicable.length) {
+      list.append(element("p", "result-empty", "No validation evidence is available."));
     }
-    if (!list.children.length) list.append(element("p", "result-empty", "No validation evidence is available."));
     section.append(list);
+    if (presentation.notApplicable.length) {
+      const deferred = element("details", "result-validation-na");
+      const deferredHeading = element(
+        "summary",
+        "",
+        `Checks not applicable to this experiment (${presentation.notApplicable.length})`,
+      );
+      const deferredList = element("div", "result-validation-list");
+      presentation.notApplicable.forEach((check) => deferredList.append(rowForCheck(check)));
+      deferred.append(deferredHeading, deferredList);
+      section.append(deferred);
+    }
     return section;
   }
 
@@ -1048,6 +1197,7 @@
   }
 
   globalThis.AgentKronigResults = {
+    availableSelection,
     datasetOptions,
     comparisonDatasetOptions,
     compatibleOverlayOptions,
@@ -1061,5 +1211,7 @@
     seriesForDataset,
     structureMarkers,
     summarize,
+    validationGroups,
+    validationPresentation,
   };
 })();

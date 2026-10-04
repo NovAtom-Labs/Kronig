@@ -378,7 +378,22 @@ def action_summary(event: ActionEvent) -> str:
     if isinstance(action, FinishAction):
         return "finish: complete response"
     if isinstance(action, TcadDomainAction):
-        return f"tcad_domain: {action.operation}"
+        summaries = {
+            "describe_spec": "Reviewing the experiment specification",
+            "validate_spec": "Checking the experiment specification",
+            "prepare_experiment": "Creating experiment project and approval plan",
+            "execute_experiment": "Running simulation and building scientific results",
+            "execute_approved_plan": "Running simulation and building scientific results",
+            "validate_result": "Validating canonical scientific results",
+            "validate_bundle": "Validating canonical scientific results",
+            "inspect_bundle": "Reviewing canonical result evidence",
+            "read_canonical_summary": "Reviewing canonical result evidence",
+            "search_knowledge": "Searching local TCAD references",
+            "search_web": "Searching scientific sources",
+            "fetch_source": "Reading a scientific source",
+            "build_report": "Building the scientific report",
+        }
+        return summaries.get(action.operation, f"tcad_domain: {action.operation}")
     if isinstance(action, TaskAction):
         description = (action.description or "delegated task").strip()
         return f"task {action.subagent_type}: {description[:180]}"

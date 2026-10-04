@@ -119,6 +119,40 @@ assertEqual(researchTrail.recent.length, 4, "chat keeps a bounded recent operati
 assertEqual(researchTrail.recent.at(-1).label, "Running validation", "the latest public action remains visible");
 assertEqual(JSON.stringify(researchTrail).includes("check-7"), false, "raw commands stay out of the chat trail");
 assertEqual(JSON.stringify(researchTrail).includes("private chain of thought"), false, "chat trail never exposes private reasoning");
+assertEqual(researchTrail.current.animated, true, "the current row animates only while work is active");
+
+const experimentPreparation = agent.researchTrail({
+  runState: "running",
+  steps: [{
+    id: "prepare-experiment",
+    toolName: "tcad_domain",
+    summary: "Creating experiment project and approval plan",
+    status: "running",
+    phase: "plan",
+    startedAt: "2026-10-04T10:00:00Z",
+    arguments: {operation: "prepare_experiment"},
+    artifactPaths: [],
+  }],
+  pendingApprovals: [],
+}, new Date("2026-10-04T10:00:12Z").getTime());
+assertEqual(experimentPreparation.current.label, "Creating experiment project and approval plan", "project creation is explicit rather than appearing unexpectedly");
+assertEqual(experimentPreparation.current.detail, "Still working · 12s", "active project creation carries an honest elapsed time");
+
+const preparedExperiment = agent.chatTimeline({
+  runState: "waiting_for_plan_approval",
+  steps: [{
+    id: "prepare-experiment",
+    toolName: "tcad_domain",
+    summary: "Creating experiment project and approval plan",
+    status: "completed",
+    phase: "plan",
+    arguments: {operation: "prepare_experiment"},
+    artifactPaths: ["experiments/implant-study/PLAN.md", "experiments/implant-study/plan.json"],
+  }],
+  pendingApprovals: [],
+});
+assertEqual(preparedExperiment[1].label, "Experiment project and plan created", "completed preparation explains the new repository artifacts");
+assertEqual(preparedExperiment[1].detail, "experiments/implant-study/PLAN.md · experiments/implant-study/plan.json", "created artifacts remain inspectable in the trail");
 
 const recoveredTrail = agent.researchTrail({
   runState: "running",
