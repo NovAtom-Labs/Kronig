@@ -39,6 +39,14 @@
     ));
   }
 
+  function interaction(preparation) {
+    const clarificationActive = view(preparation).visible;
+    return {
+      clarificationActive,
+      showComposer: !clarificationActive,
+    };
+  }
+
   function step(preparation, requestedIndex, values) {
     const model = view(preparation);
     if (!model.visible) throw new Error("No clarification is active.");
@@ -78,6 +86,7 @@
 
   globalThis.AgentKronigClarification = {
     firstIncomplete,
+    interaction,
     restoredIndex,
     signature,
     step,

@@ -18,6 +18,14 @@
   assert(view.visible === true, "clarification should be visible");
   assert(view.questions.length === 2, "all questions should be retained");
   assert(view.questions[0].reason === "Controls statistics.", "rationale should be visible");
+  assert(
+    AgentKronigClarification.interaction(preparation).showComposer === false,
+    "the normal composer should yield its space to an active clarification",
+  );
+  assert(
+    AgentKronigClarification.interaction({decision: {status: "ready"}}).showComposer === true,
+    "the normal composer should return when clarification is no longer active",
+  );
 
   const firstSignature = AgentKronigClarification.signature(preparation);
   const refreshedPreparation = JSON.parse(JSON.stringify(preparation));

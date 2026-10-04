@@ -82,11 +82,11 @@ def test_workspace_route_restores_current_process_session_activity(
     assert 'id="clarification-steps"' in restored_page.text
     assert 'id="clarification-back"' in restored_page.text
     assert 'id="clarification-next"' in restored_page.text
-    assert 'href="/static/ide.css?v=20261004-3"' in restored_page.text
+    assert 'href="/static/ide.css?v=20261004-4"' in restored_page.text
     assert 'src="/static/ide-events.js?v=20261004-1"' in restored_page.text
     assert 'src="/static/ide-agent.js?v=20261004-2"' in restored_page.text
-    assert 'src="/static/prompt-clarification.js?v=20261004-1"' in restored_page.text
-    assert 'src="/static/ide.js?v=20261004-3"' in restored_page.text
+    assert 'src="/static/prompt-clarification.js?v=20261004-2"' in restored_page.text
+    assert 'src="/static/ide.js?v=20261004-4"' in restored_page.text
     assert 'src="/static/scientific-chart.js?v=20261004-2"' in restored_page.text
     assert 'src="/static/results-workbench.js?v=20261004-2"' in restored_page.text
     assert "Foundation slice" not in restored_page.text

@@ -1006,7 +1006,10 @@ function renderMessages(messages, {forceScroll = false} = {}) {
 function renderClarification(preparation) {
   activePreparation = preparation;
   const view = window.AgentKronigClarification.view(preparation);
+  const interaction = window.AgentKronigClarification.interaction(preparation);
   const nextSignature = window.AgentKronigClarification.signature(preparation);
+  agentChat.classList.toggle("has-clarification", interaction.clarificationActive);
+  messageForm.hidden = !interaction.showComposer;
   clarificationCard.classList.toggle("hidden", !view.visible);
   if (!view.visible) {
     clarificationRenderSignature = "";
