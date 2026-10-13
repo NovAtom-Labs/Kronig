@@ -205,7 +205,9 @@ class DevsimSidecarRunner:
                 stdout=stdout,
                 stderr=stderr,
                 text=True,
-                start_new_session=os.name != "nt",
+                start_new_session=(
+                    os.name != "nt" and os.environ.get("AGENT_KRONIG_DESKTOP_OWNER_PIPE") != "1"
+                ),
             )
             try:
                 return_code = process.wait(timeout=budget.seconds)

@@ -12,8 +12,10 @@ from pydantic import ValidationError
 from tcad_agent.bundles.models import BundleManifest
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
 from tcad_agent.ide.paths import canonical_directory, resolve_workspace_path
+from tcad_agent.recovery.proposals import RecoveryComparison
 from tcad_agent.results.catalog import DatasetCatalogEntry, build_dataset_catalog
 from tcad_agent.results.models import CanonicalResult
+from tcad_agent.science.models import ScientificCompletenessReport
 from tcad_agent.validation.models import ValidationReport
 
 
@@ -29,6 +31,8 @@ class WorkspaceResultView(StrictModel):
     validation: ValidationReport
     manifest: BundleManifest
     catalog: tuple[DatasetCatalogEntry, ...]
+    completeness: ScientificCompletenessReport | None = None
+    recovery_comparison: RecoveryComparison | None = None
 
 
 class WorkspaceResultComparison(StrictModel):
@@ -47,9 +51,7 @@ class WorkspaceResultReader:
 
     comparison_limit = 8
 
-    def read_many(
-        self, root: Path, canonical_paths: list[str]
-    ) -> WorkspaceResultComparison:
+    def read_many(self, root: Path, canonical_paths: list[str]) -> WorkspaceResultComparison:
         if not 2 <= len(canonical_paths) <= self.comparison_limit:
             raise WorkspaceResultError(
                 f"result comparison requires 2 to {self.comparison_limit} paths"
@@ -66,9 +68,7 @@ class WorkspaceResultReader:
             "results",
             "canonical.json",
         ):
-            raise WorkspaceResultError(
-                "result path must end with results/canonical.json"
-            )
+            raise WorkspaceResultError("result path must end with results/canonical.json")
 
         workspace_root = canonical_directory(root)
         canonical_target = resolve_workspace_path(workspace_root, canonical_path)
@@ -114,24 +114,24 @@ class WorkspaceResultReader:
         if execution_state != "completed":
             raise WorkspaceResultError("result execution is not completed")
 
-        for artifact in self.required_artifacts:
+        artifacts_to_verify = set(self.required_artifacts) | set(manifest.artifacts)
+        for artifact in artifacts_to_verify:
             record = manifest.artifacts.get(artifact)
             if record is None:
-                raise WorkspaceResultError(
-                    f"result manifest does not include {artifact}"
-                )
+                raise WorkspaceResultError(f"result manifest does not include {artifact}")
             try:
                 target = (bundle_root / artifact).resolve(strict=True)
-                raw = target.read_bytes()
             except OSError as exc:
-                raise WorkspaceResultError(
-                    f"result artifact is unavailable: {artifact}"
-                ) from exc
+                raise WorkspaceResultError(f"result artifact is unavailable: {artifact}") from exc
             if not target.is_relative_to(bundle_root):
                 raise WorkspaceResultError("result artifact resolves outside the bundle")
-            if len(raw) != record.bytes:
+            if target.stat().st_size != record.bytes:
                 raise WorkspaceResultError(f"result artifact size mismatch: {artifact}")
-            if hashlib.sha256(raw).hexdigest() != record.sha256:
+            digest = hashlib.sha256()
+            with target.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != record.sha256:
                 raise WorkspaceResultError(f"result artifact hash mismatch: {artifact}")
 
         try:
@@ -144,6 +144,20 @@ class WorkspaceResultReader:
             validation = ValidationReport.model_validate(
                 self._read_object(bundle_root / "validation" / "report.json")
             )
+            completeness = (
+                ScientificCompletenessReport.model_validate(
+                    self._read_object(bundle_root / "scientific-inputs.json")
+                )
+                if "scientific-inputs.json" in manifest.artifacts
+                else None
+            )
+            recovery_comparison = (
+                RecoveryComparison.model_validate(
+                    self._read_object(bundle_root / "recovery-comparison.json")
+                )
+                if "recovery-comparison.json" in manifest.artifacts
+                else None
+            )
         except ValidationError as exc:
             raise WorkspaceResultError("result bundle schema is malformed") from exc
 
@@ -154,9 +168,7 @@ class WorkspaceResultReader:
                 "canonical result backend does not match the manifest backend"
             )
         if result.simulator_version != manifest.simulator_version:
-            raise WorkspaceResultError(
-                "canonical simulator version does not match the manifest"
-            )
+            raise WorkspaceResultError("canonical simulator version does not match the manifest")
 
         return WorkspaceResultView(
             bundle_path=bundle_path,
@@ -166,6 +178,8 @@ class WorkspaceResultReader:
             validation=validation,
             manifest=manifest,
             catalog=build_dataset_catalog(result),
+            completeness=completeness,
+            recovery_comparison=recovery_comparison,
         )
 
     def _read_object(self, path: Path) -> dict[str, Any]:

@@ -25,9 +25,7 @@ class ScriptedLLM:
         if isinstance(response, Exception):
             raise response
         return SimpleNamespace(
-            message=Message(
-                role="assistant", content=[TextContent(text=response)]
-            )
+            message=Message(role="assistant", content=[TextContent(text=response)])
         )
 
 
@@ -38,6 +36,55 @@ def workspace() -> WorkspaceContext:
         git_dirty=False,
         inventory_hash="a" * 64,
     )
+
+
+def test_gateway_discards_ancillary_citations_from_researcher_owned_values():
+    response = json.dumps(
+        {
+            "status": "ready",
+            "summary": "User supplied the temperature.",
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Evaluate at 300 K",
+                "fields": [
+                    {
+                        "path": "physics.temperature",
+                        "value": "300 K",
+                        "origin": "researcher",
+                        "evidence_refs": ["unrelated-doc"],
+                    }
+                ],
+            },
+        }
+    )
+    llm = ScriptedLLM([response])
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Evaluate at 300 K",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+    assert decision.intent.fields[0].value == "300 K"
+    assert decision.intent.fields[0].origin == "researcher"
+    assert decision.intent.fields[0].evidence_refs == ()
+    assert len(llm.messages) == 1
+
+
+def test_preparation_budget_reserves_room_for_reasoning_and_structured_output(monkeypatch):
+    from tcad_agent.prompting import gateway
+
+    captured = {}
+
+    class Configuration:
+        def model_copy(self, *, update):
+            captured.update(update)
+            return self
+
+    monkeypatch.setattr(gateway, "llm_from_environment", Configuration)
+    OpenHandsPreparationModel.from_environment()
+    assert captured["num_retries"] == 0
+    assert captured["max_output_tokens"] >= 16384
+    assert captured["timeout"] <= 120
 
 
 def test_system_policy_distinguishes_absolute_current_from_current_density() -> None:
@@ -357,14 +404,14 @@ def test_gateway_does_not_reconcile_value_absent_from_researcher_input() -> None
         reviewed=True,
         content="Gaussian profiles are supported.",
     )
-    gateway = OpenHandsPreparationModel(
-        ScriptedLLM([json.dumps(invalid), json.dumps(invalid)])
-    )
+    gateway = OpenHandsPreparationModel(ScriptedLLM([json.dumps(invalid), json.dumps(invalid)]))
 
-    with pytest.raises(ModelResponseError, match="researcher-owned field"):
-        gateway.prepare(
-            original_prompt="Use boron doping in the p region.",
-            answers=(),
-            workspace=workspace(),
-            evidence=(evidence,),
-        )
+    decision = gateway.prepare(
+        original_prompt="Use boron doping in the p region.",
+        answers=(),
+        workspace=workspace(),
+        evidence=(evidence,),
+    )
+    assert decision.status == "clarification"
+    assert decision.questions[0].field_path == "regions.p.profile.type"
+    assert len(gateway._llm.messages) == 1

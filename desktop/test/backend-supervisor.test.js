@@ -106,11 +106,28 @@ test("stop escalates when a sidecar ignores graceful termination", async (contex
   `);
   context.after(() => fs.rmSync(directory, {recursive: true, force: true}));
   const supervisor = supervisorFor(script);
+  context.after(async () => { await supervisor.stop(); });
   await supervisor.start();
   const pid = supervisor.readiness.pid;
   await supervisor.stop();
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+test("concurrent shutdown callers await the same process-tree cleanup", async (context) => {
+  const {directory, script} = fixture(`
+    process.on("SIGTERM", () => {});
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {}, 1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  const supervisor = supervisorFor(script);
+  await supervisor.start();
+  let firstFinished = false;
+  const first = supervisor.stop().then(() => {firstFinished = true;});
+  await supervisor.stop();
+  assert.equal(firstFinished, true, "a second quit must not exit before cleanup finishes");
+  await first;
 });
 
 test("reports a backend exit after successful readiness", async (context) => {
@@ -126,6 +143,150 @@ test("reports a backend exit after successful readiness", async (context) => {
   const event = await failure;
   assert.equal(event.code, 9);
   assert.equal(supervisor.readiness, null);
+});
+
+test("restart cannot acquire ownership while cleanup is pending", async (context) => {
+  const {directory, script} = fixture(`
+    process.on("SIGTERM", () => {});
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {}, 1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  const supervisor = supervisorFor(script);
+  await supervisor.start();
+  const stopping = supervisor.stop();
+  await assert.rejects(supervisor.start(), /cleanup|already.*started/i);
+  await stopping;
+  await supervisor.start();
+  await supervisor.stop();
+});
+
+test("a stopped startup cannot publish stale readiness after its health check", async (context) => {
+  const {directory, script} = fixture(`
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {},1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  let healthStarted;
+  const started = new Promise((resolve) => {healthStarted = resolve;});
+  let releaseHealth;
+  const health = new Promise((resolve) => {releaseHealth = resolve;});
+  const supervisor = supervisorFor(script, {healthCheck:() => {healthStarted(); return health;}});
+  const launching = supervisor.start();
+  await started;
+  await supervisor.stop();
+  releaseHealth(true);
+  await assert.rejects(launching, /interrupted|shutdown/);
+  assert.equal(supervisor.readiness, null);
+});
+
+test("failure of an older startup cannot stop its healthy replacement", async (context) => {
+  const {directory, script} = fixture(`
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {},1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  let healthStarted;
+  const started = new Promise((resolve) => {healthStarted = resolve;});
+  let releaseOldHealth;
+  const oldHealth = new Promise((resolve) => {releaseOldHealth = resolve;});
+  let checks = 0;
+  const supervisor = supervisorFor(script, {healthCheck:() => {
+    checks += 1;
+    if (checks === 1) {healthStarted(); return oldHealth;}
+    return Promise.resolve(true);
+  }});
+  context.after(async () => {await supervisor.stop();});
+  const oldStartup = supervisor.start();
+  await started;
+  await supervisor.stop();
+  const replacement = await supervisor.start();
+  const rejected = assert.rejects(oldStartup, /interrupted|shutdown/);
+  releaseOldHealth(true);
+  await rejected;
+  assert.equal(supervisor.running, true, "stale startup cleanup killed the new generation");
+  assert.equal(supervisor.readiness, replacement);
+  assert.equal(supervisor.child.pid, replacement.pid);
+  assert.doesNotThrow(() => process.kill(replacement.pid, 0));
+});
+
+test("a failed cleanup retains ownership so stop can be retried", async (context) => {
+  const {directory, script} = fixture(`
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {}, 1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  const supervisor = supervisorFor(script);
+  await supervisor.start();
+  const child = supervisor.child;
+  const originalKill = process.kill;
+  process.kill = () => {throw Object.assign(new Error("cleanup denied"), {code:"EPERM"});};
+  try {
+    await assert.rejects(supervisor.stop(), /cleanup denied/);
+    assert.equal(supervisor.child, child, "failed cleanup must retain the process identity");
+    await assert.rejects(supervisor.start(), /cleanup|already.*started/i);
+  } finally {
+    process.kill = originalKill;
+    await supervisor.stop();
+  }
+  assert.throws(() => process.kill(child.pid, 0), /ESRCH/);
+});
+
+test("cleanup escalates for a resistant worker even after the backend exits", async (context) => {
+  const {directory, script} = fixture(`
+    const {spawn} = require("node:child_process");
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {},1000)"], {stdio:["ignore","pipe","ignore"]});
+    child.stdout.once("data", () => {
+      process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"worker_" + child.pid}) + "\\n");
+    });
+    setInterval(() => {}, 1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  const supervisor = supervisorFor(script);
+  const ready = await supervisor.start();
+  const pid = Number(ready.runtime_fingerprint.replace("worker_", ""));
+  context.after(() => {try {process.kill(pid, "SIGKILL");} catch {}});
+  await supervisor.stop();
+  assert.throws(() => process.kill(pid, 0), /ESRCH/);
+});
+
+test("stop waits for independent worker cleanup confirmation", async (context) => {
+  const {directory, script} = fixture(`
+    const {spawn} = require("node:child_process");
+    const monitor = spawn(process.execPath, ["-e", "setTimeout(() => {}, 500)"], {detached:true,stdio:"ignore"});
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123",owner_monitor_pid:monitor.pid}) + "\\n");
+    setInterval(() => {},1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  const supervisor = supervisorFor(script);
+  context.after(async () => {await supervisor.stop();});
+  const readiness = await supervisor.start();
+  assert.ok(readiness.owner_monitor_pid, "ownership completion PID must survive the handshake");
+  await supervisor.stop();
+  assert.throws(() => process.kill(readiness.owner_monitor_pid, 0), /ESRCH/);
+});
+
+test("signal-zero success cannot keep a confirmed empty process group owned",
+  {skip:process.platform === "win32"}, async (context) => {
+  const {directory, script} = fixture(`
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {},1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  const supervisor = supervisorFor(script);
+  const ready = await supervisor.start();
+  const originalKill = process.kill;
+  // Linux may successfully probe unreaped zombies. The real process table is
+  // authoritative about whether any executable worker remains in the group.
+  process.kill = (pid, signal) => pid === -ready.pid && signal === 0
+    ? true : originalKill(pid, signal);
+  try {
+    await supervisor.stop();
+    assert.equal(supervisor.child, null);
+  } finally {
+    process.kill = originalKill;
+    await supervisor.stop();
+  }
 });
 
 test("stops descendants in the owned process group", async (context) => {

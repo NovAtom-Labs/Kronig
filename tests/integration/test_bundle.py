@@ -124,6 +124,23 @@ def test_bundle_manifest_hashes_every_artifact_and_report_uses_structured_values
     assert "electron_density" in plot
 
 
+def test_bundle_preserves_verified_reviewed_input_ledger(tmp_path, valid_spec):
+    from tcad_agent.ide.results import WorkspaceResultReader
+    from tcad_agent.science.completeness import ScientificCompletenessEngine
+
+    inputs = bundle_inputs(tmp_path, valid_spec)
+    report = ScientificCompletenessEngine().evaluate(valid_spec, "devsim")
+    inputs = inputs.model_copy(update={"completeness": report})
+    bundle = BundleWriter(tmp_path / "bundles").write(inputs)
+    view = WorkspaceResultReader().read_bundle(bundle.root)
+
+    assert view.completeness == report
+    assert "scientific-inputs.json" in view.manifest.artifacts
+    (bundle.root / "scientific-inputs.json").write_text("{}")
+    with pytest.raises(ValueError, match="mismatch"):
+        WorkspaceResultReader().read_bundle(bundle.root)
+
+
 def test_bundle_reader_verifies_and_loads_axis_aware_results(
     tmp_path: Path, valid_spec: ExperimentSpec
 ) -> None:

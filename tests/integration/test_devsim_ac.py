@@ -47,6 +47,53 @@ def run(spec: ExperimentSpec, path: Path):
 
 
 @pytest.mark.integration
+def test_ac_at_each_bias_has_bias_frequency_axes_and_reference_values(tmp_path: Path):
+    spec = dielectric_ac_spec(
+        {
+            "kind": "ac",
+            "contact": "control",
+            "frequency": "1 kHz",
+            "amplitude": "10 mV",
+            "bias_schedule": {
+                "kind": "dc_points",
+                "contact": "control",
+                "values": ["-0.1 V", "0 V", "0.2 V"],
+            },
+        }
+    )
+    result, native = run(spec, tmp_path / "bias-ac")
+    assert result.status == "completed", native.stderr_path.read_text()
+    assert [point.bias_v for point in result.bias_points] == pytest.approx([-0.1, 0, 0.2])
+    dataset = result.datasets["ac_capacitance__control"]
+    assert dataset.axes == ("bias", "frequency")
+    assert dataset.shape == (3, 1)
+    assert dataset.validity == (True, True, True)
+    expected = 3.9 * 8.85e-12 / 10e-9
+    assert dataset.values == pytest.approx([expected] * 3, rel=0.02)
+    from tcad_agent.validation.engine import ValidationEngine
+
+    report = ValidationEngine().validate(result, spec=spec)
+    checks = {check.id: check.status for check in report.checks}
+    assert checks["small-signal-grid-complete"] == "passed"
+    assert checks["requested-study-order"] == "passed"
+    invalid = result.model_copy(
+        update={
+            "datasets": result.datasets
+            | {
+                "ac_capacitance__control": dataset.model_copy(
+                    update={"validity": (True, False, True)}
+                )
+            }
+        }
+    )
+    failed = ValidationEngine().validate(invalid, spec=spec)
+    assert (
+        next(check for check in failed.checks if check.id == "small-signal-grid-complete").status
+        == "failed"
+    )
+
+
+@pytest.mark.integration
 def test_single_frequency_ac_matches_parallel_plate_capacitance(tmp_path: Path) -> None:
     spec = dielectric_ac_spec(
         {
@@ -95,9 +142,7 @@ def test_frequency_sweep_preserves_complex_response_on_frequency_axis(
     result, native = run(spec, tmp_path / "frequency-ac")
 
     assert result.status == "completed", native.stderr_path.read_text()
-    assert result.axes["frequency"].values == pytest.approx(
-        (100.0, 1000.0, 10000.0, 100000.0)
-    )
+    assert result.axes["frequency"].values == pytest.approx((100.0, 1000.0, 10000.0, 100000.0))
     dataset = result.datasets["complex_admittance__control"]
     assert dataset.axes == ("frequency",)
     assert dataset.imaginary_values is not None
@@ -110,6 +155,16 @@ def test_frequency_sweep_preserves_complex_response_on_frequency_axis(
         )
     )
     assert max(ratios) == pytest.approx(min(ratios), rel=1e-5)
+    from tcad_agent.experiments.planning import expected_bias_points
+    from tcad_agent.validation.engine import ValidationEngine
+
+    assert expected_bias_points(spec) == 1
+    report = ValidationEngine().validate(
+        result, spec=spec, expected_bias_points=expected_bias_points(spec)
+    )
+    checks = {check.id: check.status for check in report.checks}
+    assert checks["expected-point-count"] == "passed"
+    assert checks["small-signal-grid-complete"] == "passed"
 
 
 @pytest.mark.integration

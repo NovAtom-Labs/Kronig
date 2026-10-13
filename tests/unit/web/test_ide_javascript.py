@@ -467,6 +467,6 @@ def test_workspace_shell_loads_researcher_facing_experiment_projects() -> None:
     project_root = Path(__file__).parents[3]
     script = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
 
-    assert "/experiments`" in script
+    assert "/saved-results`" in script
     assert "function renderExperimentProjects" in script
-    assert "openManagedResult(experiment.run_id)" in script
+    assert "openSavedResult(experiment.bundle_run_id)" in script

@@ -62,6 +62,23 @@ def _oxide_slab(kind: str, *, material: str = "silicon_dioxide") -> ExperimentSp
 
 
 @pytest.mark.integration
+def test_ideal_gate_work_function_is_not_silently_ignored(tmp_path: Path):
+    spec = _oxide_slab("metal_work_function")
+    spec = spec.model_copy(update={"contacts": (
+        spec.contacts[0].model_copy(update={"kind": "ideal_gate"}), spec.contacts[1],
+    )})
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "ideal-work-function"), RunBudget(seconds=120))
+    result = adapter.normalize(native)
+    assert result.status == "completed"
+    potential = result.datasets["potential"].values
+    thermal = 8.617333262145e-5 * 300
+    expected = 4.05 + 1.124 / 2 + .5 * thermal * math.log(2.8e19 / 1.04e19) - 4.1
+    assert potential[0] - potential[-1] == pytest.approx(expected, rel=2e-3)
+
+
+@pytest.mark.integration
 def test_metal_gate_work_function_creates_reviewed_flat_band_offset(
     tmp_path: Path,
 ) -> None:

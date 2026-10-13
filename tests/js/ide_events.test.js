@@ -97,6 +97,7 @@ snapshot = view.snapshot();
 assertEqual(snapshot.runState, "failed", "terminal event determines run state");
 assertEqual(snapshot.runId, "run-1", "run identity survives event restoration");
 assertEqual(snapshot.currentOperation, "Run failed", "terminal state has a useful operation label");
+assertEqual(snapshot.terminalDetail, "validation failed", "terminal failure detail remains available to the UI");
 
 view.accept(event(22, "run_started", {run_id: "run-2"}));
 view.accept(toolStarted(23, "action-3", "file_editor", "Inspect second run", null, "run-2"));
@@ -166,6 +167,29 @@ snapshot = preparationView.snapshot();
 assertEqual(snapshot.runState, "waiting_for_user", "clarification updates the visible run state");
 assertEqual(snapshot.currentOperation, "Waiting for your response", "clarification names the next action");
 
+const failedPreparationView = globalThis.AgentKronigIDEEvents.createRunPresentation();
+failedPreparationView.accept(event(207, "run_created", {run_id: "run-failed-prep", state: "queued"}));
+failedPreparationView.accept(event(208, "prompt_preparation_started", {
+  run_id: "run-failed-prep",
+  phase: "understanding_request",
+}));
+failedPreparationView.accept(event(209, "agent_progress_started", {
+  run_id: "run-failed-prep",
+  item_id: "inference-failed-prep",
+}));
+failedPreparationView.accept(event(210, "run_failed", {
+  run_id: "run-failed-prep",
+  detail: "preparation failed",
+}));
+snapshot = failedPreparationView.snapshot();
+assertEqual(snapshot.runState, "failed", "preparation failure reaches a terminal state");
+assertEqual(
+  snapshot.preparationStages.some((stage) => stage.status === "running"),
+  false,
+  "terminal failure settles every live preparation stage",
+);
+assertEqual(snapshot.inference.status, "interrupted", "terminal failure stops live inference");
+
 const planView = globalThis.AgentKronigIDEEvents.createRunPresentation();
 planView.accept(event(210, "run_started", {run_id: "run-plan"}));
 planView.accept(event(211, "plan_ready", {
@@ -178,6 +202,10 @@ snapshot = planView.snapshot();
 assertEqual(snapshot.runState, "waiting_for_plan_approval", "a prepared plan has a dedicated state");
 assertEqual(snapshot.currentOperation, "Experiment plan ready for review", "plan review names the next action");
 assertEqual(snapshot.plan.planDigest, "a".repeat(64), "typed plan metadata is retained");
+planView.accept(event(211.1, "run_paused", {run_id: "run-plan"}));
+assertEqual(planView.snapshot().runState, "waiting_for_plan_approval", "SDK pause must not overwrite plan review");
+planView.accept(event(211.2, "run_state_changed", {run_id: "run-plan", state: "paused"}));
+assertEqual(planView.snapshot().runState, "waiting_for_plan_approval", "SDK paused state preserves a pending plan");
 planView.accept(event(212, "plan_approved", {
   run_id: "run-plan",
   plan_digest: "a".repeat(64),

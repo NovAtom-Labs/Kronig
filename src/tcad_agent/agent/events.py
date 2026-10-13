@@ -85,6 +85,8 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
     if isinstance(action, TcadDomainAction):
         phases = {
             "describe_spec": "inspect",
+            "list_saved_results": "inspect",
+            "open_saved_result": "inspect",
             "validate_spec": "validate",
             "prepare_experiment": "plan",
             "execute_experiment": "execute",
@@ -98,9 +100,7 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "fetch_source": "inspect",
             "build_report": "report",
         }
-        metadata: dict[str, JsonValue] = {
-            "phase": phases.get(action.operation, "unknown")
-        }
+        metadata: dict[str, JsonValue] = {"phase": phases.get(action.operation, "unknown")}
         if action.operation in {
             "validate_spec",
             "validate_result",
@@ -139,12 +139,17 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "wc",
         }
         validation_commands = {"mypy", "pytest"}
-        if executable == "git" and len(tokens) > 1 and tokens[1] in {
-            "diff",
-            "log",
-            "show",
-            "status",
-        }:
+        if (
+            executable == "git"
+            and len(tokens) > 1
+            and tokens[1]
+            in {
+                "diff",
+                "log",
+                "show",
+                "status",
+            }
+        ):
             return {"phase": "inspect"}
         if executable in inspection_commands:
             return {"phase": "inspect"}
@@ -172,11 +177,7 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
                 "evidence_kind": "validation",
                 "validation_scope": "workspace",
             }
-        if (
-            python_executable
-            and len(tokens) > 1
-            and Path(tokens[1]).name == "check.py"
-        ):
+        if python_executable and len(tokens) > 1 and Path(tokens[1]).name == "check.py":
             return {
                 "phase": "validate",
                 "evidence_kind": "validation",
@@ -228,9 +229,7 @@ class AgentEventBridge:
         raw_grants.update(normalized_grants)
         self.permission_grants = cast(set[PermissionCategory], raw_grants)
         self.secret_values = secret_values or tuple(
-            value
-            for name in _SECRET_ENV_NAMES
-            if (value := os.getenv(name)) is not None
+            value for name in _SECRET_ENV_NAMES if (value := os.getenv(name)) is not None
         )
         self._approval_actions: set[str] = set()
         self._action_baselines: dict[str, WorkspaceBaseline] = {}
@@ -260,9 +259,7 @@ class AgentEventBridge:
         elif isinstance(event, PauseEvent):
             self.events.append(self.conversation_id, "run_paused", self._base(event))
         elif isinstance(event, InterruptEvent):
-            self.events.append(
-                self.conversation_id, "run_interrupted", self._base(event)
-            )
+            self.events.append(self.conversation_id, "run_interrupted", self._base(event))
         elif isinstance(event, AgentErrorEvent | ConversationErrorEvent):
             detail = getattr(event, "error", None) or getattr(event, "detail", "")
             self.events.append(
@@ -340,9 +337,7 @@ class AgentEventBridge:
                 if self._action_baselines:
                     self._ambiguous_actions.update(self._action_baselines)
                     self._ambiguous_actions.add(event.id)
-                self._action_baselines[event.id] = self._change_tracker.capture(
-                    self.workspace
-                )
+                self._action_baselines[event.id] = self._change_tracker.capture(self.workspace)
             except OSError:
                 pass
         self.events.append(self.conversation_id, "tool_call_started", payload)
@@ -390,16 +385,12 @@ class AgentEventBridge:
             and isinstance(event.observation, TcadDomainObservation)
             and event.observation.code == "experiment_prepared"
         ):
-            prepared_plan = PreparedExperiment.model_validate(
-                event.observation.data["prepared"]
-            )
+            prepared_plan = PreparedExperiment.model_validate(event.observation.data["prepared"])
             artifact_data = event.observation.data.get("plan_artifacts", {})
             if not isinstance(artifact_data, dict) or self.workspace is None:
                 raise ValueError("prepared experiment is missing workspace plan artifacts")
             plan_path = Path(str(artifact_data.get("plan", ""))).resolve()
-            structured_path = Path(
-                str(artifact_data.get("structured_plan", ""))
-            ).resolve()
+            structured_path = Path(str(artifact_data.get("structured_plan", ""))).resolve()
             if not plan_path.is_relative_to(self.workspace) or not structured_path.is_relative_to(
                 self.workspace
             ):
@@ -472,9 +463,7 @@ class AgentEventBridge:
             outcome_values = derive_run_outcome(
                 run_id=self.run_id,
                 project_root=project_root,
-                execution_state=cast(
-                    Literal["failed", "completed"], execution_state
-                ),
+                execution_state=cast(Literal["failed", "completed"], execution_state),
                 validation_state=cast(
                     Literal["passed", "needs_review", "failed"], validation_state
                 ),
@@ -485,9 +474,7 @@ class AgentEventBridge:
             except RuntimeError:
                 approved_plan = None
             if approved_plan is not None and approved_plan.status == "approved":
-                self.store.consume_prepared_plan(
-                    self.run_id, approved_plan.plan_digest
-                )
+                self.store.consume_prepared_plan(self.run_id, approved_plan.plan_digest)
             result_ready = {
                 "run_id": str(self.run_id),
                 "bundle_run_id": bundle_run_id,
@@ -535,9 +522,7 @@ class AgentEventBridge:
             except (OSError, ValueError):
                 pass
             else:
-                payload["affected_paths"] = [
-                    change.path for change in action_changes.files
-                ]
+                payload["affected_paths"] = [change.path for change in action_changes.files]
         if (
             not observation_failed
             and metadata.get("evidence_kind") == "validation"
@@ -546,9 +531,7 @@ class AgentEventBridge:
         ):
             try:
                 run_baseline = self.store.get_run_baseline(self.run_id)
-                validated_changes = self._change_tracker.compare(
-                    self.workspace, run_baseline
-                )
+                validated_changes = self._change_tracker.compare(self.workspace, run_baseline)
             except (OSError, RuntimeError, ValueError):
                 payload["validation_incomplete"] = True
             else:
@@ -568,6 +551,19 @@ class AgentEventBridge:
             self.events.append(self.conversation_id, "result_ready", result_ready)
             if self._result_pause is not None:
                 self._result_pause()
+        if (
+            not observation_failed
+            and isinstance(event.observation, TcadDomainObservation)
+            and event.observation.code == "saved_result_opened"
+        ):
+            self.events.append(
+                self.conversation_id,
+                "saved_result_ready",
+                {
+                    **self._base(event),
+                    "bundle_run_id": str(event.observation.data["bundle_run_id"]),
+                },
+            )
         if prepared_plan is not None and self._plan_pause is not None:
             self._plan_pause()
 

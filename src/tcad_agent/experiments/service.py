@@ -27,6 +27,7 @@ from tcad_agent.experiments.planning import (
     digest_plan,
     expected_bias_points,
 )
+from tcad_agent.recovery.proposals import RecoveryProposal, RecoveryProposalService
 from tcad_agent.runners.models import RunBudget
 from tcad_agent.science.completeness import ScientificCompletenessEngine
 from tcad_agent.validation.engine import ValidationEngine
@@ -48,6 +49,7 @@ class ExperimentEngine:
         backend: str,
         *,
         warnings: tuple[str, ...] = (),
+        recovery_proposal: RecoveryProposal | None = None,
     ) -> PreparedExperiment:
         manifest = CapabilityManifest.from_backend(backend)
         decision = CapabilityService().check(spec, manifest)
@@ -55,6 +57,12 @@ class ExperimentEngine:
             raise ExperimentCapabilityError(decision)
         completeness = ScientificCompletenessEngine().evaluate(spec, backend)
         plan = build_plan(spec, backend, warnings, completeness)
+        if recovery_proposal is not None:
+            # Check the reviewed candidate before including its comparison in approval.
+            RecoveryProposalService().record_comparison(
+                recovery_proposal, reviewed_spec=spec, new_bundle_id="pending-recovery-review"
+            )
+            plan["recovery_proposal"] = recovery_proposal.model_dump(mode="json")
         return PreparedExperiment(
             backend=backend,
             spec=spec,
@@ -63,6 +71,7 @@ class ExperimentEngine:
             capability_digest=digest_capability(manifest),
             completeness=completeness,
             warnings=warnings,
+            recovery_proposal=recovery_proposal,
         )
 
     def execute(
@@ -75,20 +84,31 @@ class ExperimentEngine:
         run_id: str | None = None,
     ) -> ExperimentBundle:
         if approved_plan_digest != prepared.plan_digest:
-            raise PlanDigestMismatchError(
-                "approval does not match the prepared experiment plan"
-            )
+            raise PlanDigestMismatchError("approval does not match the prepared experiment plan")
         if digest_plan(prepared.plan) != prepared.plan_digest:
             raise PlanDigestMismatchError("prepared experiment plan was modified")
         expected = self.prepare(
             prepared.spec,
             prepared.backend,
             warnings=prepared.warnings,
+            recovery_proposal=prepared.recovery_proposal,
         )
         if expected != prepared:
             raise PlanDigestMismatchError(
                 "prepared experiment no longer matches backend capabilities"
             )
+
+        validation_engine = ValidationEngine()
+        if prepared.recovery_proposal is not None:
+            limits = {
+                limit.name: limit.value for limit in prepared.recovery_proposal.validation_limits
+            }
+            if (
+                len(limits) != len(prepared.recovery_proposal.validation_limits)
+                or limits.keys() != validation_engine.acceptance_limits().keys()
+            ):
+                raise ValueError("Recovery requires a complete recorded acceptance limit mapping")
+            validation_engine = ValidationEngine(**limits)
 
         selected_run_id = run_id or f"run-{uuid4().hex[:12]}"
         root = output_root.resolve()
@@ -117,7 +137,7 @@ class ExperimentEngine:
             )
             native = binding.runner.run(job, budget)
             result = binding.adapter.normalize(native)
-            validation = ValidationEngine().validate(
+            validation = validation_engine.validate(
                 result,
                 expected_bias_points=expected_bias_points(prepared.spec),
                 spec=prepared.spec,
@@ -143,14 +163,20 @@ class ExperimentEngine:
                     result=result,
                     validation=validation,
                     events_path=ledger.path,
+                    completeness=prepared.completeness,
+                    recovery_comparison=RecoveryProposalService().record_comparison(
+                        prepared.recovery_proposal,
+                        reviewed_spec=prepared.spec,
+                        new_bundle_id=selected_run_id,
+                    )
+                    if prepared.recovery_proposal is not None
+                    else None,
                 )
             )
         except PlanDigestMismatchError:
             raise
         except Exception as exc:
-            raise ExperimentExecutionError(
-                f"Simulator execution failed: {exc}"
-            ) from exc
+            raise ExperimentExecutionError(f"Simulator execution failed: {exc}") from exc
         finally:
             shutil.rmtree(work, ignore_errors=True)
             shutil.rmtree(staging, ignore_errors=True)

@@ -37,13 +37,145 @@ def ide_client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(ide=services))
 
 
+def test_saved_result_reopens_after_session_store_is_replaced(
+    tmp_path, monkeypatch, result_bundle_factory
+):
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "data"))
+    root = tmp_path / "repo"
+    root.mkdir()
+    result_bundle_factory(RuntimePaths.from_workspace(root).bundle_root)
+    web = ide_client(tmp_path / "fresh-session")
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+    prefix = f"/api/workspaces/{workspace['id']}/saved-results"
+
+    listing = web.get(prefix)
+    view = web.get(prefix + "/run-0001")
+    dataset = web.get(prefix + "/run-0001/datasets/potential")
+
+    assert listing.status_code == 200
+    assert listing.json()["entries"][0]["bundle_run_id"] == "run-0001"
+    assert view.status_code == 200
+    assert view.json()["saved_bundle_id"] == "run-0001"
+    assert "agent_run_id" not in view.json()
+    assert dataset.status_code == 200
+    assert dataset.json()["values"] == [0.0, 0.41, 0.82]
+
+
+def test_saved_result_endpoint_refuses_corrupt_bundle(tmp_path, monkeypatch, result_bundle_factory):
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "data"))
+    root = tmp_path / "repo"
+    root.mkdir()
+    bundle = result_bundle_factory(RuntimePaths.from_workspace(root).bundle_root)
+    (bundle / "results" / "canonical.json").write_text("{}")
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+
+    response = web.get(f"/api/workspaces/{workspace['id']}/saved-results/run-0001")
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "invalid_result_bundle"
+
+
+def test_recalculate_saved_result_creates_review_not_execution(
+    tmp_path, monkeypatch, result_bundle_factory
+):
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "data"))
+    root = tmp_path / "repo"
+    root.mkdir()
+    result_bundle_factory(RuntimePaths.from_workspace(root).bundle_root)
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+
+    web.post(f"/api/workspaces/{workspace['id']}/session")
+    response = web.post(f"/api/workspaces/{workspace['id']}/saved-results/run-0001/recalculate")
+
+    assert response.status_code == 201
+    assert response.json()["state"] == "waiting_for_plan_approval"
+    plan = web.get(f"/api/runs/{response.json()['id']}/plan").json()
+    assert plan["status"] == "pending"
+    assert plan["prepared"]["spec"]["name"].endswith("recalculation")
+
+
+def test_recovery_prepares_numerical_diff_and_preserves_original_evidence(
+    tmp_path, monkeypatch, result_bundle_factory
+):
+    import hashlib
+    import json
+
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "data"))
+    root = tmp_path / "repo"
+    root.mkdir()
+    bundle = result_bundle_factory(RuntimePaths.from_workspace(root).bundle_root)
+    target = bundle / "validation" / "report.json"
+    report = json.loads(target.read_text())
+    next(item for item in report["checks"] if item["id"] == "all-points-converged")["status"] = (
+        "failed"
+    )
+    target.write_text(json.dumps(report))
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    raw = target.read_bytes()
+    manifest["artifacts"]["validation/report.json"] = {
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    before = (bundle / "experiment.json").read_bytes()
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+    prefix = f"/api/workspaces/{workspace['id']}/saved-results/run-0001"
+    web.post(f"/api/workspaces/{workspace['id']}/session")
+
+    response = web.post(prefix + "/recovery", json={"action": "refine_mesh"})
+
+    assert response.status_code == 201
+    assert response.json()["run"]["state"] == "waiting_for_plan_approval"
+    proposal = response.json()["proposal"]
+    assert proposal["automatic_execution"] is False
+    assert proposal["original_bundle_id"] == "run-0001"
+    assert proposal["changes"]
+    assert all(
+        "mesh" in change["path"] or "spacing" in change["path"] for change in proposal["changes"]
+    )
+    assert (bundle / "experiment.json").read_bytes() == before
+
+
+def test_legacy_recovery_refuses_unknown_acceptance_limits(
+    tmp_path, monkeypatch, result_bundle_factory
+):
+    import hashlib
+    import json
+
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "data"))
+    root = tmp_path / "repo"
+    root.mkdir()
+    bundle = result_bundle_factory(RuntimePaths.from_workspace(root).bundle_root)
+    target = bundle / "validation/report.json"
+    report = json.loads(target.read_text())
+    report.pop("acceptance_limits", None)
+    target.write_text(json.dumps(report))
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    raw = target.read_bytes()
+    manifest["artifacts"]["validation/report.json"] = {
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    web = ide_client(tmp_path)
+    workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
+    prefix = f"/api/workspaces/{workspace['id']}/saved-results/run-0001"
+    assert web.get(prefix).json()["recovery_actions"] == []
+    response = web.post(prefix + "/recovery", json={"action": "refine_mesh"})
+    assert response.status_code == 422
+    assert response.json()["code"] == "recovery_limits_unavailable"
+
+
 class ApprovalConversation:
     def __init__(self, conversation_id: UUID, callback) -> None:
         self.id = conversation_id
         self.callback = callback
-        self.state = SimpleNamespace(
-            execution_status=ConversationExecutionStatus.IDLE
-        )
+        self.state = SimpleNamespace(execution_status=ConversationExecutionStatus.IDLE)
         self.run_count = 0
 
     def send_message(self, message: str, sender: str | None = None) -> None:
@@ -68,9 +200,7 @@ class ApprovalConversation:
                     security_risk=SecurityRisk.LOW,
                 )
             )
-            self.state.execution_status = (
-                ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
-            )
+            self.state.execution_status = ConversationExecutionStatus.WAITING_FOR_CONFIRMATION
             return
         self.callback(
             MessageEvent(
@@ -149,9 +279,7 @@ def test_agent_run_and_approval_api_lifecycle(tmp_path: Path) -> None:
         json={"expected_revision": approval["revision"]},
     )
     assert approved.status_code == 200
-    assert services.store.list_run_permission_grants(UUID(run["id"])) == (
-        "git_mutation",
-    )
+    assert services.store.list_run_permission_grants(UUID(run["id"])) == ("git_mutation",)
     supervisor.join(UUID(run["id"]), timeout=2)
 
     messages = web.get(f"{session_url}/messages").json()
@@ -260,9 +388,7 @@ def test_run_changes_endpoint_handles_legacy_run_without_baseline(
     root = tmp_path / "repo"
     root.mkdir()
     workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
-    conversation = web.post(
-        f"/api/workspaces/{workspace['id']}/session"
-    ).json()
+    conversation = web.post(f"/api/workspaces/{workspace['id']}/session").json()
     run = store.create_run(UUID(conversation["id"]), uuid4())
 
     response = web.get(f"/api/runs/{run.id}/changes")
@@ -314,17 +440,13 @@ def test_workspace_session_api_is_idempotent_and_conversation_routes_are_removed
 
     first = web.post(session_url)
     second = web.post(session_url)
-    message = web.post(
-        f"{session_url}/messages", json={"content": "Inspect the repository"}
-    )
+    message = web.post(f"{session_url}/messages", json={"content": "Inspect the repository"})
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json() == first.json()
     assert message.status_code == 201
-    assert web.get(f"{session_url}/messages").json()[0]["content"] == (
-        "Inspect the repository"
-    )
+    assert web.get(f"{session_url}/messages").json()[0]["content"] == ("Inspect the repository")
     removed_routes = (
         ("post", f"/api/workspaces/{workspace['id']}/conversations"),
         ("get", f"/api/workspaces/{workspace['id']}/conversations"),
@@ -353,12 +475,8 @@ def test_workspace_session_switch_refuses_live_run_then_releases_terminal_state(
     second_root = tmp_path / "second-repository"
     first_root.mkdir()
     second_root.mkdir()
-    first_workspace = web.post(
-        "/api/workspaces", json={"path": str(first_root)}
-    ).json()
-    second_workspace = web.post(
-        "/api/workspaces", json={"path": str(second_root)}
-    ).json()
+    first_workspace = web.post("/api/workspaces", json={"path": str(first_root)}).json()
+    second_workspace = web.post("/api/workspaces", json={"path": str(second_root)}).json()
     first_url = f"/api/workspaces/{first_workspace['id']}/session"
     first_session = web.post(first_url).json()
     run = store.create_run(UUID(first_session["id"]), UUID(first_session["id"]))
@@ -392,9 +510,7 @@ def test_workspace_file_preview_classifies_and_formats_supported_text(
         "# Junction\n\nBuilt-in potential.\n", encoding="utf-8", newline="\n"
     )
     (root / "result.json").write_text('{"voltage":0.71,"converged":true}')
-    (root / "sweep.csv").write_text(
-        "bias,current\n0,0\n1,2e-6\n", encoding="utf-8", newline="\n"
-    )
+    (root / "sweep.csv").write_text("bias,current\n0,0\n1,2e-6\n", encoding="utf-8", newline="\n")
     web = ide_client(tmp_path)
     workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
 
@@ -422,9 +538,7 @@ def test_workspace_file_preview_classifies_and_formats_supported_text(
         "content": "# Junction\n\nBuilt-in potential.\n",
     }
     assert structured.json()["kind"] == "json"
-    assert structured.json()["content"] == (
-        '{\n  "voltage": 0.71,\n  "converged": true\n}'
-    )
+    assert structured.json()["content"] == ('{\n  "voltage": 0.71,\n  "converged": true\n}')
     assert table.json()["kind"] == "csv"
     assert table.json()["content"] == "bias,current\n0,0\n1,2e-6\n"
 
@@ -450,9 +564,7 @@ def test_workspace_results_endpoint_returns_verified_canonical_bundle(
     assert payload["result"]["backend"] == "devsim"
     assert payload["result"]["fields"]["potential"]["unit"] == "V"
     assert payload["result"]["datasets"]["potential"]["unit"] == "V"
-    assert payload["result"]["datasets"]["potential"]["axes"] == [
-        "position__potential"
-    ]
+    assert payload["result"]["datasets"]["potential"]["axes"] == ["position__potential"]
     assert payload["result"]["axes"]["position__potential"]["kind"] == "position"
     catalog = {entry["id"]: entry for entry in payload["catalog"]}
     assert catalog["potential"]["view"] == "curve"
@@ -612,6 +724,8 @@ def test_workspace_experiments_endpoint_lists_researcher_facing_projects(
             "project_path": "experiments/gaussian-implant-sweep",
             "execution_state": "completed",
             "validation_state": "needs_review",
+            "failed_check_count": None,
+            "unmet_deliverables": [],
             "artifacts": {
                 "plan": "experiments/gaussian-implant-sweep/PLAN.md",
                 "report": "experiments/gaussian-implant-sweep/REPORT.md",
@@ -891,9 +1005,7 @@ def test_workspace_editor_refuses_sensitive_truncated_and_binary_files(
     assert response.json()["code"] == "invalid_workspace_path"
 
 
-def test_local_directory_picker_returns_selected_directory(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_local_directory_picker_returns_selected_directory(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "selected-repository"
     root.mkdir()
     monkeypatch.setattr(
@@ -909,9 +1021,7 @@ def test_local_directory_picker_returns_selected_directory(
     assert response.json() == {"path": str(root)}
 
 
-def test_local_directory_picker_reports_cancellation(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_local_directory_picker_reports_cancellation(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         ide_routes,
         "select_directory",
@@ -925,9 +1035,7 @@ def test_local_directory_picker_reports_cancellation(
     assert response.json() == {"path": None}
 
 
-def test_linux_directory_picker_uses_available_native_dialog(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_linux_directory_picker_uses_available_native_dialog(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "chosen"
     root.mkdir()
     monkeypatch.setattr(platform, "system", lambda: "Linux")
@@ -939,9 +1047,7 @@ def test_linux_directory_picker_uses_available_native_dialog(
         lambda command: "/usr/bin/zenity" if command == "zenity" else None,
     )
 
-    def run_dialog(
-        command: list[str], **_options: object
-    ) -> subprocess.CompletedProcess[str]:
+    def run_dialog(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
         assert command == [
             "/usr/bin/zenity",
             "--file-selection",
@@ -1010,9 +1116,7 @@ def test_finite_sse_response_returns_complete_event_history(tmp_path: Path) -> N
             payload={"sequence": sequence},
         )
 
-    response = web.get(
-        f"{session_url}/events?follow=false"
-    )
+    response = web.get(f"{session_url}/events?follow=false")
 
     assert response.status_code == 200
     assert response.text.count("event: status_changed") == 205
@@ -1045,9 +1149,7 @@ def test_missing_child_workspace_path_is_a_sanitized_client_error(
     root.mkdir()
     workspace = web.post("/api/workspaces", json={"path": str(root)}).json()
 
-    response = web.get(
-        f"/api/workspaces/{workspace['id']}/entries?path=deleted-directory"
-    )
+    response = web.get(f"/api/workspaces/{workspace['id']}/entries?path=deleted-directory")
 
     assert response.status_code == 400
     assert response.json() == {

@@ -25,6 +25,8 @@ from pydantic import Field, ValidationError
 from tcad_agent.bundles.models import ExperimentBundle
 from tcad_agent.bundles.reader import BundleIntegrityError, BundleReader
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
+from tcad_agent.domain.studies import ACStudy, FrequencyStudy
+from tcad_agent.domain.units import QuantityValue
 from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter
 from tcad_agent.experiments.errors import (
     ExperimentCapabilityError,
@@ -34,11 +36,13 @@ from tcad_agent.experiments.errors import (
 from tcad_agent.experiments.models import PreparedExperiment
 from tcad_agent.experiments.projects import ExperimentProjector
 from tcad_agent.experiments.service import ExperimentEngine
+from tcad_agent.ide.result_catalog import SavedResultCatalog
 from tcad_agent.knowledge.web import (
     ResearchResponseError,
     ScientificWebResearch,
     UnsafeResearchURL,
 )
+from tcad_agent.prompting.models import ResolvedResearchIntent
 from tcad_agent.runners.models import RunBudget
 from tcad_agent.runtime.paths import RuntimePaths
 
@@ -97,6 +101,7 @@ class DomainTools:
         knowledge_index: Path | None = None,
         web_research: Any | None = None,
         experiment_engine: ExperimentEngineAPI | None = None,
+        research_intent: ResolvedResearchIntent | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         configured_index = os.getenv("TCAD_KNOWLEDGE_INDEX")
@@ -111,6 +116,7 @@ class DomainTools:
             cache_root=self._research_cache_root()
         )
         self.experiment_engine = experiment_engine or ExperimentEngine()
+        self.research_intent = research_intent
 
     def describe_spec(self) -> ToolResponse:
         """Expose the authoritative contract instead of making the model guess it."""
@@ -167,6 +173,100 @@ class DomainTools:
     def prepare_experiment(self, payload: dict[str, object], *, backend: str) -> ToolResponse:
         try:
             spec = ExperimentSpec.model_validate(payload)
+            if self.research_intent:
+                actual = {
+                    "study." + spec.study.kind,
+                    *("observable." + str(value) for value in spec.observables),
+                }
+                schedule = getattr(spec.study, "bias_schedule", None)
+                if schedule:
+                    actual.add("study." + schedule.kind)
+                if (
+                    isinstance(spec.study, ACStudy | FrequencyStudy)
+                    and schedule is None
+                    and len({contact.voltage_offset.to("V") for contact in spec.contacts}) == 1
+                ):
+                    # The small-signal contract solves and records the common-
+                    # potential equilibrium baseline before frequency samples.
+                    # A biased schedule does not implicitly deliver that state.
+                    actual.add("study.equilibrium")
+                sampling = next(
+                    (
+                        field
+                        for field in self.research_intent.fields
+                        if field.path == "profile_sampling.bias_values"
+                    ),
+                    None,
+                )
+                if sampling and (
+                    spec.profile_sampling is None
+                    or [value.to("V") for value in spec.profile_sampling.bias_values]
+                    != [
+                        QuantityValue.model_validate(value).to("V")
+                        if isinstance(value, str | dict)
+                        else float(value)
+                        for value in sampling.value
+                    ]
+                ):
+                    return ToolResponse(
+                        status="refused",
+                        code="requested_scope_missing",
+                        message="The plan must retain the confirmed spatial profile voltages.",
+                        data={"missing_capabilities": ["profile_sampling.bias_values"]},
+                    )
+                sampling_fields = {
+                    field.path.removeprefix("profile_sampling."): field.value
+                    for field in self.research_intent.fields
+                    if field.path.startswith("profile_sampling.")
+                }
+                policy_keys = ("mode", "method", "sample_count", "labels")
+                changed_policy = [
+                    "profile_sampling." + key
+                    for key in policy_keys
+                    if key in sampling_fields
+                    and (
+                        spec.profile_sampling is None
+                        or getattr(spec.profile_sampling, key)
+                        != (
+                            tuple(sampling_fields[key]) if key == "labels" else sampling_fields[key]
+                        )
+                    )
+                ]
+                if spec.profile_sampling and spec.profile_sampling.mode == "automatic":
+                    if sampling_fields.get("mode") != "automatic":
+                        changed_policy.append("profile_sampling.mode")
+                if changed_policy:
+                    return ToolResponse(
+                        status="refused",
+                        code="requested_scope_missing",
+                        message=(
+                            "The plan must retain the confirmed profile-selection policy; "
+                            "automatic selection requires your authorization."
+                        ),
+                        data={"missing_capabilities": sorted(set(changed_policy))},
+                    )
+                missing = sorted(
+                    capability
+                    for capability in self.research_intent.selected_capabilities
+                    if capability.startswith(("study.", "observable."))
+                    and {
+                        # Match ExperimentSpec's schema-1.0 migration. This
+                        # alias is density, never an absolute current in A.
+                        "observable.terminal_current": "observable.terminal_current_density",
+                    }.get(capability, capability)
+                    not in actual
+                )
+                if missing:
+                    return ToolResponse(
+                        status="refused",
+                        code="requested_scope_missing",
+                        message=(
+                            "The plan omits confirmed analyses or outputs. Represent them in "
+                            "ExperimentSpec, not metadata; do not reduce the request without "
+                            "researcher consent."
+                        ),
+                        data={"missing_capabilities": missing},
+                    )
             prepared = self.experiment_engine.prepare(spec, backend)
         except ValidationError as exc:
             return ToolResponse(
@@ -249,9 +349,8 @@ class DomainTools:
                     "run_id": bundle.run_id,
                     "state": bundle.state,
                     "execution_state": bundle.execution_state or bundle.state,
-                    "validation_state": bundle.validation_state or (
-                        "passed" if bundle.state == "completed" else "failed"
-                    ),
+                    "validation_state": bundle.validation_state
+                    or ("passed" if bundle.state == "completed" else "failed"),
                 },
                 "experiment": project.model_dump(mode="json"),
             },
@@ -356,11 +455,7 @@ class DomainTools:
                     ),
                 }
             )
-        failed = [
-            check
-            for check in verified.validation.checks
-            if check.status == "failed"
-        ]
+        failed = [check for check in verified.validation.checks if check.status == "failed"]
         return ToolResponse(
             status="ok",
             code="bundle_inspected",
@@ -389,6 +484,47 @@ class DomainTools:
 
     def read_canonical_summary(self, run_id: str) -> ToolResponse:
         return self.inspect_bundle(run_id)
+
+    def list_saved_results(self) -> ToolResponse:
+        try:
+            listing = SavedResultCatalog().list(self.workspace)
+        except ValueError:
+            return ToolResponse(
+                status="refused",
+                code="saved_results_unavailable",
+                message="Saved scientific evidence is unavailable or failed integrity checks.",
+            )
+        return ToolResponse(
+            status="ok",
+            code="saved_results_listed",
+            message=(
+                "Verified saved results can be reopened in the native Results Workbench "
+                "without recalculating."
+            ),
+            data=listing.model_dump(mode="json"),
+        )
+
+    def open_saved_result(self, run_id: str) -> ToolResponse:
+        try:
+            view = SavedResultCatalog().read(self.workspace, run_id)
+        except ValueError:
+            return ToolResponse(
+                status="refused",
+                code="saved_result_unavailable",
+                message="The requested result is unavailable or failed integrity checks.",
+            )
+        return ToolResponse(
+            status="ok",
+            code="saved_result_opened",
+            message=(
+                "Open the verified native Results Workbench. No packages or HTML plots are needed."
+            ),
+            data={
+                "bundle_run_id": run_id,
+                "name": view.experiment.name,
+                "dataset_count": len(view.result.datasets),
+            },
+        )
 
     def validate_bundle(self, run_id: str) -> ToolResponse:
         inspected = self.inspect_bundle(run_id)
@@ -521,6 +657,8 @@ class TcadDomainAction(Action):
         "execute_approved_plan",
         "validate_result",
         "inspect_bundle",
+        "list_saved_results",
+        "open_saved_result",
         "read_canonical_summary",
         "validate_bundle",
         "search_knowledge",
@@ -540,8 +678,10 @@ class TcadDomainObservation(Observation):
 
 
 class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
-    def __init__(self, workspace: Path) -> None:
-        self.tools = build_tools(workspace)
+    def __init__(
+        self, workspace: Path, research_intent: ResolvedResearchIntent | None = None
+    ) -> None:
+        self.tools = DomainTools(workspace, research_intent=research_intent)
 
     def __call__(
         self,
@@ -550,6 +690,10 @@ class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
     ) -> TcadDomainObservation:
         if action.operation == "describe_spec":
             response = self.tools.describe_spec()
+        elif action.operation == "list_saved_results":
+            response = self.tools.list_saved_results()
+        elif action.operation == "open_saved_result":
+            response = self.tools.open_saved_result(str(action.payload.get("run_id", "")))
         elif action.operation == "prepare_experiment":
             response = self.tools.prepare_experiment(
                 action.payload, backend=action.backend or "devsim"
@@ -642,7 +786,12 @@ class TcadDomainTool(ToolDefinition[TcadDomainAction, TcadDomainObservation]):
                     idempotentHint=False,
                     openWorldHint=True,
                 ),
-                executor=TcadDomainExecutor(workspace),
+                executor=TcadDomainExecutor(
+                    workspace,
+                    ResolvedResearchIntent.model_validate(params["research_intent"])
+                    if params.get("research_intent")
+                    else None,
+                ),
             ),
         )
 

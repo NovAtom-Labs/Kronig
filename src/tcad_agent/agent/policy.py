@@ -379,6 +379,8 @@ def action_summary(event: ActionEvent) -> str:
         return "finish: complete response"
     if isinstance(action, TcadDomainAction):
         summaries = {
+            "list_saved_results": "Finding verified saved results",
+            "open_saved_result": "Opening verified scientific results",
             "describe_spec": "Reviewing the experiment specification",
             "validate_spec": "Checking the experiment specification",
             "prepare_experiment": "Creating experiment project and approval plan",

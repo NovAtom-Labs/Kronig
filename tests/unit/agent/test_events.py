@@ -38,6 +38,38 @@ def _services(tmp_path: Path):
     return store, events, conversations, conversation, run
 
 
+def test_saved_result_tool_opens_product_view_without_execution_record(tmp_path):
+    store, events, conversations, conversation, run = _services(tmp_path)
+    bridge = AgentEventBridge(
+        conversation.id, run.id, store, events, conversations, workspace=tmp_path
+    )
+    action = _domain_action("open_saved_result", risk=SecurityRisk.LOW)
+    bridge(action)
+    bridge(
+        ObservationEvent(
+            tool_name="tcad_domain",
+            tool_call_id=action.tool_call_id,
+            action_id=action.id,
+            observation=TcadDomainObservation.from_text(
+                text="Verified result ready",
+                status="ok",
+                code="saved_result_opened",
+                message="Verified result ready",
+                data={"bundle_run_id": "run-0001"},
+            ),
+        )
+    )
+
+    opened = [
+        event
+        for event in events.list_after(conversation.id, 0)
+        if event.kind == "saved_result_ready"
+    ]
+    assert len(opened) == 1
+    assert opened[0].payload["bundle_run_id"] == "run-0001"
+    assert store.list_experiment_results_for_workspace(conversation.workspace_id) == ()
+
+
 def _terminal_action(command: str, *, risk: SecurityRisk) -> ActionEvent:
     return ActionEvent(
         thought=[TextContent(text="private chain of thought")],
@@ -119,9 +151,7 @@ def test_event_bridge_persists_normalized_tool_and_assistant_events(
     )
     answer = MessageEvent(
         source="agent",
-        llm_message=Message(
-            role="assistant", content=[TextContent(text="Completed safely")]
-        ),
+        llm_message=Message(role="assistant", content=[TextContent(text="Completed safely")]),
     )
 
     bridge(action)
@@ -234,9 +264,7 @@ def test_scientific_web_research_is_visible_and_reuses_run_network_grant(
     assert grant_events[-1].payload["permission_category"] == "network_access"
 
 
-def test_on_stream_never_persists_private_model_reasoning(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_on_stream_never_persists_private_model_reasoning(tmp_path: Path, monkeypatch) -> None:
     store, events, conversations, conversation, run = _services(tmp_path)
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "secret-value")
     bridge = AgentEventBridge(conversation.id, run.id, store, events, conversations)
@@ -251,9 +279,7 @@ def test_on_stream_never_persists_private_model_reasoning(
             content="thinking about it, token secret-value",
         )
     )
-    bridge.on_stream(
-        StreamAborted(item_id="item-1", attempt=1, reason="cancelled")
-    )
+    bridge.on_stream(StreamAborted(item_id="item-1", attempt=1, reason="cancelled"))
 
     activity = events.list_after(conversation.id, 0)
     serialized = " ".join(str(event.payload) for event in activity)
@@ -271,9 +297,7 @@ def test_on_stream_never_persists_private_model_reasoning(
     assert all("content" not in event.payload for event in activity[-2:])
 
 
-def test_task_plan_exposes_only_safe_operational_items(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_task_plan_exposes_only_safe_operational_items(tmp_path: Path, monkeypatch) -> None:
     store, events, conversations, conversation, run = _services(tmp_path)
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "secret-value")
     bridge = AgentEventBridge(conversation.id, run.id, store, events, conversations)
@@ -315,9 +339,7 @@ def test_structured_phase_metadata_uses_typed_command_semantics() -> None:
         _terminal_action("cat checks/input.txt", risk=SecurityRisk.LOW)
     )
     module_validation = structured_action_metadata(
-        _terminal_action(
-            f"{shlex.quote(sys.executable)} -m pytest -q", risk=SecurityRisk.LOW
-        )
+        _terminal_action(f"{shlex.quote(sys.executable)} -m pytest -q", risk=SecurityRisk.LOW)
     )
     formatting = structured_action_metadata(
         _terminal_action("ruff format src", risk=SecurityRisk.LOW)
@@ -476,8 +498,7 @@ def test_prepared_experiment_observation_creates_typed_plan_gate(
     ][-1]
     project_path = artifacts.markdown_path.parent.relative_to(tmp_path).as_posix()
     assert completed.payload["output"] == (
-        f"Experiment project created at {project_path}. "
-        "The approval plan is ready for review."
+        f"Experiment project created at {project_path}. The approval plan is ready for review."
     )
     assert completed.payload["artifact_paths"] == [
         artifacts.markdown_path.relative_to(tmp_path).as_posix(),
@@ -534,8 +555,7 @@ def test_executed_experiment_observation_registers_managed_result(
     assert record.execution_state == "completed"
     assert record.validation_state == "needs_review"
     result_event = [
-        event for event in events.list_after(conversation.id, 0)
-        if event.kind == "result_ready"
+        event for event in events.list_after(conversation.id, 0) if event.kind == "result_ready"
     ][-1]
     assert result_event.payload["run_id"] == str(run.id)
     assert result_event.payload["validation_state"] == "needs_review"
@@ -659,8 +679,7 @@ def test_executed_experiment_observation_records_structured_outcome(
     assert outcome.failed_check_count == 1
     assert outcome.unmet_deliverables == ("current",)
     result_event = [
-        event for event in events.list_after(conversation.id, 0)
-        if event.kind == "result_ready"
+        event for event in events.list_after(conversation.id, 0) if event.kind == "result_ready"
     ][-1]
     assert result_event.payload["overall_state"] == "needs_attention"
     assert result_event.payload["failed_check_count"] == 1

@@ -10,9 +10,7 @@ from pydantic import Field, JsonValue
 
 from tcad_agent.domain.models import StrictModel
 
-type WorkspaceFileKind = Literal[
-    "text", "markdown", "json", "csv", "tsv", "image", "pdf", "binary"
-]
+type WorkspaceFileKind = Literal["text", "markdown", "json", "csv", "tsv", "image", "pdf", "binary"]
 
 
 class GitSnapshot(StrictModel):
@@ -189,6 +187,8 @@ class ExperimentProjectSummary(StrictModel):
     project_path: str
     execution_state: Literal["failed", "completed"]
     validation_state: Literal["passed", "needs_review", "failed"]
+    failed_check_count: int | None = Field(default=None, ge=0)
+    unmet_deliverables: tuple[str, ...] = ()
     artifacts: dict[str, str]
 
 

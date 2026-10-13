@@ -55,6 +55,30 @@ def test_rejects_unknown_keys() -> None:
         ExperimentSpec.model_validate(data)
 
 
+def test_explicit_profile_sampling_is_typed_and_requires_solved_biases():
+    data = minimal_spec() | {"profile_sampling": {"bias_values": ["0 V", "0.2 V"]}}
+    spec = ExperimentSpec.model_validate(data)
+    assert [value.to("V") for value in spec.profile_sampling.bias_values] == [0, 0.2]
+    data["profile_sampling"] = {"bias_values": ["0.15 V"]}
+    with pytest.raises(ValidationError, match="approved bias schedule"):
+        ExperimentSpec.model_validate(data)
+
+
+def test_authorized_automatic_sampling_records_reviewable_schedule_criteria():
+    data = minimal_spec() | {
+        "profile_sampling": {
+            "mode": "automatic",
+            "method": "schedule_quantiles",
+            "sample_count": 3,
+        }
+    }
+    spec = ExperimentSpec.model_validate(data)
+    assert spec.profile_bias_values_v() == (0.0, 0.1, 0.2)
+    data["profile_sampling"] = {"mode": "automatic", "sample_count": 3}
+    with pytest.raises(ValidationError, match="selection method"):
+        ExperimentSpec.model_validate(data)
+
+
 def test_rejects_incompatible_units() -> None:
     data = minimal_spec()
     data["regions"][0]["x1"] = "5 V"
@@ -196,9 +220,7 @@ def test_richardson_constant_is_only_valid_for_metal_contacts() -> None:
 
 def test_metal_contact_rejects_missing_work_function() -> None:
     with pytest.raises(ValidationError, match="metal work-function contact"):
-        Contact.model_validate(
-            {"id": "anode", "location": "x_min", "kind": "metal_work_function"}
-        )
+        Contact.model_validate({"id": "anode", "location": "x_min", "kind": "metal_work_function"})
 
 
 def test_ohmic_contact_rejects_work_function() -> None:

@@ -54,9 +54,7 @@ class PromptCompiler:
         original_sha256 = self._sha256(original_prompt)
         normalized_capabilities = dict(sorted(capability_hashes.items()))
         for name, digest in normalized_capabilities.items():
-            invalid_character = any(
-                character not in "0123456789abcdef" for character in digest
-            )
+            invalid_character = any(character not in "0123456789abcdef" for character in digest)
             if len(digest) != 64 or invalid_character:
                 raise PromptCompilationError(f"capability hash is invalid: {name}")
 
@@ -88,9 +86,7 @@ class PromptCompiler:
             "researcher_input": {
                 "original_prompt": original_prompt,
                 "original_sha256": original_sha256,
-                "clarification_answers": [
-                    answer.model_dump(mode="json") for answer in answers
-                ],
+                "clarification_answers": [answer.model_dump(mode="json") for answer in answers],
             },
             "resolved_intent": decision.intent.model_dump(mode="json"),
             "preparation": {
@@ -100,9 +96,7 @@ class PromptCompiler:
                 "runtime_research_reason": decision.runtime_research_reason,
             },
             "workspace_context": workspace.model_dump(mode="json"),
-            "knowledge_context": [
-                item.model_dump(mode="json") for item in evidence
-            ],
+            "knowledge_context": [item.model_dump(mode="json") for item in evidence],
             "capability_hashes": normalized_capabilities,
             "execution_contract": {
                 "use_full_repository_agent": True,

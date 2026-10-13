@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Literal
 
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
+from tcad_agent.recovery.proposals import RecoveryComparison
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
+from tcad_agent.science.models import ScientificCompletenessReport
 from tcad_agent.validation.models import ValidationReport
 
 
@@ -17,6 +19,8 @@ class BundleInputs(StrictModel):
     result: CanonicalResult
     validation: ValidationReport
     events_path: Path
+    completeness: ScientificCompletenessReport | None = None
+    recovery_comparison: RecoveryComparison | None = None
 
 
 class ArtifactRecord(StrictModel):

@@ -33,9 +33,7 @@ class IntentField(StrictModel):
             raise ValueError("repository origin requires a source reference")
         if self.origin is IntentOrigin.EVIDENCE:
             if not self.rationale or not self.evidence_refs:
-                raise ValueError(
-                    "evidence origin requires a rationale and evidence references"
-                )
+                raise ValueError("evidence origin requires a rationale and evidence references")
         if self.origin is IntentOrigin.RESEARCHER and self.evidence_refs:
             raise ValueError("researcher intent cannot be attributed to evidence")
         return self
@@ -43,26 +41,21 @@ class IntentField(StrictModel):
 
 class ClarificationQuestion(StrictModel):
     id: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
-    field_path: str = Field(
-        min_length=1, max_length=240, pattern=r"^[a-z][a-z0-9_.-]*$"
-    )
+    field_path: str = Field(min_length=1, max_length=240, pattern=r"^[a-z][a-z0-9_.-]*$")
     prompt: str = Field(min_length=1, max_length=1000)
     reason: str = Field(min_length=1, max_length=1000)
     required: bool = True
 
 
 class ClarificationAnswer(StrictModel):
-    question_id: str = Field(
-        min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$"
-    )
+    question_id: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     answer: str = Field(min_length=1, max_length=10_000)
 
 
 class ResolvedResearchIntent(StrictModel):
-    task_kind: Literal[
-        "repository_change", "simulation", "analysis", "explanation", "mixed"
-    ]
+    task_kind: Literal["repository_change", "simulation", "analysis", "explanation", "mixed"]
     objective: str = Field(min_length=1, max_length=4000)
+    selected_capabilities: tuple[str, ...] = Field(default=(), max_length=64)
     fields: tuple[IntentField, ...] = Field(default=(), max_length=256)
     exclusions: tuple[str, ...] = Field(default=(), max_length=64)
     deliverables: tuple[str, ...] = Field(default=(), max_length=64)
@@ -87,9 +80,7 @@ class PreparationDecision(StrictModel):
     unresolved_critical: tuple[str, ...] = Field(default=(), max_length=64)
     warnings: tuple[str, ...] = Field(default=(), max_length=64)
     runtime_research_needed: bool = False
-    runtime_research_reason: str | None = Field(
-        default=None, min_length=1, max_length=1200
-    )
+    runtime_research_reason: str | None = Field(default=None, min_length=1, max_length=1200)
 
     @model_validator(mode="after")
     def validate_status_payload(self) -> Self:

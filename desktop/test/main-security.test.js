@@ -12,6 +12,7 @@ const {
   installPermissionPolicy,
   resultWindowUrl,
   sanitizeDiagnosticSummary,
+  retireReplacedWindow,
 } = require("../src/main");
 
 test("denies every renderer permission request and check", () => {
@@ -73,6 +74,17 @@ test("clipboard diagnostic summaries are bounded and redact secrets", () => {
   assert.match(summary, /diag-0123456789abcdef/);
   assert.doesNotMatch(summary, /secret-value/);
   assert.ok(summary.length <= 4096);
+});
+
+test("saved-result popouts accept bounded bundle identities without a chat run", () => {
+  const payload = {workspaceId:"11111111-1111-4111-8111-111111111111", bundleRunId:"run-04d255359017"};
+  assert.equal(resultWindowUrl("http://127.0.0.1:43127", payload),
+    "http://127.0.0.1:43127/workspaces/11111111-1111-4111-8111-111111111111?saved_bundle_id=run-04d255359017");
+  for (const bundleRunId of ["../outside", "x/y", "", "x".repeat(129)]) {
+    assert.throws(() => resultWindowUrl("http://127.0.0.1:43127", {...payload,bundleRunId}), /identifier/);
+  }
+  assert.throws(() => resultWindowUrl("http://127.0.0.1:43127", {...payload,
+    runId:"22222222-2222-4222-8222-222222222222"}), /identifier/);
 });
 
 test("launch token contains at least 32 random bytes", () => {
@@ -152,6 +164,16 @@ test("window close keeps the renderer alive until graceful shutdown completes", 
   closeHandler({preventDefault() { prevented = true; }});
   assert.equal(prevented, false);
   assert.equal(quitCalls, 1);
+});
+
+test("retiring a replaced window does not initiate application quit", () => {
+  let retired = false;
+  const oldWindow = {destroy() {retired = true;}, close() {throw new Error("replacement initiated quit");}};
+  retireReplacedWindow(oldWindow, {});
+  assert.equal(retired, true);
+  retired = false;
+  retireReplacedWindow(oldWindow, oldWindow);
+  assert.equal(retired, false);
 });
 
 test("application quit remains open when backend work is active", async () => {

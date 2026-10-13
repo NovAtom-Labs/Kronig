@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tcad_agent.desktop.devsim_runner import (
+    DevsimSidecarRunner,
     configure_bundled_math_runtime,
     execute_manifest,
     main,
@@ -148,3 +149,29 @@ def test_manifest_writer_refuses_compiled_inputs_outside_workspace(
 
     with pytest.raises(ValueError, match="inside its compiled workspace"):
         write_compiled_job_manifest(job, RunBudget(seconds=30))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process group contract")
+def test_desktop_worker_stays_in_the_supervised_backend_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Detaching a desktop simulator from its group creates an owner-loss race."""
+    import sys
+
+    monkeypatch.setenv("AGENT_KRONIG_DESKTOP_OWNER_PIPE", "1")
+    _manifest(tmp_path)
+    worker = tmp_path / "worker"
+    worker.write_text(
+        f"#!{Path(sys.executable).resolve()}\nimport os,pathlib\n"
+        "pathlib.Path('worker-group.txt').write_text(str(os.getpgrp()))\n"
+    )
+    worker.chmod(0o700)
+    job = CompiledJob(
+        backend="devsim", entrypoint=tmp_path / "run_devsim.py", arguments=("input.json",),
+        input_files=(tmp_path / "input.json", tmp_path / "run_devsim.py"),
+        input_digest=hashlib.sha256((tmp_path / "input.json").read_bytes()).hexdigest(),
+        runtime_digest=hashlib.sha256((tmp_path / "run_devsim.py").read_bytes()).hexdigest(),
+        compiler_version="0.1.0",
+    )
+    DevsimSidecarRunner(worker).run(job, RunBudget(seconds=5))
+    assert int((tmp_path / "worker-group.txt").read_text()) == os.getpgrp()

@@ -175,6 +175,7 @@
 
   function researchTrail(snapshot, nowMs = Date.now()) {
     const state = snapshot?.runState || "idle";
+    const activelyWorking = ["queued", "running"].includes(state);
     if (state === "idle") return {
       visible: false, stages: [], recent: [], current: null, recovery: null,
     };
@@ -204,48 +205,37 @@
       .map((step, index) => step.status === "failed" ? index : -1)
       .filter((index) => index >= 0);
     const recoveredFailures = failedIndexes.filter((failedIndex) => (
-      steps.slice(failedIndex + 1).some((step) => ["completed", "running"].includes(step.status))
+      steps.slice(failedIndex + 1).some((step) => step.status === "completed"
+        && step.toolName === steps[failedIndex].toolName
+        && step.arguments?.operation === steps[failedIndex].arguments?.operation)
       && state !== "failed"
     ));
     let stages = groups.slice(-4).map((group) => {
       const [phase, activeLabel, completedLabel] = phaseLabels[group.key] || phaseLabels.Unclassified;
-      const running = group.steps.some((step) => step.status === "running");
+      const unfinished = group.steps.some((step) => step.status === "running");
+      const running = activelyWorking && unfinished;
+      const stopped = !activelyWorking && unfinished;
       const terminalFailure = state === "failed" && group.steps.at(-1)?.status === "failed";
       return {
         id: `research-${group.key.toLowerCase()}`,
         phase,
-        label: running ? activeLabel : completedLabel,
+        label: stopped ? `${phase} paused or stopped` : running ? activeLabel : completedLabel,
         detail: `${group.steps.length} ${group.steps.length === 1 ? "action" : "actions"} recorded`,
         actionCount: group.steps.length,
-        status: running ? "running" : terminalFailure ? "failed" : "completed",
+        status: running ? "running" : terminalFailure ? "failed" : stopped ? "stopped" : "completed",
       };
     });
-    const preparationPhaseLabels = {
-      understanding_request: "Request",
-      reviewing_workspace: "Context",
-      consulting_local_knowledge: "Knowledge",
-      reasoning_about_scientific_intent: "Intent",
-      compiling_request: "Compile",
-      checking_local_evidence: "Evidence",
-    };
     const preparationStages = Array.isArray(snapshot?.preparationStages)
       ? snapshot.preparationStages
       : [];
     if (!steps.length && preparationStages.length) {
-      stages = preparationStages.slice(-5).map((stage) => ({
-        id: `preparation-${stage.phase}`,
-        phase: preparationPhaseLabels[stage.phase] || "Request",
-        label: stage.label,
-        detail: stage.status === "running"
-          ? liveDuration(stage.startedAt, nowMs) || "In progress"
-          : "Complete",
-        actionCount: 0,
-        status: stage.status,
-      }));
+      stages = [];
     }
-    let current = stages.find((stage) => stage.status === "running") || null;
+    let current = activelyWorking
+      ? stages.find((stage) => stage.status === "running") || null
+      : null;
     const runningStep = [...steps].reverse().find((step) => step.status === "running");
-    if (runningStep) {
+    if (activelyWorking && runningStep) {
       const update = [...chatTimeline({...snapshot, inference: null})]
         .reverse()
         .find((entry) => entry.id === runningStep.id);
@@ -285,11 +275,23 @@
         animated: true,
       };
     }
-    if (current && current.animated === undefined) current.animated = current.status === "running";
+    if (current && current.animated === undefined) {
+      current.animated = activelyWorking && current.status === "running";
+    }
+    if (current && !activelyWorking) current.animated = false;
+    if (state === "failed" && snapshot?.terminalDetail) {
+      current = {label: failurePresentation(snapshot).summary, status: "failed", animated: false};
+    }
+    const resultsNeedReview = state === "blocked"
+      && snapshot?.resultReady?.overallState === "needs_attention";
+    if (resultsNeedReview) {
+      current = {label: snapshot.terminalDetail || "Review scientific checks in Results",
+        status: "completed", animated: false};
+    }
     const titles = {
       queued: "Preparing request",
       completed: "Research record",
-      failed: "Research stopped",
+      failed: "Research failed",
       blocked: "Research blocked",
       cancelled: "Research cancelled",
       waiting_for_approval: "Research awaiting approval",
@@ -306,15 +308,17 @@
         : ["queued", "running"].includes(state)
           ? "Live"
           : "No tool actions";
-    const recent = chatTimeline(snapshot).slice(-4).map((update) => ({
+    const recent = (preparationStages.length && !steps.length ? [] : chatTimeline(snapshot).slice(-4)).map((update) => ({
       id: update.id,
       phase: update.phase,
       label: update.label,
+      detail: steps.find((step) => step.id === update.id)?.toolName === "terminal"
+        ? null : update.detail,
       status: update.status,
     }));
     return {
       visible: true,
-      title: titles[state] || "Research in progress",
+      title: resultsNeedReview ? "Results need review" : titles[state] || "Research in progress",
       meta,
       stages,
       recent,
@@ -323,6 +327,7 @@
         ? "Intermediate corrections were resolved automatically. No researcher action was required."
         : null,
       state,
+      diagnostics: state === "failed" ? failurePresentation(snapshot).diagnostics : "",
     };
   }
 
@@ -376,9 +381,10 @@
       warnings.push(changeSet.manifest_warning || "The workspace scan reached its safety limit. Create, delete, and rename attribution may be incomplete.");
     }
     if (failed) warnings.push(`Failed action: ${failed.label}`);
+    if (snapshot?.terminalDetail) warnings.push(state === "failed" ? failurePresentation(snapshot).summary : sanitizeDiagnostic(snapshot.terminalDetail));
     (snapshot?.technicalEvents || [])
       .filter((event) => ["agent_error", "change_baseline_warning"].includes(event.kind))
-      .forEach((event) => warnings.push(String(event.payload?.detail || event.kind)));
+      .forEach((event) => warnings.push(event.kind === "agent_error" ? failurePresentation(snapshot).summary : sanitizeDiagnostic(event.payload?.detail || event.kind)));
     const nextActions = [];
     if (scientificOutcome?.overallState === "needs_attention") {
       nextActions.push("Review failed checks and unmet requested outputs in Results.");
@@ -406,7 +412,7 @@
       changedPaths,
       completedSteps: successful.length,
       failedStep: failed?.label || null,
-      failureOutput: failed?.output || null,
+      failureOutput: failed?.output ? sanitizeDiagnostic(failed.output) : null,
       lastSuccessfulStep: successful.at(-1)?.label || null,
       phases: unique(steps.map((step) => step.phase)),
       commands: unique(steps.map((step) => step.command)),
@@ -415,6 +421,8 @@
       artifacts: (changeSet?.files || []).filter((change) => change.artifact).map((change) => change.path),
       provenance: unique(successful.map((step) => step.provenance).filter((item) => typeof item === "string")),
       warnings,
+      failureSummary: failurePresentation(snapshot).summary,
+      diagnostics: failurePresentation(snapshot).diagnostics,
       nextActions,
       executionState: scientificOutcome?.executionState || null,
       validationState: scientificOutcome?.validationState || null,
@@ -439,6 +447,55 @@
       );
     }
     return value;
+  }
+
+  function sanitizeDiagnostic(value) {
+    return String(value || "")
+      .replace(/(["'][^"']*(?:api[_-]?key|token|secret|password|credential|authorization|signature)[^"']*["']\s*:\s*)["'][^"']*["']/gi, '$1"[redacted]"')
+      .replace(/(authorization\s*[:=]\s*(?:bearer\s+)?)[^\s,;]+/gi, "$1[redacted]")
+      .replace(/((?:[\w-]*(?:api[_-]?key|token|secret|password|credential|signature)[\w-]*|AWS_ACCESS_KEY_ID)\s*[=:]\s*)[^\s,;&]+/gi, "$1[redacted]")
+      .replace(/((?:https?:\/\/)[^\s/@:]+:)[^\s/@]+@/gi, "$1[redacted]@")
+      .replace(/(?:[A-Za-z]:[\\/]|\/)[^\s]*[\\/](?:\.claude|\.codex|sessions)[\\/][^\s]*/gi, "[internal session path]");
+  }
+
+  function failurePresentation(snapshot) {
+    const failedStep = (snapshot?.steps || []).find((step) => step.status === "failed" && step.toolName !== "think");
+    const diagnostics = unique([
+      snapshot?.terminalDetail,
+      failedStep?.output,
+      ...(snapshot?.technicalEvents || []).filter((event) => event.kind === "agent_error")
+        .map((event) => event.payload?.detail),
+    ]).map(sanitizeDiagnostic).join("\n\n");
+    const technical = /Exception|Traceback|SDK|tool_use|\/sessions\/|\.claude|\.codex/i.test(diagnostics);
+    return {
+      summary: technical ? "The research service could not finish this request. Review the diagnostic before retrying."
+        : sanitizeDiagnostic(snapshot?.terminalDetail) || "The research task could not finish. Review the failed action before retrying.",
+      diagnostics,
+    };
+  }
+
+  function inputLedger(records) {
+    const authorities = [
+      ["researcher_owned", "Researcher-reviewed inputs"],
+      ["deterministically_derived", "Derived contract values"],
+      ["evidence_backed_expert_suggestion", "Reviewed expert settings"],
+      ["platform_reviewed_default", "Platform-controlled settings"],
+      ["simulator_implementation_detail", "Simulator implementation"],
+      ["unsupported_or_unknown", "Unresolved authority"],
+    ];
+    const values = Array.isArray(records) ? records : [];
+    const known = new Set(authorities.map(([authority]) => authority));
+    return authorities.map(([authority, label]) => ({
+      authority, label,
+      records: values.filter((record) => (known.has(record.authority) ? record.authority : "unsupported_or_unknown") === authority)
+        .map((record) => ({
+          path: String(record.path || ""), quantity: String(record.quantity || record.path || "Input"),
+          value: record.value === undefined || record.value === null ? "Unavailable" : JSON.stringify(record.value),
+          status: String(record.status || "unknown"), source: String(record.source?.id || "Source unavailable"),
+          digest: record.source?.digest || null, derivation: record.derivation || null,
+          rationale: String(record.rationale || ""),
+        })),
+    })).filter((group) => group.records.length);
   }
 
   function reversibilityFor(permissionCategory, payload) {
@@ -553,6 +610,7 @@
       planPath,
       planDigest: String(record?.plan_digest || ""),
       revision: Number(record?.revision || 0),
+      inputLedger: inputLedger(completeness),
     };
   }
 
@@ -566,7 +624,12 @@
       statusLabel = "Validated";
       statusTone = "success";
     } else if (experiment?.validation_state === "needs_review") {
-      statusLabel = "Review needed";
+      const count = experiment.failed_check_count;
+      statusLabel = Number.isInteger(count) && count > 0
+        ? `${count} validation ${count === 1 ? "check" : "checks"} failed`
+        : experiment.unmet_deliverables?.length
+          ? `${experiment.unmet_deliverables.length} requested outputs incomplete`
+          : "Review needed";
       statusTone = "warning";
     } else if (experiment?.validation_state === "failed") {
       statusLabel = "Checks failed";
@@ -597,6 +660,9 @@
     approvalKeyAction,
     chatTimeline,
     durationText,
+    failurePresentation,
+    inputLedger,
+    sanitizeDiagnostic,
     experimentProjectView,
     moveApproval,
     outcomeSummary,

@@ -61,6 +61,11 @@ Agent Kronig scientific research policy:
 - Evidence guides execution rather than blocking it. Do not stop merely because a
   perfect source is unavailable. Build the strongest defensible candidate, compile or
   run it, inspect the evidence, repair failures, and validate canonical results.
+- Before constructing an ExperimentSpec, always call describe_spec. Never guess field
+  names, units, enum values, or missing scientific inputs from the intent summary.
+- Preserve explicit profile voltages in profile_sampling.bias_values. For small-signal
+  response over DC bias, use an ac/frequency study with its typed bias_schedule, not
+  an AC frequency note attached to a DC-only plan.
 - For a controlled simulation, call prepare_experiment first. The product stores and
   opens PLAN.md and owns the approval gate. After prepare_experiment succeeds, do not
   dump the plan into chat and do not execute until the product sends the exact approved
@@ -75,6 +80,10 @@ Agent Kronig scientific research policy:
   Python commands.
 - Never install plotting or reporting packages during a run. The native Results
   Workbench renders canonical data using packaged application components.
+- For a request to inspect earlier results, call list_saved_results, choose the
+  relevant verified bundle, then open_saved_result with payload.run_id. This opens
+  the native workbench without rerunning a simulation. Recalculation is a separate
+  explicit researcher request and goes through a new reviewed experiment plan.
 - Stop only for unsupported physics, missing essential researcher intent, unavailable
   simulator or license, unsafe operations, or repeated validation failure.
 - Preserve source URLs, retrieval metadata, content hashes, backend versions, and
@@ -103,6 +112,7 @@ def llm_from_environment() -> LLM:
         stream=True,
     )
 
+
 if TYPE_CHECKING:
     from openhands.sdk.conversation.state import ConversationState
     from openhands.sdk.event import ActionEvent
@@ -120,17 +130,12 @@ class WorkspaceTaskToolSet(TaskToolSet):
         del confirmation_handler
         workspace = Path(conv_state.workspace.working_dir).resolve()
 
-        def confirm_child_actions(
-            _task_id: str, actions: list[ActionEvent]
-        ) -> bool:
+        def confirm_child_actions(_task_id: str, actions: list[ActionEvent]) -> bool:
             return all(
-                classify_action(workspace, action) is not SecurityRisk.HIGH
-                for action in actions
+                classify_action(workspace, action) is not SecurityRisk.HIGH for action in actions
             )
 
-        return super().create(
-            conv_state, confirmation_handler=confirm_child_actions
-        )
+        return super().create(conv_state, confirmation_handler=confirm_child_actions)
 
 
 register_tool(WorkspaceTaskToolSet.name, WorkspaceTaskToolSet)
@@ -159,9 +164,7 @@ def _load_runtime_skills(workspace: Path) -> list[Any]:
 def build_runtime(workspace: Path) -> OpenHandsRuntimeProfile:
     context = AgentContext(
         skills=_load_runtime_skills(workspace),
-        system_message_suffix=(
-            f"{ARTIFACT_INTENT_POLICY}\n\n{SCIENTIFIC_RESEARCH_POLICY}"
-        ),
+        system_message_suffix=(f"{ARTIFACT_INTENT_POLICY}\n\n{SCIENTIFIC_RESEARCH_POLICY}"),
     )
     tools = get_default_tools(enable_browser=False, enable_sub_agents=False)
     tools.append(Tool(name=WorkspaceTaskToolSet.name))
@@ -189,17 +192,26 @@ class OpenHandsRuntimeFactory:
         callback: Callable[[Event], None],
     ) -> RuntimeConversation:
         profile = build_runtime(workspace)
+        intent = getattr(callback, "research_intent", None)
+        tools = [
+            tool.model_copy(
+                update={
+                    "params": {**tool.params, "research_intent": intent.model_dump(mode="json")}
+                }
+            )
+            if tool.name == TcadDomainTool.name and intent
+            else tool
+            for tool in profile.tools
+        ]
         register_builtins_agents(enable_browser=False)
         register_file_agents(PROJECT_ROOT)
         register_file_agents(workspace)
         llm = self.llm or llm_from_environment()
         agent = Agent(
             llm=llm,
-            tools=list(profile.tools),
+            tools=tools,
             agent_context=profile.context,
-            condenser=get_default_condenser(
-                llm.model_copy(update={"usage_id": "condenser"})
-            ),
+            condenser=get_default_condenser(llm.model_copy(update={"usage_id": "condenser"})),
             tool_concurrency_limit=2,
         )
         persistence_dir = self.runtime_root / "openhands"

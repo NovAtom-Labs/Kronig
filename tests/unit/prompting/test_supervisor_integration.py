@@ -16,6 +16,7 @@ from tcad_agent.ide.store import SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.prompting.compiler import PromptCompiler
 from tcad_agent.prompting.context import LocalEvidenceCollector, WorkspaceContextCollector
+from tcad_agent.prompting.errors import ResearcherInputRequiredError
 from tcad_agent.prompting.models import (
     ClarificationAnswer,
     ClarificationQuestion,
@@ -38,9 +39,7 @@ class EmptyKnowledgeIndex:
 class FinishedConversation:
     def __init__(self, conversation_id: UUID) -> None:
         self.id = conversation_id
-        self.state = SimpleNamespace(
-            execution_status=ConversationExecutionStatus.IDLE
-        )
+        self.state = SimpleNamespace(execution_status=ConversationExecutionStatus.IDLE)
         self.messages: list[str] = []
 
     def send_message(self, message: str, sender: str | None = None) -> None:
@@ -70,6 +69,23 @@ class CapturingRuntimeFactory:
         conversation = FinishedConversation(conversation_id)
         self.created.append(conversation)
         return conversation
+
+
+class RecoverableAuthorityFailureModel:
+    """Require one clarification, then expose a researcher-owned field violation."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def prepare(self, **kwargs) -> PreparationDecision:
+        del kwargs
+        self.calls += 1
+        if self.calls == 1:
+            return clarification()
+        raise ResearcherInputRequiredError(
+            ("study.sequence",),
+            "evidence cannot choose researcher-owned field study.sequence",
+        )
 
 
 def setup(tmp_path: Path, decisions: list[PreparationDecision]):
@@ -133,12 +149,43 @@ def ready() -> PreparationDecision:
     )
 
 
+def test_cancel_after_compilation_never_admits_runtime(tmp_path):
+    services, conversation, factory, supervisor = setup(tmp_path, [ready()])
+    append = services.events.append
+
+    def cancel_on_compilation(conversation_id, kind, payload):
+        event = append(conversation_id, kind, payload)
+        if kind == "prompt_compiled":
+            supervisor.stop(UUID(payload["run_id"]))
+        return event
+
+    services.events.append = cancel_on_compilation
+    run = supervisor.start(conversation.id, "Run the study")
+    supervisor.join(run.id, timeout=3)
+    assert services.store.get_run(run.id).state is RunState.CANCELLED
+    assert factory.created == []
+
+
+def test_cancel_during_runtime_creation_never_sends_or_launches(tmp_path):
+    services, conversation, factory, supervisor = setup(tmp_path, [ready()])
+    create = factory.create
+
+    def cancelled_create(workspace, conversation_id, bridge):
+        runtime = create(workspace, conversation_id, bridge)
+        supervisor.stop(bridge.run_id)
+        return runtime
+
+    factory.create = cancelled_create
+    run = supervisor.start(conversation.id, "Run the study")
+    supervisor.join(run.id, timeout=3)
+    assert services.store.get_run(run.id).state is RunState.CANCELLED
+    assert factory.created[0].messages == []
+
+
 def test_supervisor_waits_for_answers_then_executes_compiled_request(
     tmp_path: Path,
 ) -> None:
-    services, conversation, runtime, supervisor = setup(
-        tmp_path, [clarification(), ready()]
-    )
+    services, conversation, runtime, supervisor = setup(tmp_path, [clarification(), ready()])
 
     run = supervisor.start(conversation.id, "Simulate the requested structure")
     supervisor.join(run.id, timeout=3)
@@ -165,6 +212,57 @@ def test_supervisor_waits_for_answers_then_executes_compiled_request(
     messages = services.store.list_messages(conversation.id)
     assert messages[0].content == "Simulate the requested structure"
     assert "300 K" in messages[1].content
+
+
+def test_invalid_researcher_authority_returns_to_targeted_clarification(
+    tmp_path: Path,
+) -> None:
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    events = EventFeed(store)
+    workspaces = WorkspaceManager(store)
+    workspace = workspaces.open(tmp_path)
+    conversations = ConversationService(store, events)
+    conversation = conversations.create(workspace.id, "Recoverable preparation")
+    services = SimpleNamespace(
+        store=store,
+        events=events,
+        workspaces=workspaces,
+        conversations=conversations,
+        changes=WorkspaceChangeTracker(),
+        runtime_root=tmp_path / ".runtime",
+    )
+    preparation = PromptPreparationService(
+        model=RecoverableAuthorityFailureModel(),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={"devsim": "a" * 64},
+    )
+    supervisor = AgentSupervisor(
+        services,
+        CapturingRuntimeFactory(),
+        preparation=preparation,
+    )
+
+    run = supervisor.start(conversation.id, "Simulate the requested structure")
+    supervisor.join(run.id, timeout=3)
+    pending = store.get_prompt_preparation(run.id)
+    supervisor.answer_clarification(
+        run.id,
+        pending.revision,
+        (ClarificationAnswer(question_id="temperature", answer="300 K"),),
+    )
+    supervisor.join(run.id, timeout=3)
+
+    recovered = store.get_prompt_preparation(run.id)
+    assert store.get_run(run.id).state is RunState.WAITING_FOR_USER
+    assert recovered.decision is not None
+    assert recovered.decision.status == "clarification"
+    assert recovered.decision.questions[0].field_path == "study.sequence"
+    assert recovered.decision.questions[0].id == "confirm_study_sequence"
+    kinds = [event.kind for event in events.iter_after(conversation.id, 0)]
+    assert kinds.count("clarification_required") == 2
+    assert "run_failed" not in kinds
 
 
 def test_complete_request_compiles_without_clarification(tmp_path: Path) -> None:

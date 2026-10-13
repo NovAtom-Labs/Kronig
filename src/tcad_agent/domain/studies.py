@@ -64,16 +64,12 @@ class DCPointsStudy(_StudyModel):
 
     @field_validator("values")
     @classmethod
-    def require_voltages(
-        cls, values: tuple[QuantityValue, ...]
-    ) -> tuple[QuantityValue, ...]:
+    def require_voltages(cls, values: tuple[QuantityValue, ...]) -> tuple[QuantityValue, ...]:
         return tuple(value.require("V", "voltage") for value in values)
 
     @field_validator("minimum_step")
     @classmethod
-    def require_voltage_step(
-        cls, value: QuantityValue | None
-    ) -> QuantityValue | None:
+    def require_voltage_step(cls, value: QuantityValue | None) -> QuantityValue | None:
         return value.require("V", "voltage") if value is not None else None
 
     @model_validator(mode="after")
@@ -91,6 +87,13 @@ class ACStudy(_StudyModel):
     contact: str
     frequency: QuantityValue
     amplitude: QuantityValue
+    bias_schedule: Annotated[DCStudy | DCPointsStudy, Field(discriminator="kind")] | None = None
+
+    @model_validator(mode="after")
+    def validate_bias_dependency(self) -> Self:
+        if self.bias_schedule and self.bias_schedule.contact != self.contact:
+            raise ValueError("AC and its bias schedule must drive the same contact")
+        return self
 
     @field_validator("frequency")
     @classmethod
@@ -117,6 +120,18 @@ class FrequencyStudy(_StudyModel):
     points: int = Field(ge=2, le=10000)
     spacing: Literal["linear", "log"] = "log"
     amplitude: QuantityValue
+    bias_schedule: Annotated[DCStudy | DCPointsStudy, Field(discriminator="kind")] | None = None
+
+    @model_validator(mode="after")
+    def validate_bias_dependency(self) -> Self:
+        if self.bias_schedule and self.bias_schedule.contact != self.contact:
+            raise ValueError("AC and its bias schedule must drive the same contact")
+        if (
+            self.bias_schedule
+            and len(expand_study_points(self.bias_schedule)) * self.points > 10_000
+        ):
+            raise ValueError("coupled bias and frequency study exceeds 10000 points")
+        return self
 
     @field_validator("start", "stop")
     @classmethod
@@ -199,9 +214,7 @@ class TransientStudy(_StudyModel):
         if self.waveform == "pulse":
             names = ("pulse_delay", "rise_time", "pulse_width", "fall_time")
             missing = [
-                name
-                for name, value in zip(names, pulse_fields, strict=True)
-                if value is None
+                name for name, value in zip(names, pulse_fields, strict=True) if value is None
             ]
             if missing:
                 raise ValueError(f"pulse waveform requires {', '.join(missing)}")
@@ -221,9 +234,7 @@ class TemperatureStudy(_StudyModel):
 
     @field_validator("values")
     @classmethod
-    def validate_temperatures(
-        cls, values: tuple[QuantityValue, ...]
-    ) -> tuple[QuantityValue, ...]:
+    def validate_temperatures(cls, values: tuple[QuantityValue, ...]) -> tuple[QuantityValue, ...]:
         for value in values:
             value.require("K", "temperature")
             if value.to("K") <= 0:
@@ -233,9 +244,7 @@ class TemperatureStudy(_StudyModel):
 
 class ParameterStudy(_StudyModel):
     kind: Literal["parameter"]
-    parameter_path: str = Field(
-        min_length=1, max_length=240, pattern=r"^[a-z][a-z0-9_.-]*$"
-    )
+    parameter_path: str = Field(min_length=1, max_length=240, pattern=r"^[a-z][a-z0-9_.-]*$")
     values: tuple[QuantityValue, ...] = Field(min_length=1, max_length=10000)
 
     @model_validator(mode="after")
@@ -277,8 +286,7 @@ def expand_study_points(study: Study1D) -> tuple[QuantityValue, ...]:
         stop = study.stop.to("Hz")
         if study.spacing == "linear":
             values = [
-                start + (stop - start) * index / (study.points - 1)
-                for index in range(study.points)
+                start + (stop - start) * index / (study.points - 1) for index in range(study.points)
             ]
         else:
             log_start = math.log10(start)

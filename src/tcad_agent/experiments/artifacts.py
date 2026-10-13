@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tcad_agent.domain.units import QuantityValue
 from tcad_agent.experiments.models import PreparedExperiment
 
 
@@ -26,10 +27,17 @@ def project_slug(name: str) -> str:
 
 
 def _display(value: Any) -> str:
+    if isinstance(value, dict) and set(value) >= {"magnitude_si", "si_unit", "dimensionality"}:
+        quantity = QuantityValue.model_validate(value)
+        return f"{quantity.magnitude_si:g} {quantity.si_unit}"
     if isinstance(value, dict) and set(value) >= {"value", "unit"}:
         return f"{value['value']} {value['unit']}"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    if isinstance(value, dict):
+        return "; ".join(
+            f"{key.replace('_', ' ')}: {_display(item)}" for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_display(item) for item in value)
     return str(value)
 
 
@@ -44,7 +52,10 @@ class ExperimentPlanArtifactWriter:
         if experiments.is_symlink():
             raise ValueError("experiments directory cannot be a symlink")
         experiments.mkdir(parents=True, exist_ok=True)
-        root = experiments / project_slug(prepared.spec.name)
+        slug = project_slug(prepared.spec.name)
+        if prepared.recovery_proposal is not None:
+            slug += f"-recovery-{prepared.plan_digest[:8]}"
+        root = experiments / slug
         if root.is_symlink():
             raise ValueError("experiment project directory cannot be a symlink")
         root.mkdir(parents=True, exist_ok=True)
@@ -111,12 +122,38 @@ class ExperimentPlanArtifactWriter:
             "## Structure",
             "",
         ]
+        if prepared.recovery_proposal is not None:
+            proposal = prepared.recovery_proposal
+            recovery = [
+                "## Reviewed numerical recovery",
+                "",
+                f"Original immutable bundle: `{proposal.original_bundle_id}`",
+                "",
+                f"Recorded failure: {proposal.failure.evidence}",
+                "",
+                "Only these numerical settings change. "
+                "Physics and requested outputs remain unchanged.",
+                "",
+            ]
+            recovery.extend(
+                f"- `{change.path}`: {_display(change.before)} → {_display(change.after)}"
+                for change in proposal.changes
+            )
+            recovery.extend(["", "Unchanged scientific acceptance limits:", ""])
+            recovery.extend(
+                f"- `{limit.name}`: {limit.value:g}" for limit in proposal.validation_limits
+            )
+            recovery.extend(["", "Execution requires approval of this new plan.", ""])
+            lines[lines.index("## Structure") : lines.index("## Structure")] = recovery
         for region in spec.regions:
             lines.append(
                 f"- `{region.id}`: {region.material}, "
                 f"{_display(region.x0.model_dump(mode='json'))} to "
                 f"{_display(region.x1.model_dump(mode='json'))}"
             )
+        lines.extend(["", "## Doping and charge profiles", ""])
+        for profile in spec.profiles:
+            lines.append(f"- {_display(profile.model_dump(mode='json', exclude_none=True))}")
         lines.extend(["", "## Contacts", ""])
         for contact in spec.contacts:
             area = (
@@ -126,6 +163,11 @@ class ExperimentPlanArtifactWriter:
             )
             lines.append(
                 f"- `{contact.id}`: {contact.kind.value} at {contact.location.value}{area}"
+                + (
+                    f", work function {_display(contact.work_function.model_dump(mode='json'))}"
+                    if contact.work_function is not None
+                    else ""
+                )
             )
         lines.extend(
             [
@@ -145,8 +187,26 @@ class ExperimentPlanArtifactWriter:
             lines.append(f"- {key.replace('_', ' ').title()}: {_display(value)}")
         lines.extend(["", "## Requested observables", ""])
         lines.extend(f"- `{observable.value}`" for observable in spec.observables)
+        if spec.profile_sampling:
+            lines.extend(
+                [
+                    "",
+                    "## Spatial profile points",
+                    "",
+                    _display(spec.profile_sampling.model_dump(mode="json")),
+                ]
+            )
+            biases = ", ".join(f"{value:g} V" for value in spec.profile_bias_values_v())
+            lines.append(f"Selected biases: {biases}")
+            if spec.profile_sampling.mode == "automatic":
+                lines.append(
+                    "Selection uses approved schedule quantiles, "
+                    "not inferred physical regime labels."
+                )
         lines.extend(["", "## Scientific input ledger", ""])
         for record in prepared.completeness.records:
+            if record.path.rsplit(".", 1)[-1] in {"dimensionality", "magnitude_si", "si_unit"}:
+                continue
             value = "unresolved" if record.value is None else _display(record.value)
             lines.append(
                 f"- `{record.path}`: {value}  "

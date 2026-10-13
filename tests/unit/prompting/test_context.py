@@ -69,3 +69,12 @@ def test_local_evidence_enforces_passage_and_character_budgets() -> None:
     assert len(evidence) == 3
     assert sum(len(item.content) for item in evidence) <= 700
     assert len({item.id for item in evidence}) == len(evidence)
+
+
+def test_inventory_tolerates_a_file_removed_during_collection(tmp_path, monkeypatch):
+    (tmp_path / "temporary.txt").write_text("ephemeral")
+    collector = WorkspaceContextCollector()
+    monkeypatch.setattr(
+        collector, "_file_context", lambda *args: (_ for _ in ()).throw(FileNotFoundError())
+    )
+    assert collector.collect(tmp_path).files == ()

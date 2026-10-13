@@ -6,14 +6,30 @@ import pytest
 from tcad_agent.ide.results import WorkspaceResultError, WorkspaceResultReader
 
 
+def test_reader_verifies_additional_provenance_artifacts(tmp_path, result_bundle_factory):
+    import hashlib
+
+    bundle = result_bundle_factory(tmp_path)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    artifact = bundle / "provenance.txt"
+    artifact.write_bytes(b"original provenance")
+    manifest["artifacts"]["provenance.txt"] = {
+        "bytes": artifact.stat().st_size,
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+    }
+    manifest_path.write_text(json.dumps(manifest))
+    artifact.write_bytes(b"tampered provenance")
+    with pytest.raises(WorkspaceResultError, match="hash"):
+        WorkspaceResultReader().read_bundle(bundle)
+
+
 def test_reader_returns_typed_verified_canonical_bundle(
     tmp_path: Path, result_bundle_factory
 ) -> None:
     bundle = result_bundle_factory(tmp_path)
 
-    view = WorkspaceResultReader().read(
-        tmp_path, "run-0001/results/canonical.json"
-    )
+    view = WorkspaceResultReader().read(tmp_path, "run-0001/results/canonical.json")
 
     assert view.bundle_path == "run-0001"
     assert view.canonical_path == "run-0001/results/canonical.json"
@@ -25,26 +41,20 @@ def test_reader_returns_typed_verified_canonical_bundle(
     assert bundle.is_dir()
 
 
-def test_reader_rejects_noncanonical_file_path(
-    tmp_path: Path, result_bundle_factory
-) -> None:
+def test_reader_rejects_noncanonical_file_path(tmp_path: Path, result_bundle_factory) -> None:
     result_bundle_factory(tmp_path)
 
     with pytest.raises(WorkspaceResultError, match=r"results/canonical\.json"):
         WorkspaceResultReader().read(tmp_path, "run-0001/manifest.json")
 
 
-def test_reader_rejects_tampered_canonical_artifact(
-    tmp_path: Path, result_bundle_factory
-) -> None:
+def test_reader_rejects_tampered_canonical_artifact(tmp_path: Path, result_bundle_factory) -> None:
     bundle = result_bundle_factory(tmp_path)
     target = bundle / "results" / "canonical.json"
     target.write_text(target.read_text().replace("0.41", "0.42", 1))
 
     with pytest.raises(WorkspaceResultError, match="hash"):
-        WorkspaceResultReader().read(
-            tmp_path, "run-0001/results/canonical.json"
-        )
+        WorkspaceResultReader().read(tmp_path, "run-0001/results/canonical.json")
 
 
 def test_reader_rejects_manifest_and_result_backend_mismatch(
@@ -57,21 +67,15 @@ def test_reader_rejects_manifest_and_result_backend_mismatch(
     )
 
     with pytest.raises(WorkspaceResultError, match="backend"):
-        WorkspaceResultReader().read(
-            tmp_path, "run-0001/results/canonical.json"
-        )
+        WorkspaceResultReader().read(tmp_path, "run-0001/results/canonical.json")
 
 
-def test_reader_rejects_missing_manifested_artifact(
-    tmp_path: Path, result_bundle_factory
-) -> None:
+def test_reader_rejects_missing_manifested_artifact(tmp_path: Path, result_bundle_factory) -> None:
     bundle = result_bundle_factory(tmp_path)
     (bundle / "validation" / "report.json").unlink()
 
     with pytest.raises(WorkspaceResultError, match="unavailable"):
-        WorkspaceResultReader().read(
-            tmp_path, "run-0001/results/canonical.json"
-        )
+        WorkspaceResultReader().read(tmp_path, "run-0001/results/canonical.json")
 
 
 def test_reader_rejects_path_outside_workspace(tmp_path: Path) -> None:
@@ -80,9 +84,7 @@ def test_reader_rejects_path_outside_workspace(tmp_path: Path) -> None:
     (outside / "results" / "canonical.json").write_text("{}\n")
 
     with pytest.raises(ValueError, match="outside"):
-        WorkspaceResultReader().read(
-            tmp_path, "../outside-result/results/canonical.json"
-        )
+        WorkspaceResultReader().read(tmp_path, "../outside-result/results/canonical.json")
 
 
 def test_reader_opens_managed_bundle_without_workspace_projection(

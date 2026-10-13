@@ -127,9 +127,7 @@ class DevsimAdapter:
                     else None
                 ),
                 "mesh_spacing_cm": (
-                    interface.mesh_spacing.to("cm")
-                    if interface.mesh_spacing is not None
-                    else None
+                    interface.mesh_spacing.to("cm") if interface.mesh_spacing is not None else None
                 ),
                 "surface_electron_velocity_cm_s": (
                     interface.surface_electron_velocity.to("cm/s")
@@ -147,9 +145,7 @@ class DevsimAdapter:
                     else None
                 ),
                 "trap_energy_ev": (
-                    interface.trap_energy.to("eV")
-                    if interface.trap_energy is not None
-                    else None
+                    interface.trap_energy.to("eV") if interface.trap_energy is not None else None
                 ),
                 "trap_type": interface.trap_type,
             }
@@ -184,12 +180,8 @@ class DevsimAdapter:
                 common["values_cm3"] = tuple(value.to("cm^-3") for value in profile.values)
                 common["interpolation"] = profile.interpolation
             elif isinstance(profile, PiecewiseConstantProfile):
-                common["boundaries_cm"] = tuple(
-                    value.to("cm") for value in profile.boundaries
-                )
-                common["values_cm3"] = tuple(
-                    value.to("cm^-3") for value in profile.values
-                )
+                common["boundaries_cm"] = tuple(value.to("cm") for value in profile.boundaries)
+                common["values_cm3"] = tuple(value.to("cm^-3") for value in profile.values)
             profiles.append(common)
         contacts = [
             {
@@ -203,25 +195,15 @@ class DevsimAdapter:
                 "electron_richardson_a_cm2_k2": (
                     contact.electron_richardson_constant.to("A/cm^2/K^2")
                     if contact.electron_richardson_constant is not None
-                    else (
-                        112.0
-                        if str(contact.kind) == "metal_work_function"
-                        else None
-                    )
+                    else (112.0 if str(contact.kind) == "metal_work_function" else None)
                 ),
                 "hole_richardson_a_cm2_k2": (
                     contact.hole_richardson_constant.to("A/cm^2/K^2")
                     if contact.hole_richardson_constant is not None
-                    else (
-                        32.0
-                        if str(contact.kind) == "metal_work_function"
-                        else None
-                    )
+                    else (32.0 if str(contact.kind) == "metal_work_function" else None)
                 ),
                 "voltage_offset_v": contact.voltage_offset.to("V"),
-                "area_m2": (
-                    contact.area.to("m^2") if contact.area is not None else None
-                ),
+                "area_m2": (contact.area.to("m^2") if contact.area is not None else None),
             }
             for index, contact in enumerate(spec.contacts)
         ]
@@ -235,9 +217,7 @@ class DevsimAdapter:
                 else None
             ),
             "hole_lifetime_s": (
-                parameters.hole_lifetime.to("s")
-                if parameters.hole_lifetime is not None
-                else None
+                parameters.hole_lifetime.to("s") if parameters.hole_lifetime is not None else None
             ),
             "auger_electron_cm6_s": (
                 parameters.auger_electron_coefficient.to("cm^6/s")
@@ -274,8 +254,7 @@ class DevsimAdapter:
             }
         if any(
             str(contact.kind) == "metal_work_function"
-            and spec.regions[0 if str(contact.location) == "x_min" else -1].material
-            == "silicon"
+            and spec.regions[0 if str(contact.location) == "x_min" else -1].material == "silicon"
             for contact in spec.contacts
         ):
             parameter_sources["schottky_transport"] = {
@@ -286,22 +265,19 @@ class DevsimAdapter:
                 "version": "novatom.schottky-thermionic.2026-09-29.v1",
             }
         if any(
-            interface.surface_electron_velocity is not None
-            or interface.trap_density is not None
+            interface.surface_electron_velocity is not None or interface.trap_density is not None
             for interface in spec.interfaces
         ):
             parameter_sources["surface_physics"] = {
                 "source": (
-                    "Agent Kronig reviewed surface-SRH and single-level "
-                    "interface-trap equations"
+                    "Agent Kronig reviewed surface-SRH and single-level interface-trap equations"
                 ),
                 "version": "novatom.surface-physics.2026-09-29.v1",
             }
         if spec.physics.temperature_profiles:
             parameter_sources["prescribed_spatial_temperature"] = {
                 "source": (
-                    "Agent Kronig reviewed local-temperature silicon "
-                    "drift-diffusion formulation"
+                    "Agent Kronig reviewed local-temperature silicon drift-diffusion formulation"
                 ),
                 "version": "novatom.spatial-temperature.2026-09-29.v1",
             }
@@ -317,25 +293,15 @@ class DevsimAdapter:
                     start_k=temperature_profile.start_value.to("K"),
                     end_k=temperature_profile.end_value.to("K"),
                 )
-            elif isinstance(
-                temperature_profile, PiecewiseConstantTemperatureProfile
-            ):
+            elif isinstance(temperature_profile, PiecewiseConstantTemperatureProfile):
                 compiled.update(
-                    boundaries_cm=tuple(
-                        value.to("cm") for value in temperature_profile.boundaries
-                    ),
-                    values_k=tuple(
-                        value.to("K") for value in temperature_profile.values
-                    ),
+                    boundaries_cm=tuple(value.to("cm") for value in temperature_profile.boundaries),
+                    values_k=tuple(value.to("K") for value in temperature_profile.values),
                 )
             elif isinstance(temperature_profile, TabulatedTemperatureProfile):
                 compiled.update(
-                    positions_cm=tuple(
-                        value.to("cm") for value in temperature_profile.positions
-                    ),
-                    values_k=tuple(
-                        value.to("K") for value in temperature_profile.values
-                    ),
+                    positions_cm=tuple(value.to("cm") for value in temperature_profile.positions),
+                    values_k=tuple(value.to("K") for value in temperature_profile.values),
                 )
             elif isinstance(temperature_profile, ConstantTemperatureProfile):
                 compiled["value_k"] = temperature_profile.value.to("K")
@@ -344,6 +310,13 @@ class DevsimAdapter:
             {
                 "schema_version": "2.0",
                 "experiment_name": spec.name,
+                "profile_bias_values_v": (
+                    list(spec.profile_bias_values_v())
+                    if spec.profile_sampling else None
+                ),
+                "profile_sampling_provenance": (
+                    spec.profile_sampling.model_dump(mode="json") if spec.profile_sampling else None
+                ),
                 "regions": regions,
                 "interfaces": interfaces,
                 "mesh_anchors": mesh_anchors,
@@ -425,9 +398,7 @@ class DevsimAdapter:
                 for boundary in profile.boundaries[1:-1]:
                     add(
                         boundary.to("cm"),
-                        bounded_spacing(
-                            region, cast(float, region["mesh_spacing_cm"])
-                        ),
+                        bounded_spacing(region, cast(float, region["mesh_spacing_cm"])),
                         "profile:piecewise_constant:boundary",
                     )
             elif isinstance(profile, TabulatedProfile):
@@ -445,21 +416,15 @@ class DevsimAdapter:
                     )
         for temperature_profile in spec.physics.temperature_profiles:
             region = compiled_regions[temperature_profile.region]
-            if isinstance(
-                temperature_profile, PiecewiseConstantTemperatureProfile
-            ):
+            if isinstance(temperature_profile, PiecewiseConstantTemperatureProfile):
                 for boundary in temperature_profile.boundaries[1:-1]:
                     add(
                         boundary.to("cm"),
-                        bounded_spacing(
-                            region, cast(float, region["mesh_spacing_cm"])
-                        ),
+                        bounded_spacing(region, cast(float, region["mesh_spacing_cm"])),
                         "temperature:piecewise_constant:boundary",
                     )
             elif isinstance(temperature_profile, TabulatedTemperatureProfile):
-                coordinates = tuple(
-                    value.to("cm") for value in temperature_profile.positions
-                )
+                coordinates = tuple(value.to("cm") for value in temperature_profile.positions)
                 for index, position in enumerate(coordinates):
                     neighbors = []
                     if index:
@@ -472,6 +437,19 @@ class DevsimAdapter:
                         "temperature:tabulated:sample",
                     )
         return [anchors[position] for position in sorted(anchors)]
+
+    @staticmethod
+    def _ac_bias_payload(study: ACStudy | FrequencyStudy) -> dict[str, object]:
+        schedule = study.bias_schedule
+        if schedule is None:
+            return {}
+        return {
+            "biases_v": tuple(value.to("V") for value in expand_study_points(schedule)),
+            "bias_scheduled": True,
+            "strategy": schedule.strategy,
+            "minimum_step_v": schedule.minimum_step.to("V") if schedule.minimum_step else None,
+            "maximum_retries": schedule.maximum_retries,
+        }
 
     @staticmethod
     def _study_payload(spec: ExperimentSpec) -> dict[str, object]:
@@ -496,9 +474,7 @@ class DevsimAdapter:
                 "biases_v": tuple(value.to("V") for value in study.values),
                 "strategy": study.strategy,
                 "minimum_step_v": (
-                    study.minimum_step.to("V")
-                    if study.minimum_step is not None
-                    else None
+                    study.minimum_step.to("V") if study.minimum_step is not None else None
                 ),
                 "maximum_retries": study.maximum_retries,
             }
@@ -508,6 +484,7 @@ class DevsimAdapter:
                 "contact": study.contact,
                 "frequencies_hz": (study.frequency.to("Hz"),),
                 "amplitude_v": study.amplitude.to("V"),
+                **DevsimAdapter._ac_bias_payload(study),
             }
         if isinstance(study, FrequencyStudy):
             return {
@@ -515,6 +492,7 @@ class DevsimAdapter:
                 "contact": study.contact,
                 "frequencies_hz": tuple(value.to("Hz") for value in expand_study_points(study)),
                 "amplitude_v": study.amplitude.to("V"),
+                **DevsimAdapter._ac_bias_payload(study),
             }
         if isinstance(study, TransientStudy):
             return {
@@ -537,15 +515,11 @@ class DevsimAdapter:
                 "pulse_delay_s": (
                     study.pulse_delay.to("s") if study.pulse_delay is not None else None
                 ),
-                "rise_time_s": (
-                    study.rise_time.to("s") if study.rise_time is not None else None
-                ),
+                "rise_time_s": (study.rise_time.to("s") if study.rise_time is not None else None),
                 "pulse_width_s": (
                     study.pulse_width.to("s") if study.pulse_width is not None else None
                 ),
-                "fall_time_s": (
-                    study.fall_time.to("s") if study.fall_time is not None else None
-                ),
+                "fall_time_s": (study.fall_time.to("s") if study.fall_time is not None else None),
             }
         if isinstance(study, TemperatureStudy):
             return {
@@ -582,15 +556,11 @@ class DevsimAdapter:
                 },
                 terminal_electron_currents_a_per_m2={
                     name: value * 1e4
-                    for name, value in point.get(
-                        "electron_currents_a_per_cm2", {}
-                    ).items()
+                    for name, value in point.get("electron_currents_a_per_cm2", {}).items()
                 },
                 terminal_hole_currents_a_per_m2={
                     name: value * 1e4
-                    for name, value in point.get(
-                        "hole_currents_a_per_cm2", {}
-                    ).items()
+                    for name, value in point.get("hole_currents_a_per_cm2", {}).items()
                 },
             )
             for point in data["bias_points"]
@@ -653,24 +623,18 @@ class DevsimAdapter:
                 state="converged" if point["converged"] else "failed",
                 coordinates={operating_axis_id: float(point[coordinate_key])},
                 terminal_currents_a_per_m2={
-                    name: value * 1e4
-                    for name, value in point["currents_a_per_cm2"].items()
+                    name: value * 1e4 for name, value in point["currents_a_per_cm2"].items()
                 },
                 terminal_electron_currents_a_per_m2={
                     name: value * 1e4
-                    for name, value in point.get(
-                        "electron_currents_a_per_cm2", {}
-                    ).items()
+                    for name, value in point.get("electron_currents_a_per_cm2", {}).items()
                 },
                 terminal_hole_currents_a_per_m2={
                     name: value * 1e4
-                    for name, value in point.get(
-                        "hole_currents_a_per_cm2", {}
-                    ).items()
+                    for name, value in point.get("hole_currents_a_per_cm2", {}).items()
                 },
                 terminal_charges_c_per_m2={
-                    name: value * 1e4
-                    for name, value in point.get("charges_c_per_cm2", {}).items()
+                    name: value * 1e4 for name, value in point.get("charges_c_per_cm2", {}).items()
                 },
                 attempts=point.get("attempts", 1),
                 message=point.get("message"),
@@ -678,14 +642,11 @@ class DevsimAdapter:
             for index, point in enumerate(raw_operating_points)
         )
         contact_areas = {
-            str(name): float(value)
-            for name, value in data.get("contact_areas_m2", {}).items()
+            str(name): float(value) for name, value in data.get("contact_areas_m2", {}).items()
         }
         interface_charges = {
             str(name): float(value) * 1e4
-            for name, value in data.get(
-                "interface_charge_densities_c_per_cm2", {}
-            ).items()
+            for name, value in data.get("interface_charge_densities_c_per_cm2", {}).items()
         }
         if (
             "interface_charge_density" in data.get("requested_observables", ())
@@ -708,15 +669,11 @@ class DevsimAdapter:
                 centering=DatasetCentering.INTERFACE,
                 values=tuple(interface_charges[name] for name in interface_ids),
                 source="native:configured-fixed-plus-interface-trap-charge",
-                metadata={
-                    "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
-                },
+                metadata={"interface_ids": json.dumps(interface_ids, separators=(",", ":"))},
             )
         interface_surface_rates = {
             str(name): float(value) * 1e4
-            for name, value in data.get(
-                "interface_surface_recombination_cm2_s", {}
-            ).items()
+            for name, value in data.get("interface_surface_recombination_cm2_s", {}).items()
         }
         if (
             "surface_recombination_rate" in data.get("requested_observables", ())
@@ -739,18 +696,13 @@ class DevsimAdapter:
                 centering=DatasetCentering.INTERFACE,
                 values=tuple(interface_surface_rates[name] for name in interface_ids),
                 source="native:SurfaceRecombinationSheet",
-                metadata={
-                    "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
-                },
+                metadata={"interface_ids": json.dumps(interface_ids, separators=(",", ":"))},
             )
         trap_occupancies = {
             str(name): float(value)
             for name, value in data.get("interface_trap_occupancies", {}).items()
         }
-        if (
-            "interface_trap_occupancy" in data.get("requested_observables", ())
-            and trap_occupancies
-        ):
+        if "interface_trap_occupancy" in data.get("requested_observables", ()) and trap_occupancies:
             interface_ids = tuple(trap_occupancies)
             axes["trap_interface_index"] = ScientificAxis(
                 id="trap_interface_index",
@@ -768,9 +720,7 @@ class DevsimAdapter:
                 centering=DatasetCentering.INTERFACE,
                 values=tuple(trap_occupancies[name] for name in interface_ids),
                 source="native:InterfaceTrapOccupancy",
-                metadata={
-                    "interface_ids": json.dumps(interface_ids, separators=(",", ":"))
-                },
+                metadata={"interface_ids": json.dumps(interface_ids, separators=(",", ":"))},
             )
         if operating_points:
             coordinate_values = tuple(
@@ -797,8 +747,7 @@ class DevsimAdapter:
                     for point in operating_points
                 )
                 charges = tuple(
-                    point.terminal_charges_c_per_m2.get(terminal, 0.0)
-                    for point in operating_points
+                    point.terminal_charges_c_per_m2.get(terminal, 0.0) for point in operating_points
                 )
                 datasets[f"terminal_current__{terminal}"] = Dataset(
                     id=f"terminal_current__{terminal}",
@@ -818,9 +767,7 @@ class DevsimAdapter:
                     shape=(len(coordinate_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=currents,
-                    validity=tuple(
-                        point.state == "converged" for point in operating_points
-                    ),
+                    validity=tuple(point.state == "converged" for point in operating_points),
                     source="derived:terminal-current-density-alias",
                 )
                 datasets[f"terminal_electron_current__{terminal}"] = Dataset(
@@ -831,9 +778,7 @@ class DevsimAdapter:
                     shape=(len(coordinate_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=electron_currents,
-                    validity=tuple(
-                        point.state == "converged" for point in operating_points
-                    ),
+                    validity=tuple(point.state == "converged" for point in operating_points),
                 )
                 datasets[f"terminal_hole_current__{terminal}"] = Dataset(
                     id=f"terminal_hole_current__{terminal}",
@@ -843,9 +788,7 @@ class DevsimAdapter:
                     shape=(len(coordinate_values),),
                     centering=DatasetCentering.OPERATING_POINT,
                     values=hole_currents,
-                    validity=tuple(
-                        point.state == "converged" for point in operating_points
-                    ),
+                    validity=tuple(point.state == "converged" for point in operating_points),
                 )
                 datasets[f"terminal_charge__{terminal}"] = Dataset(
                     id=f"terminal_charge__{terminal}",
@@ -943,8 +886,12 @@ class DevsimAdapter:
         frequency_points = data.get("frequency_points", [])
         if frequency_points:
             frequencies = tuple(
-                float(point["frequency_hz"]) for point in frequency_points
+                dict.fromkeys(float(point["frequency_hz"]) for point in frequency_points)
             )
+            coupled = bool(data.get("ac_bias_scheduled"))
+            ac_axes = ("bias", "frequency") if coupled else ("frequency",)
+            ac_shape = (len(points), len(frequencies)) if coupled else (len(frequencies),)
+            ac_validity = tuple(bool(point.get("valid", True)) for point in frequency_points)
             axes["frequency"] = ScientificAxis(
                 id="frequency",
                 kind=AxisKind.FREQUENCY,
@@ -954,35 +901,30 @@ class DevsimAdapter:
             )
             driven_contact = str(data["ac_contact"])
             real = tuple(
-                float(point["admittance_real_s_per_cm2"]) * 1e4
-                for point in frequency_points
+                float(point["admittance_real_s_per_cm2"]) * 1e4 for point in frequency_points
             )
             imaginary = tuple(
-                float(point["admittance_imag_s_per_cm2"]) * 1e4
-                for point in frequency_points
+                float(point["admittance_imag_s_per_cm2"]) * 1e4 for point in frequency_points
             )
             current_real = tuple(
-                float(point["current_real_a_per_cm2"]) * 1e4
-                for point in frequency_points
+                float(point["current_real_a_per_cm2"]) * 1e4 for point in frequency_points
             )
             current_imaginary = tuple(
-                float(point["current_imag_a_per_cm2"]) * 1e4
-                for point in frequency_points
+                float(point["current_imag_a_per_cm2"]) * 1e4 for point in frequency_points
             )
             conductance = tuple(
-                float(point["conductance_s_per_cm2"]) * 1e4
-                for point in frequency_points
+                float(point["conductance_s_per_cm2"]) * 1e4 for point in frequency_points
             )
             capacitance = tuple(
-                float(point["capacitance_f_per_cm2"]) * 1e4
-                for point in frequency_points
+                float(point["capacitance_f_per_cm2"]) * 1e4 for point in frequency_points
             )
             datasets[f"complex_admittance__{driven_contact}"] = Dataset(
                 id=f"complex_admittance__{driven_contact}",
                 label=f"Complex admittance at {driven_contact}",
                 unit="S/m^2",
-                axes=("frequency",),
-                shape=(len(frequencies),),
+                axes=ac_axes,
+                shape=ac_shape,
+                validity=ac_validity,
                 centering=DatasetCentering.CONTACT,
                 values=real,
                 imaginary_values=imaginary,
@@ -992,8 +934,9 @@ class DevsimAdapter:
                 id=f"complex_current_response__{driven_contact}",
                 label=f"Complex current response at {driven_contact}",
                 unit="A/m^2",
-                axes=("frequency",),
-                shape=(len(frequencies),),
+                axes=ac_axes,
+                shape=ac_shape,
+                validity=ac_validity,
                 centering=DatasetCentering.CONTACT,
                 values=current_real,
                 imaginary_values=current_imaginary,
@@ -1003,8 +946,9 @@ class DevsimAdapter:
                 id=f"ac_conductance__{driven_contact}",
                 label=f"AC conductance at {driven_contact}",
                 unit="S/m^2",
-                axes=("frequency",),
-                shape=(len(frequencies),),
+                axes=ac_axes,
+                shape=ac_shape,
+                validity=ac_validity,
                 centering=DatasetCentering.CONTACT,
                 values=conductance,
                 source=f"derived:real:complex_admittance__{driven_contact}",
@@ -1013,15 +957,13 @@ class DevsimAdapter:
                 id=f"ac_capacitance__{driven_contact}",
                 label=f"Small-signal capacitance at {driven_contact}",
                 unit="F/m^2",
-                axes=("frequency",),
-                shape=(len(frequencies),),
+                axes=ac_axes,
+                shape=ac_shape,
+                validity=ac_validity,
                 centering=DatasetCentering.CONTACT,
                 values=capacitance,
-                source=(
-                    "derived:imaginary_over_omega:"
-                    f"complex_admittance__{driven_contact}"
-                ),
-                metadata={"dc_operating_point_v": "0.0"},
+                source=(f"derived:imaginary_over_omega:complex_admittance__{driven_contact}"),
+                metadata={"bias_dependence": "scheduled" if coupled else "zero_bias"},
             )
             area = contact_areas.get(driven_contact)
             if area is not None:
@@ -1029,8 +971,9 @@ class DevsimAdapter:
                     id=f"absolute_ac_capacitance__{driven_contact}",
                     label=f"Absolute small-signal capacitance at {driven_contact}",
                     unit="F",
-                    axes=("frequency",),
-                    shape=(len(frequencies),),
+                    axes=ac_axes,
+                    shape=ac_shape,
+                    validity=ac_validity,
                     centering=DatasetCentering.CONTACT,
                     values=tuple(value * area for value in capacitance),
                     source=f"derived:area:ac_capacitance__{driven_contact}",
@@ -1047,8 +990,7 @@ class DevsimAdapter:
             operating_points=operating_points,
             native_result_path=native.result_path,
             sign_convention={
-                str(key): str(value)
-                for key, value in data.get("sign_convention", {}).items()
+                str(key): str(value) for key, value in data.get("sign_convention", {}).items()
             },
             metadata={
                 "parameter_set_id": data.get("parameter_set_id", "unknown"),
@@ -1058,6 +1000,8 @@ class DevsimAdapter:
                 "native_model_names": data.get("native_model_names", {}),
                 "regions": data.get("regions", []),
                 "interfaces": data.get("interfaces", []),
+                "profile_bias_values_v": data.get("profile_bias_values_v"),
+                "profile_sampling_provenance": data.get("profile_sampling_provenance"),
             },
         )
 
@@ -1081,7 +1025,6 @@ class DevsimAdapter:
             else:
                 left, right = index - 1, index + 1
             derivatives.append(
-                (values[right] - values[left])
-                / (coordinates[right] - coordinates[left])
+                (values[right] - values[left]) / (coordinates[right] - coordinates[left])
             )
         return tuple(derivatives)

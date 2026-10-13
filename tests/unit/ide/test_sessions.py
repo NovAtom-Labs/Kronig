@@ -44,9 +44,7 @@ class RecordingSupervisor:
             assert resolved.decision is not None
             self.denied_before_delete.append(resolved.decision)
         current = self.store.get_run(run_id)
-        cancelled = self.store.transition_run(
-            run_id, current.revision, RunState.CANCELLED
-        )
+        cancelled = self.store.transition_run(run_id, current.revision, RunState.CANCELLED)
         self.stopped.append(run_id)
         return cancelled
 
@@ -195,9 +193,7 @@ def test_release_rejects_symlinked_openhands_root_without_external_deletion(
     external_session.mkdir(parents=True)
     sentinel = external_session / "events.jsonl"
     sentinel.write_text("preserve", encoding="utf-8")
-    (tmp_path / "runtime" / "openhands").symlink_to(
-        external, target_is_directory=True
-    )
+    (tmp_path / "runtime" / "openhands").symlink_to(external, target_is_directory=True)
 
     with pytest.raises(RuntimeError, match="escaped runtime storage"):
         sessions.release()

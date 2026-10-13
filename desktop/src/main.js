@@ -4,7 +4,8 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const {BackendSupervisor} = require("./backend-supervisor");
+const {BackendLifecycle} = require("./backend-lifecycle");
+const {exportResultsPdf} = require("./results-export");
 const {DesktopSettingsStore} = require("./settings-store");
 const {createLinuxUpdateVerifier} = require("./linux-update-verifier");
 const {UpdateController} = require("./update-controller");
@@ -47,14 +48,19 @@ function installPermissionPolicy(electronSession) {
 function resultWindowUrl(origin, payload = {}) {
   const base = new URL(origin);
   const identifier = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const bundleIdentifier = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+  const hasBundle = payload.bundleRunId !== undefined;
   if (
     base.protocol !== "http:"
     || !["127.0.0.1", "localhost", "::1"].includes(base.hostname)
     || !identifier.test(String(payload.workspaceId || ""))
-    || !identifier.test(String(payload.runId || ""))
+    || (hasBundle
+      ? (!bundleIdentifier.test(String(payload.bundleRunId || "")) || payload.runId !== undefined)
+      : !identifier.test(String(payload.runId || "")))
   ) throw new Error("Result window identifier is invalid");
   const destination = new URL(`/workspaces/${payload.workspaceId}`, base.origin);
-  destination.searchParams.set("result_run_id", payload.runId);
+  destination.searchParams.set(hasBundle ? "saved_bundle_id" : "result_run_id",
+    hasBundle ? payload.bundleRunId : payload.runId);
   return destination.toString();
 }
 
@@ -117,6 +123,10 @@ function installWindowCloseGuard(window, app, isShutdownComplete) {
   });
 }
 
+function retireReplacedWindow(previousWindow, replacementWindow) {
+  if (previousWindow && previousWindow !== replacementWindow) previousWindow.destroy();
+}
+
 function createApplication(
   electron = require("electron"),
   updater = require("electron-updater").autoUpdater,
@@ -125,6 +135,7 @@ function createApplication(
   configureApplicationIdentity(app);
   let mainWindow = null;
   let supervisor = null;
+  const backendLifecycle = new BackendLifecycle();
   let settingsStore = null;
   let isShutdownComplete = () => false;
   const windowIcon = developmentIconPath(app.isPackaged);
@@ -256,23 +267,27 @@ function createApplication(
   }
 
   async function launchWorkspace(previousWindow = null) {
-    const candidate = new BackendSupervisor(backendOptions());
-    supervisor = candidate;
-    candidate.once("unexpected-exit", (event) => {
-      if (supervisor !== candidate) return;
-      const suffix = event.code === null ? `signal ${event.signal}` : `code ${event.code}`;
-      void showStartupError(new Error(`Backend exited unexpectedly with ${suffix}`), mainWindow);
-    });
     try {
-      const ready = await candidate.start();
+      const started = await backendLifecycle.launch(backendOptions());
+      if (!started) return;
+      const {supervisor:candidate, readiness:ready} = started;
+      supervisor = candidate;
+      candidate.once("unexpected-exit", (event) => {
+        if (supervisor !== candidate || backendLifecycle.closing) return;
+        const suffix = event.code === null ? `signal ${event.signal}` : `code ${event.code}`;
+        void showStartupError(new Error(`Backend exited unexpectedly with ${suffix}`), mainWindow);
+      });
       const window = createWindow();
       attachNavigationPolicy(window.webContents, ready.url);
       await window.loadURL(
         `${ready.url}/desktop/bootstrap?token=${encodeURIComponent(ready.launchToken)}`,
       );
+      if (backendLifecycle.closing) {window.destroy(); return;}
       mainWindow = window;
-      if (previousWindow && previousWindow !== window) previousWindow.close();
+      retireReplacedWindow(previousWindow, window);
     } catch (error) {
+      supervisor = backendLifecycle.current;
+      if (backendLifecycle.closing) return;
       await showStartupError(error, previousWindow);
     }
   }
@@ -303,7 +318,7 @@ function createApplication(
       query: {category, logPath},
     });
     mainWindow = window;
-    if (previousWindow && previousWindow !== window) previousWindow.close();
+    retireReplacedWindow(previousWindow, window);
   }
 
   function registerIpc() {
@@ -371,25 +386,7 @@ function createApplication(
       return Object.freeze({opened: true});
     });
     ipcMain.handle("desktop:export-results-pdf", async (event, payload = {}) => {
-      const baseName = String(payload.suggestedName || "agent-kronig-results")
-        .replace(/[^a-z0-9._-]+/gi, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 96) || "agent-kronig-results";
-      const result = await dialog.showSaveDialog(mainWindow, {
-        title: "Export scientific results PDF",
-        defaultPath: `${baseName.replace(/\.pdf$/i, "")}.pdf`,
-        filters: [{name: "PDF document", extensions: ["pdf"]}],
-      });
-      if (result.canceled || !result.filePath) {
-        return Object.freeze({cancelled: true, path: null});
-      }
-      const pdf = await event.sender.printToPDF({
-        printBackground: true,
-        preferCSSPageSize: true,
-        pageSize: "A4",
-      });
-      fs.writeFileSync(result.filePath, pdf, {mode: 0o600});
-      return Object.freeze({cancelled: false, path: result.filePath});
+      return exportResultsPdf({dialog, sender:event.sender, parent:mainWindow, payload});
     });
     ipcMain.handle("desktop:get-settings", () => settingsStore.getPublicSettings());
     ipcMain.handle("desktop:save-settings", async (_event, payload) => {
@@ -418,7 +415,7 @@ function createApplication(
   }
 
   async function stopBackend() {
-    await supervisor?.stop();
+    await backendLifecycle.stop();
   }
 
   async function stopBackendWhenIdle() {
@@ -447,8 +444,11 @@ function createApplication(
         defaultId: 0,
         cancelId: 2,
       });
-      return ["retry", "quit-anyway", "keep-working"][result.response] || "keep-working";
+      const decision = ["retry", "quit-anyway", "keep-working"][result.response] || "keep-working";
+      if (decision === "keep-working") backendLifecycle.resumeLaunch();
+      return decision;
     }, stopBackend);
+    app.on("before-quit", () => backendLifecycle.preventLaunch());
     app.on("window-all-closed", () => app.quit());
     await app.whenReady();
     if (windowIcon && app.dock?.setIcon) app.dock.setIcon(windowIcon);
@@ -479,6 +479,7 @@ module.exports = {
   installWindowCloseGuard,
   installPermissionPolicy,
   resultWindowUrl,
+  retireReplacedWindow,
   sanitizeDiagnosticSummary,
   shouldAutoStart,
 };

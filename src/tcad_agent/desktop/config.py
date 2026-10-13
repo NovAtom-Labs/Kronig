@@ -37,6 +37,7 @@ class DesktopLaunchConfig:
     data_dir: Path
     protocol_version: int = 1
     devsim_runner: Path | None = None
+    owner_pipe: bool = False
 
     @classmethod
     def from_environment(
@@ -68,11 +69,15 @@ class DesktopLaunchConfig:
             else default_data_dir(platform.system(), Path.home(), values)
         )
         configured_runner = values.get("AGENT_KRONIG_DEVSIM_RUNNER")
+        owner_pipe = values.get("AGENT_KRONIG_DESKTOP_OWNER_PIPE", "0")
+        if owner_pipe not in {"0", "1"}:
+            raise ValueError("desktop owner pipe must be 0 or 1")
         return cls(
             host=host,
             port=port,
             launch_token=token,
             data_dir=data_dir.resolve(),
+            owner_pipe=owner_pipe == "1",
             devsim_runner=(
                 Path(configured_runner).expanduser().resolve()
                 if configured_runner

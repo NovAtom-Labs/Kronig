@@ -6,6 +6,69 @@ function assertEqual(actual, expected, message) {
 
 const results = globalThis.AgentKronigResults;
 
+const independentStatuses = results.statusDimensions({
+  execution_state: "completed", validation: {overall: "failed", checks: [{status: "failed"}]},
+  deliverable_state: "complete",
+});
+assertEqual(independentStatuses.execution.state, "completed", "failed scientific checks cannot erase completed execution");
+assertEqual(independentStatuses.scientific.state, "needs_review", "scientific failure stays explicit");
+assertEqual(independentStatuses.deliverables.state, "complete", "scientific failure cannot erase delivered outputs");
+assertEqual(results.statusDimensions({execution_state: "completed", validation: {overall: "passed", checks: []}}).scientific.state,
+  "unavailable", "an empty validation report cannot imply scientific success");
+assertEqual(results.statusDimensions({execution_state: "completed", validation: {checks: [{level: "execution", status: "passed"}, {level: "provenance", status: "passed"}]}}).scientific.state,
+  "unavailable", "execution and provenance checks do not substitute for scientific validation");
+assertEqual(results.statusDimensions({execution_state: "completed", validation: {checks: [{status: "passed"}]}}).deliverables.state,
+  "unavailable", "unknown output coverage is never fabricated");
+
+const acCountPayload = {result: {operating_points: [{state: "converged"}], axes: {
+  frequency: {id: "frequency", kind: "frequency", label: "Frequency", unit: "Hz", values: [1e3, 1e4, 1e5]},
+}, datasets: {
+  admittance: {axes: ["frequency"], shape: [3], values: [1, 2, 3], validity: [true, false, true]},
+  capacitance: {axes: ["frequency"], shape: [3], values: [1, 1, 1], validity: [true, false, true]},
+}}};
+const acCounts = results.sampleCounts(acCountPayload);
+assertEqual(acCounts.operatingPoints, 1, "frequency response retains its one DC baseline");
+assertEqual(acCounts.frequencySamples, 3, "frequency samples are not summed across datasets");
+assertEqual(acCounts.validFrequencySamples, 2, "invalid AC samples remain distinct from DC convergence");
+assertEqual(acCounts.frequencies, 3, "unique frequency count uses the canonical frequency axis");
+assertEqual(results.sampleCounts({result: {fields: {}}}).frequencySamples, 0, "no AC data implies no fabricated AC samples");
+const coupledCounts = results.sampleCounts({result: {operating_points: [{state: "converged"}, {state: "failed"}],
+  axes: {bias: {id: "bias", kind: "bias", values: [0, 1]}, frequency: {id: "frequency", kind: "frequency", values: [1e3, 1e4]}},
+  datasets: {admittance: {axes: ["bias", "frequency"], shape: [2, 2], values: [1, 2, 3, 4], validity: [true, true, false, false]}}}});
+assertEqual(coupledCounts.operatingPoints, 2, "coupled sweeps keep DC accounting independent");
+assertEqual(coupledCounts.frequencySamples, 4, "coupled AC grid counts bias-frequency pairs");
+assertEqual(coupledCounts.frequencies, 2, "a coupled AC grid does not inflate unique frequency count");
+const assessed = results.statusDimensions({assessment: {
+  execution: {status: "passed", message: "Execution recorded"},
+  numerical: {status: "not_applicable", message: "No physical evidence"},
+  output_coverage: {status: "failed", message: "Missing charge"},
+}});
+assertEqual(assessed.scientific.state, "unavailable", "assessment applicability does not receive a scientific pass");
+assertEqual(assessed.deliverables.detail, "Missing charge", "the backend's output coverage reason stays visible");
+
+const residual = results.validationEvidence({level: "physical", evidence_origin: "derived",
+  measured_value: 2.96e-6, limit: 1e-6, unit: "A/m^2", absolute_tolerance: 1e-6,
+  relative_tolerance: 1e-4, scale: 2e-8,
+});
+assertEqual(residual.includes("measured 2.960e-6 A/m^2"), true, "tiny residuals retain scientific units");
+assertEqual(residual.includes("absolute tolerance 1.000e-6 A/m^2"), true, "absolute acceptance limit stays inspectable");
+assertEqual(residual.includes("scale 2.000e-8 A/m^2"), true, "near-zero current scale stays inspectable");
+assertEqual(results.validationEvidence({status: "not_applicable", applicability_reason: "No terminal currents"}).includes("No terminal currents"), true,
+  "excluded scientific checks state their applicability reason");
+
+const temperatureSummary = results.summarize({result: {operating_points: [
+  {state: "converged", coordinates: {temperature: 300}, terminal_currents_a_per_m2: {left: 1e-8, right: -1e-8}},
+]}});
+assertEqual(temperatureSummary.operatingPointCount, 1, "canonical non-voltage study points are visible");
+assertEqual(temperatureSummary.maximumTerminalCurrent, 1e-8, "temperature currents are not labelled unavailable");
+
+const biasAc = results.datasetOptions({result:{axes:{
+  bias:{id:"bias",kind:"bias",unit:"V",values:[-1,0,1]},
+  frequency:{id:"frequency",kind:"frequency",unit:"Hz",values:[1e6]},
+},datasets:{capacitance:{axes:["bias","frequency"],shape:[3,1],values:[1,2,3],unit:"F/m^2"}}}})[0];
+assertEqual(biasAc.plotKind, "curve_family", "a single-frequency bias sweep must be an interactive C-V curve, not a degenerate heatmap");
+assertEqual(results.seriesForDataset(biasAc).values.join(","), "1,2,3", "bias capacitance extraction follows canonical axes");
+
 assertEqual(
   results.isCanonicalResultPath("runs/equilibrium/results/canonical.json"),
   true,
@@ -112,6 +175,8 @@ const passingPresentation = results.validationPresentation([
 assertEqual(passingPresentation.headline, "All 2 applicable checks passed", "successful validation does not count irrelevant checks as missing passes");
 assertEqual(passingPresentation.summary, "2 passed · 0 failed · 2 not applicable", "validation status has an unambiguous breakdown");
 assertEqual(passingPresentation.tone, "success", "all applicable checks receive success styling");
+assertEqual([...passingPresentation.passed].length, 2, "the renderer can iterate passed checks");
+assertEqual([...passingPresentation.notApplicable].length, 2, "the renderer can iterate excluded checks");
 
 const failingPresentation = results.validationPresentation([
   {id: "convergence", status: "passed"},

@@ -25,3 +25,6 @@ knowledge-sources/index/
 !.env.example
 .superpowers/sdd/
 /test-workspaces/
+# Local verification evidence and unrelated rendering scratch files.
+/output/
+/tmp/

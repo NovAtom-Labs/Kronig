@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field, JsonValue
 
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
+from tcad_agent.recovery.proposals import RecoveryProposal
 from tcad_agent.science.models import ScientificCompletenessReport
 
 
@@ -19,3 +20,4 @@ class PreparedExperiment(StrictModel):
     capability_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     completeness: ScientificCompletenessReport
     warnings: tuple[str, ...] = ()
+    recovery_proposal: RecoveryProposal | None = None

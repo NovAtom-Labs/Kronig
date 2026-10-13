@@ -57,8 +57,7 @@ class WorkspaceContextCollector:
             names[:] = sorted(
                 name
                 for name in names
-                if name not in self._excluded_directories
-                and not (current / name).is_symlink()
+                if name not in self._excluded_directories and not (current / name).is_symlink()
             )
             for name in sorted(files):
                 path = current / name
@@ -75,7 +74,13 @@ class WorkspaceContextCollector:
         ordered = sorted(candidates, key=lambda item: item.relative_to(canonical).as_posix())
         truncated = len(ordered) > self.max_files
         selected = ordered[: self.max_files]
-        file_contexts = tuple(self._file_context(canonical, path) for path in selected)
+        file_contexts = []
+        for path in selected:
+            try:
+                file_contexts.append(self._file_context(canonical, path))
+            except FileNotFoundError:
+                # Temporary outputs may disappear between inventory and hashing.
+                continue
         inventory_json = json.dumps(
             [item.model_dump(mode="json") for item in file_contexts],
             sort_keys=True,

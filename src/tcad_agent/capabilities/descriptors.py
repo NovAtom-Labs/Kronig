@@ -45,6 +45,7 @@ class CapabilityInputDescriptor(StrictModel):
     required: bool = True
     unit: str | None = Field(default=None, min_length=1, max_length=80)
     question_hint: str | None = Field(default=None, min_length=1, max_length=600)
+    completeness_check: Literal["value", "structured"] = "value"
 
 
 class CapabilityDescriptor(StrictModel):
@@ -55,12 +56,8 @@ class CapabilityDescriptor(StrictModel):
     evidence_refs: tuple[str, ...] = Field(default=(), max_length=16)
     requires: tuple[str, ...] = Field(default=(), max_length=32)
     conflicts: tuple[str, ...] = Field(default=(), max_length=32)
-    required_inputs: tuple[CapabilityInputDescriptor, ...] = Field(
-        default=(), max_length=32
-    )
-    optional_inputs: tuple[CapabilityInputDescriptor, ...] = Field(
-        default=(), max_length=32
-    )
+    required_inputs: tuple[CapabilityInputDescriptor, ...] = Field(default=(), max_length=32)
+    optional_inputs: tuple[CapabilityInputDescriptor, ...] = Field(default=(), max_length=32)
     produces: tuple[str, ...] = Field(default=(), max_length=64)
     supported_materials: tuple[str, ...] = Field(default=(), max_length=32)
     supported_regions: tuple[str, ...] = Field(default=(), max_length=32)
@@ -133,8 +130,7 @@ class CapabilityCatalog(StrictModel):
             unknown = (set(descriptor.requires) | set(descriptor.conflicts)) - known
             if unknown:
                 raise ValueError(
-                    f"{descriptor.id} references unknown capability: "
-                    + ", ".join(sorted(unknown))
+                    f"{descriptor.id} references unknown capability: " + ", ".join(sorted(unknown))
                 )
         self._validate_dependency_cycles()
         return self
@@ -170,6 +166,9 @@ class CapabilityCatalog(StrictModel):
                 descriptor
                 for descriptor in self.descriptors
                 if descriptor.maturity is CapabilityMaturity.REVIEWED
+                # Retain the legacy ABI in the full catalog, but do not teach
+                # new requests an ambiguous old name for current density.
+                and descriptor.id != "observable.terminal_current"
             ),
             key=lambda item: item.id,
         )[:max_capabilities]
@@ -227,7 +226,17 @@ class CapabilityCatalog(StrictModel):
                     CapabilityDescriptor(
                         id=identifier,
                         category=category,
-                        summary=f"{manifest.backend} supports {category} {value}",
+                        summary=(
+                            f"{manifest.backend} supports {category} {value}"
+                            + (
+                                "; optional bias_schedule executes small-signal analysis at each "
+                                "scheduled DC operating point on the same contact"
+                                if category == "study"
+                                and value in {"ac", "frequency"}
+                                and manifest.backend == "devsim"
+                                else ""
+                            )
+                        ),
                         maturity=CapabilityMaturity.REVIEWED,
                         evidence_refs=_legacy_evidence_refs(
                             manifest.backend,
@@ -235,15 +244,11 @@ class CapabilityCatalog(StrictModel):
                             category,
                             str(value),
                         ),
-                        conflicts=_legacy_conflicts(
-                            manifest.backend, category, str(value)
-                        ),
+                        conflicts=_legacy_conflicts(manifest.backend, category, str(value)),
                         required_inputs=inputs,
                         optional_inputs=optional_inputs,
                         produces=_legacy_outputs(category, str(value)),
-                        supported_materials=_supported_materials(
-                            category, str(value), manifest
-                        ),
+                        supported_materials=_supported_materials(category, str(value), manifest),
                         supported_interfaces=(
                             manifest.interfaces
                             if category in {"equation", "model", "study"}
@@ -261,22 +266,20 @@ class CapabilityCatalog(StrictModel):
                         ),
                         required_validators=_required_validators(category),
                         parameter_sources=(
-                            (f"adapter-parameter-registry:{manifest.backend}:{manifest.adapter_version}",)
+                            (
+                                f"adapter-parameter-registry:{manifest.backend}:{manifest.adapter_version}",
+                            )
                             if category in {"material", "model"}
                             else ()
                         ),
                         execution_limits=dict(manifest.limits),
                         backend_compatibility={
                             manifest.backend: (
-                                "2.9.1"
-                                if manifest.backend == "devsim"
-                                else "deployment-specific"
+                                "2.9.1" if manifest.backend == "devsim" else "deployment-specific"
                             )
                         },
                         sentaurus_mapping=(
-                            "pending-reviewed-mapping"
-                            if manifest.backend == "devsim"
-                            else None
+                            "pending-reviewed-mapping" if manifest.backend == "devsim" else None
                         ),
                     )
                 )
@@ -327,9 +330,7 @@ class CapabilityCatalog(StrictModel):
                         "canonical-datasets-structural",
                         "operating-points-converged",
                     ),
-                    parameter_sources=(
-                        "novatom.spatial-temperature.2026-09-29.v1",
-                    ),
+                    parameter_sources=("novatom.spatial-temperature.2026-09-29.v1",),
                     execution_limits=dict(manifest.limits),
                     backend_compatibility={"devsim": "2.9.1"},
                     sentaurus_mapping="pending-reviewed-mapping",
@@ -344,9 +345,7 @@ class CapabilityCatalog(StrictModel):
         )
 
 
-def _legacy_conflicts(
-    backend: str, category: CapabilityCategory, value: str
-) -> tuple[str, ...]:
+def _legacy_conflicts(backend: str, category: CapabilityCategory, value: str) -> tuple[str, ...]:
     if backend != "devsim":
         return ()
     conflicts: dict[tuple[CapabilityCategory, str], tuple[str, ...]] = {
@@ -373,9 +372,7 @@ def _legacy_required_inputs(
 ) -> tuple[CapabilityInputDescriptor, ...]:
     if category == "study":
         common = (
-            _researcher_input(
-                "physics.temperature", "Physical simulation temperature", unit="K"
-            ),
+            _researcher_input("physics.temperature", "Physical simulation temperature", unit="K"),
         )
         schedules: dict[str, tuple[CapabilityInputDescriptor, ...]] = {
             "equilibrium": (),
@@ -408,9 +405,7 @@ def _legacy_required_inputs(
                 _researcher_input("study.final_voltage", "Final voltage", unit="V"),
                 _researcher_input("study.stop", "Transient stop time", unit="s"),
             ),
-            "temperature": (
-                _researcher_input("study.values", "Requested temperatures", unit="K"),
-            ),
+            "temperature": (_researcher_input("study.values", "Requested temperatures", unit="K"),),
             "parameter": (
                 _researcher_input("study.parameter_path", "Registered parameter to sweep"),
                 _researcher_input("study.values", "Requested parameter values"),
@@ -419,9 +414,7 @@ def _legacy_required_inputs(
         return common + schedules.get(value, ())
     if category == "material":
         inputs: tuple[CapabilityInputDescriptor, ...] = (
-            _researcher_input(
-                "regions.material", "Material assignment for every spatial region"
-            ),
+            _researcher_input("regions.material", "Material assignment for every spatial region"),
         )
         if value == "generic_dielectric":
             inputs += (
@@ -439,20 +432,21 @@ def _legacy_required_inputs(
                 description="Profile location, species and physical parameters",
                 authority=InputAuthority.RESEARCHER,
                 required=True,
+                completeness_check="structured",
             ),
         )
     if category == "contact":
         inputs = (
-            _researcher_input(
-                "contacts.boundary_conditions",
-                "Contact locations, types and applied conditions",
+            CapabilityInputDescriptor(
+                path="contacts.boundary_conditions",
+                description="Contact locations, types and applied conditions",
+                authority=InputAuthority.RESEARCHER,
+                completeness_check="structured",
             ),
         )
         if value == "metal_work_function":
             inputs += (
-                _researcher_input(
-                    "contacts.work_function", "Metal work function", unit="eV"
-                ),
+                _researcher_input("contacts.work_function", "Metal work function", unit="eV"),
             )
         return inputs
     if category == "interface":
@@ -503,6 +497,17 @@ def _legacy_required_inputs(
 def _legacy_optional_inputs(
     category: CapabilityCategory, value: str
 ) -> tuple[CapabilityInputDescriptor, ...]:
+    if category == "study" and value in {"dc", "dc_points", "ac", "frequency"}:
+        return (
+            CapabilityInputDescriptor(
+                path="profile_sampling.bias_values",
+                description="Explicit spatial profile extraction voltages",
+                authority=InputAuthority.RESEARCHER,
+                required=False,
+                unit="V",
+                question_hint="Which operating voltages should be used for the spatial profiles?",
+            ),
+        )
     if category == "contact" and value == "metal_work_function":
         return (
             CapabilityInputDescriptor(
@@ -601,12 +606,8 @@ def _legacy_evidence_refs(
         ("contact", "metal_work_function"): (
             "knowledge-sources/curated/devsim-schottky-transport.md"
         ),
-        ("interface", "surface_srh"): (
-            "knowledge-sources/curated/devsim-surface-physics.md"
-        ),
-        ("interface", "interface_trap"): (
-            "knowledge-sources/curated/devsim-surface-physics.md"
-        ),
+        ("interface", "surface_srh"): ("knowledge-sources/curated/devsim-surface-physics.md"),
+        ("interface", "interface_trap"): ("knowledge-sources/curated/devsim-surface-physics.md"),
         ("observable", "current_decomposition_residual"): (
             "knowledge-sources/curated/devsim-current-decomposition.md"
         ),

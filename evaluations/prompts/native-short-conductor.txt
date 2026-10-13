@@ -1,0 +1,1 @@
+Check a 1 um silicon bar, n doped 1e15 cm^-3, ohmic ends. Left ground, right at 0, 0.05 and 0.1 V. Plot current density, field and carrier profiles. Doping dependent mobility, drift diffusion, no recombination needed. Ask if you need anything else.

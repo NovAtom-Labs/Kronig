@@ -142,6 +142,73 @@ class FailingRuntimeFactory:
         raise RuntimeError("model configuration is unavailable")
 
 
+def test_verified_recalculation_waits_for_review_without_provider_call(services, valid_spec):
+    runtime = ScriptedRuntimeFactory([])
+    supervisor = AgentSupervisor(services, runtime)
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+
+    run = supervisor.review_prepared(
+        services.conversation.id, prepared, "Recalculate saved evidence"
+    )
+
+    assert run.state is RunState.WAITING_FOR_PLAN_APPROVAL
+    assert runtime.created == []
+    plan = services.store.get_prepared_plan(run.id)
+    assert ExperimentSpec.model_validate(plan.prepared["spec"]) == valid_spec
+    assert plan.plan_path.is_file()
+    baseline = services.store.get_run_baseline(run.id)
+    workspace = services.workspaces.get(services.conversation.workspace_id)
+    assert plan.plan_path.relative_to(workspace.root).as_posix() not in baseline.files
+    approved = supervisor.approve_plan(run.id, plan.revision, plan.plan_digest)
+    supervisor.join(approved.id, timeout=2)
+    assert len(runtime.created) == 1
+    assert "execute_approved_plan" in runtime.created[0].messages[0]
+
+
+def test_saved_review_cancelled_during_runtime_creation_never_executes(services, valid_spec):
+    factory = ScriptedRuntimeFactory([])
+    supervisor = AgentSupervisor(services, factory)
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+    run = supervisor.review_prepared(services.conversation.id, prepared, "Recalculate")
+    plan = services.store.get_prepared_plan(run.id)
+    original_create = factory.create
+    executed = Event()
+
+    def cancel_factory(*args):
+        runtime = original_create(*args)
+        runtime.run = executed.set
+        supervisor.stop(run.id)
+        return runtime
+
+    factory.create = cancel_factory
+    approved = supervisor.approve_plan(run.id, plan.revision, plan.plan_digest)
+    supervisor.join(run.id, timeout=2)
+    assert approved.state is RunState.CANCELLED
+    assert not executed.is_set()
+    assert run.id not in supervisor._runtimes
+
+
+@pytest.mark.parametrize("terminal_state", [RunState.CANCELLED, RunState.FAILED])
+def test_retry_after_interruption_uses_clean_sdk_history_and_preserves_chat(
+    services, terminal_state
+):
+    runtime = ScriptedRuntimeFactory([])
+    supervisor = AgentSupervisor(services, runtime)
+    interrupted = services.store.create_run(services.conversation.id, services.conversation.id)
+    services.store.transition_run(interrupted.id, interrupted.revision, terminal_state)
+    services.conversations.add_user_message(services.conversation.id, "Earlier request")
+    retry = supervisor.start(services.conversation.id, "Fresh calculation")
+    supervisor.join(retry.id, timeout=2)
+    assert retry.sdk_conversation_id != interrupted.sdk_conversation_id
+    assert runtime.created[0].id == retry.sdk_conversation_id
+    assert [message.content for message in services.store.list_messages(services.conversation.id)][
+        :2
+    ] == ["Earlier request", "Fresh calculation"]
+    followup = supervisor.start(services.conversation.id, "Inspect that result")
+    supervisor.join(followup.id, timeout=2)
+    assert followup.sdk_conversation_id == retry.sdk_conversation_id
+
+
 @pytest.fixture
 def services(tmp_path: Path):
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
@@ -167,9 +234,7 @@ def test_start_captures_baseline_before_runtime_executes(services) -> None:
     class BaselineObservingConversation(ScriptedConversation):
         def run(self) -> None:
             run = services.store.list_runs(services.conversation.id)[-1]
-            observed["baseline_present"] = (
-                services.store.get_run_baseline(run.id) is not None
-            )
+            observed["baseline_present"] = services.store.get_run_baseline(run.id) is not None
             super().run()
 
     class BaselineObservingFactory(ScriptedRuntimeFactory):
@@ -190,30 +255,24 @@ def test_start_captures_baseline_before_runtime_executes(services) -> None:
     supervisor.join(run.id, timeout=2)
 
     assert observed["baseline_present"] is True
-    assert services.store.get_run_baseline(run.id).root == services.workspaces.get(
-        services.conversation.workspace_id
-    ).root
+    assert (
+        services.store.get_run_baseline(run.id).root
+        == services.workspaces.get(services.conversation.workspace_id).root
+    )
 
 
 def test_supervisor_runs_in_background_and_persists_final_answer(services) -> None:
     action = tool_start()
-    runtime = ScriptedRuntimeFactory(
-        events=[action, tool_finish(action), assistant("Completed")]
-    )
+    runtime = ScriptedRuntimeFactory(events=[action, tool_finish(action), assistant("Completed")])
     supervisor = AgentSupervisor(services, runtime)
 
-    run = supervisor.start(
-        services.conversation.id, "Inspect and test the repository"
-    )
+    run = supervisor.start(services.conversation.id, "Inspect and test the repository")
     supervisor.join(run.id, timeout=2)
 
     assert services.store.get_run(run.id).state is RunState.COMPLETED
     assert services.store.get_run_change_manifest(run.id) is not None
     assert services.store.list_messages(services.conversation.id)[-1].content == "Completed"
-    kinds = [
-        event.kind
-        for event in services.events.iter_after(services.conversation.id, 0)
-    ]
+    kinds = [event.kind for event in services.events.iter_after(services.conversation.id, 0)]
     for expected in (
         "run_started",
         "tool_call_started",
@@ -273,9 +332,7 @@ def test_contextual_approved_resumes_same_run_without_second_simulation_prompt(
     assert runtime.created[0].state.execution_status is ConversationExecutionStatus.PAUSED
     runtime.created[0].events.clear()
 
-    resumed = supervisor.approve_contextual_plan(
-        services.conversation.workspace_id, "approved"
-    )
+    resumed = supervisor.approve_contextual_plan(services.conversation.workspace_id, "approved")
     assert resumed is not None
     supervisor.join(run.id, timeout=2)
 
@@ -380,9 +437,9 @@ def test_paused_runtime_with_failed_typed_result_terminates_without_recovery_loo
         overall_state="failed",
         failed_check_count=3,
         unmet_deliverables=("potential", "current_density"),
-        project_root=services.workspaces.get(
-            services.conversation.workspace_id
-        ).root / "experiments" / "failed-study",
+        project_root=services.workspaces.get(services.conversation.workspace_id).root
+        / "experiments"
+        / "failed-study",
     )
     runtime = ScriptedConversation(
         running.sdk_conversation_id,
@@ -564,9 +621,7 @@ def test_approve_category_resolves_every_matching_action_in_current_batch(servic
         services.store.get_approval(item.id).decision is ApprovalDecision.APPROVE
         for item in approvals
     )
-    assert services.store.list_run_permission_grants(run.id) == (
-        "external_file_access",
-    )
+    assert services.store.list_run_permission_grants(run.id) == ("external_file_access",)
 
 
 def test_denial_rejects_runtime_batch_and_clears_every_pending_record(services) -> None:
@@ -594,8 +649,7 @@ def test_denial_rejects_runtime_batch_and_clears_every_pending_record(services) 
 
     assert services.store.list_pending_approvals(services.conversation.id) == ()
     assert all(
-        services.store.get_approval(item.id).decision is ApprovalDecision.DENY
-        for item in approvals
+        services.store.get_approval(item.id).decision is ApprovalDecision.DENY for item in approvals
     )
     assert runtime.created[0].rejections == ["Do not run this batch"]
 
@@ -624,9 +678,7 @@ def test_stop_cancels_pending_approval(services) -> None:
 
 
 def test_restart_recovery_cancels_interrupted_running_run(services) -> None:
-    run = services.store.create_run(
-        services.conversation.id, services.conversation.id
-    )
+    run = services.store.create_run(services.conversation.id, services.conversation.id)
     services.store.transition_run(run.id, run.revision, RunState.RUNNING)
 
     AgentSupervisor(services, ScriptedRuntimeFactory([]))
@@ -635,9 +687,7 @@ def test_restart_recovery_cancels_interrupted_running_run(services) -> None:
 
 
 def test_restart_recovery_cancels_run_that_never_finished_starting(services) -> None:
-    run = services.store.create_run(
-        services.conversation.id, services.conversation.id
-    )
+    run = services.store.create_run(services.conversation.id, services.conversation.id)
 
     AgentSupervisor(services, ScriptedRuntimeFactory([]))
 
@@ -652,9 +702,7 @@ def test_restart_recovery_cancels_run_that_never_finished_starting(services) -> 
 
 
 def test_restart_recovery_cancels_pending_approval_instead_of_resuming(services) -> None:
-    run = services.store.create_run(
-        services.conversation.id, services.conversation.id
-    )
+    run = services.store.create_run(services.conversation.id, services.conversation.id)
     approval = services.store.create_approval(
         run.id,
         "action-1",

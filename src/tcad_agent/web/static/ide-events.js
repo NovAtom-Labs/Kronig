@@ -32,6 +32,7 @@
       preparationStages: [],
       plan: null,
       resultReady: null,
+      terminalDetail: null,
     };
   }
 
@@ -132,6 +133,10 @@
       reviewing_workspace: "Reviewing repository context",
       consulting_local_knowledge: "Consulting local TCAD knowledge",
       reasoning_about_scientific_intent: "Resolving the scientific intent",
+      awaiting_model_response: "Waiting for the model to resolve the request",
+        receiving_preparation_response: "Receiving and checking the model's request interpretation",
+        validating_research_intent: "Checking the confirmed scientific inputs",
+      repairing_preparation_response: "Checking and correcting the request format",
       compiling_request: "Compiling the executable request",
       checking_local_evidence: "Checking local scientific evidence",
     };
@@ -145,7 +150,7 @@
       if (existing) {
         existing.label = label;
         existing.status = "running";
-        existing.startedAt = event.created_at || existing.startedAt;
+        existing.startedAt = existing.startedAt || event.created_at;
       } else {
         state.preparationStages.push({
           phase,
@@ -163,8 +168,33 @@
       });
     }
 
+    function settleActiveWork(state) {
+      const terminal = ["completed", "failed", "blocked", "cancelled", "paused"];
+      if (!terminal.includes(state.runState)) return;
+      const settledStatus = state.runState === "completed"
+        ? "completed"
+        : state.runState === "failed"
+          ? "failed"
+          : state.runState;
+      state.preparationStages.forEach((stage) => {
+        if (stage.status === "running") stage.status = settledStatus;
+      });
+      state.steps.forEach((step) => {
+        if (step.status === "running") step.status = settledStatus;
+      });
+      if (state.inference?.status === "running") state.inference.status = "interrupted";
+    }
+
     function updateRunState(state, event) {
       const payload = event.payload || {};
+      if (state.plan?.status === "pending" && (
+        event.kind === "run_paused"
+        || (event.kind === "run_state_changed" && payload.state === "paused")
+      )) {
+        state.runState = "waiting_for_plan_approval";
+        state.currentOperation = "Experiment plan ready for review";
+        return;
+      }
       if (event.kind === "run_created") {
         state.runState = String(payload.state || "queued");
       } else if (event.kind === "run_state_changed" && payload.state) {
@@ -181,6 +211,9 @@
         state.runState = "waiting_for_plan_approval";
       } else if (["plan_approved", "plan_revision_requested"].includes(event.kind)) {
         state.runState = "running";
+      }
+      if (terminalStates[event.kind] && payload.detail) {
+        state.terminalDetail = String(payload.detail);
       }
       const labels = {
         completed: "Run completed",
@@ -207,7 +240,12 @@
       if (!selectedRunId || ["run_created", "run_started"].includes(event.kind)) {
         selectedRunId = runId;
       }
+      const eventEndsActiveWork = Boolean(terminalStates[event.kind])
+        || (event.kind === "run_state_changed"
+          && ["completed", "failed", "blocked", "cancelled", "paused"]
+            .includes(String(event.payload?.state || "")));
       if (state.inference?.status === "running"
+        && !eventEndsActiveWork
         && !["agent_progress_started", "agent_progress_interrupted"].includes(event.kind)) {
         state.inference.status = "completed";
       }
@@ -297,6 +335,7 @@
         state.technicalEvents.push(event);
       }
       updateRunState(state, event);
+      settleActiveWork(state);
       return true;
     }
 
@@ -314,6 +353,7 @@
           preparationStages: [],
           plan: null,
           resultReady: null,
+          terminalDetail: null,
           pendingApprovals: [],
           approvalHistory: [],
           technicalEvents: [],
@@ -330,6 +370,7 @@
         preparationStages: state.preparationStages,
         plan: state.plan,
         resultReady: state.resultReady,
+        terminalDetail: state.terminalDetail,
         pendingApprovals: Array.from(state.pendingApprovals.values()),
         approvalHistory: state.approvalHistory,
         technicalEvents: state.technicalEvents,

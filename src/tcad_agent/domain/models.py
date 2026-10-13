@@ -16,7 +16,13 @@ from tcad_agent.domain.profiles import (
     TabulatedTemperatureProfile,
     TemperatureProfile1D,
 )
-from tcad_agent.domain.studies import DCStudy, EquilibriumStudy, Study1D
+from tcad_agent.domain.studies import (
+    DCPointsStudy,
+    DCStudy,
+    EquilibriumStudy,
+    Study1D,
+    expand_study_points,
+)
 from tcad_agent.domain.units import QuantityValue
 
 __all__ = [
@@ -81,9 +87,7 @@ class Observable(StrEnum):
     ELECTRON_AFFINITY = "electron_affinity"
     BAND_GAP = "band_gap"
     BAND_GAP_NARROWING = "band_gap_narrowing"
-    EFFECTIVE_INTRINSIC_CARRIER_CONCENTRATION = (
-        "effective_intrinsic_carrier_concentration"
-    )
+    EFFECTIVE_INTRINSIC_CARRIER_CONCENTRATION = "effective_intrinsic_carrier_concentration"
     ELECTRON_QUASI_FERMI_LEVEL = "electron_quasi_fermi_level"
     HOLE_QUASI_FERMI_LEVEL = "hole_quasi_fermi_level"
     ELECTRON_CURRENT_DENSITY = "electron_current_density"
@@ -161,14 +165,10 @@ class Region1D(StrictModel):
         if self.mesh_spacing is not None and self.mesh_spacing.to("m") <= 0:
             raise ValueError("mesh spacing must be positive")
         minimum = (
-            self.minimum_mesh_spacing.to("m")
-            if self.minimum_mesh_spacing is not None
-            else None
+            self.minimum_mesh_spacing.to("m") if self.minimum_mesh_spacing is not None else None
         )
         maximum = (
-            self.maximum_mesh_spacing.to("m")
-            if self.maximum_mesh_spacing is not None
-            else None
+            self.maximum_mesh_spacing.to("m") if self.maximum_mesh_spacing is not None else None
         )
         if minimum is not None and minimum <= 0:
             raise ValueError("minimum mesh spacing must be positive")
@@ -194,14 +194,10 @@ class Region1D(StrictModel):
 class SignConvention(StrictModel):
     """Explicit electrical signs preserved with every approved experiment."""
 
-    electric_field: Literal["negative_potential_gradient"] = (
-        "negative_potential_gradient"
-    )
+    electric_field: Literal["negative_potential_gradient"] = "negative_potential_gradient"
     conventional_current: Literal["positive_x"] = "positive_x"
     terminal_current: Literal["positive_into_device"] = "positive_into_device"
-    terminal_charge: Literal["outward_displacement_flux"] = (
-        "outward_displacement_flux"
-    )
+    terminal_charge: Literal["outward_displacement_flux"] = "outward_displacement_flux"
 
 
 class SolverControls(StrictModel):
@@ -236,9 +232,7 @@ class Contact(StrictModel):
 
     @field_validator("electron_richardson_constant", "hole_richardson_constant")
     @classmethod
-    def require_richardson_constant(
-        cls, value: QuantityValue | None
-    ) -> QuantityValue | None:
+    def require_richardson_constant(cls, value: QuantityValue | None) -> QuantityValue | None:
         if value is not None:
             value.require("A/cm^2/K^2", "Richardson constant")
             if value.to("A/cm^2/K^2") <= 0:
@@ -252,9 +246,7 @@ class Contact(StrictModel):
 
     @field_validator("area")
     @classmethod
-    def require_positive_area(
-        cls, value: QuantityValue | None
-    ) -> QuantityValue | None:
+    def require_positive_area(cls, value: QuantityValue | None) -> QuantityValue | None:
         if value is not None:
             value.require("m^2", "area")
             if value.to("m^2") <= 0:
@@ -306,9 +298,7 @@ class PhysicsParameters(StrictModel):
 
     @field_validator("auger_electron_coefficient", "auger_hole_coefficient")
     @classmethod
-    def require_auger_coefficient(
-        cls, value: QuantityValue | None
-    ) -> QuantityValue | None:
+    def require_auger_coefficient(cls, value: QuantityValue | None) -> QuantityValue | None:
         if value is not None:
             value.require("cm^6/s", "volume-squared per time")
             if value.to("cm^6/s") < 0:
@@ -385,6 +375,34 @@ class PhysicsSelection(StrictModel):
         return self
 
 
+class ProfileSampling(StrictModel):
+    """Explicit profile display points; all solved evidence is still retained."""
+
+    mode: Literal["explicit", "automatic"] = "explicit"
+    bias_values: tuple[QuantityValue, ...] = Field(default=(), max_length=10000)
+    labels: tuple[str, ...] = ()
+    method: Literal["schedule_quantiles"] | None = None
+    sample_count: int | None = Field(default=None, ge=2, le=100)
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> Self:
+        if self.mode == "explicit":
+            if not self.bias_values or self.method is not None or self.sample_count is not None:
+                raise ValueError("explicit sampling requires bias_values and no automatic method")
+            if self.labels and len(self.labels) != len(self.bias_values):
+                raise ValueError("each profile label must correspond to one explicit voltage")
+        elif not self.method or self.sample_count is None:
+            raise ValueError("automatic sampling requires an explicit selection method and count")
+        elif self.bias_values or self.labels:
+            raise ValueError("automatic sampling cannot supply explicit voltages or regime labels")
+        return self
+
+    @field_validator("bias_values")
+    @classmethod
+    def require_voltage(cls, values: tuple[QuantityValue, ...]) -> tuple[QuantityValue, ...]:
+        return tuple(value.require("V", "voltage") for value in values)
+
+
 class ExperimentSpec(StrictModel):
     schema_version: Literal["1.0"]
     name: str = Field(min_length=1)
@@ -395,11 +413,25 @@ class ExperimentSpec(StrictModel):
     contacts: tuple[Contact, ...]
     physics: PhysicsSelection
     study: Study1D
+    profile_sampling: ProfileSampling | None = None
     observables: tuple[Observable, ...]
     mesh_anchors: tuple[MeshAnchor1D, ...] = ()
     sign_convention: SignConvention = Field(default_factory=SignConvention)
     solver: SolverControls = Field(default_factory=SolverControls)
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    def profile_bias_values_v(self) -> tuple[float, ...]:
+        if not self.profile_sampling:
+            return ()
+        if self.profile_sampling.mode == "explicit":
+            return tuple(value.to("V") for value in self.profile_sampling.bias_values)
+        schedule = getattr(self.study, "bias_schedule", None) or self.study
+        values = tuple(point.to("V") for point in expand_study_points(schedule))
+        count = self.profile_sampling.sample_count
+        if not count or count > len(values):
+            raise ValueError("automatic sample count must not exceed approved bias schedule points")
+        indices = tuple(round(index * (len(values) - 1) / (count - 1)) for index in range(count))
+        return tuple(values[index] for index in indices)
 
     @model_validator(mode="before")
     @classmethod
@@ -426,6 +458,19 @@ class ExperimentSpec(StrictModel):
 
     @model_validator(mode="after")
     def validate_composition(self) -> Self:
+        if self.profile_sampling:
+            schedule = getattr(self.study, "bias_schedule", None) or self.study
+            if isinstance(schedule, DCStudy | DCPointsStudy):
+                biases = [point.to("V") for point in expand_study_points(schedule)]
+            elif isinstance(schedule, EquilibriumStudy) or self.study.kind in {"ac", "frequency"}:
+                biases = [0.0]
+            else:
+                raise ValueError("bias profile sampling requires an approved bias schedule")
+            if any(
+                not any(abs(value - bias) < 1e-10 for bias in biases)
+                for value in self.profile_bias_values_v()
+            ):
+                raise ValueError("profile points must exist in the approved bias schedule")
         if not self.regions:
             raise ValueError("at least one region is required")
         region_ids = [region.id for region in self.regions]
@@ -443,12 +488,10 @@ class ExperimentSpec(StrictModel):
             if left.material != right.material
         }
         actual_boundaries = {
-            (interface.left_region, interface.right_region)
-            for interface in self.interfaces
+            (interface.left_region, interface.right_region) for interface in self.interfaces
         }
         all_adjacent = {
-            (left.id, right.id)
-            for left, right in zip(self.regions, self.regions[1:], strict=False)
+            (left.id, right.id) for left, right in zip(self.regions, self.regions[1:], strict=False)
         }
         invalid_boundaries = actual_boundaries - all_adjacent
         if invalid_boundaries:
@@ -483,20 +526,15 @@ class ExperimentSpec(StrictModel):
         for temperature_profile in self.physics.temperature_profiles:
             region = regions_by_id[temperature_profile.region]
             temperature_coordinates: tuple[QuantityValue, ...] = ()
-            if isinstance(
-                temperature_profile, PiecewiseConstantTemperatureProfile
-            ):
+            if isinstance(temperature_profile, PiecewiseConstantTemperatureProfile):
                 temperature_coordinates = temperature_profile.boundaries
             elif isinstance(temperature_profile, TabulatedTemperatureProfile):
                 temperature_coordinates = temperature_profile.positions
             if temperature_coordinates and (
                 temperature_coordinates[0].to("m") < region.x0.to("m") - 1e-15
-                or temperature_coordinates[-1].to("m")
-                > region.x1.to("m") + 1e-15
+                or temperature_coordinates[-1].to("m") > region.x1.to("m") + 1e-15
             ):
-                raise ValueError(
-                    "temperature profile coordinates must lie inside their region"
-                )
+                raise ValueError("temperature profile coordinates must lie inside their region")
         contact_ids = [contact.id for contact in self.contacts]
         if len(contact_ids) != len(set(contact_ids)):
             raise ValueError("contact IDs must be unique")

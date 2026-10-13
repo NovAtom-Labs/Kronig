@@ -28,9 +28,7 @@ def evaluate_profile(profile: ProfilePayload, region: RegionPayload, x_cm: float
         normalized = (x_cm - profile.center_cm) / profile.standard_deviation_cm
         return profile.peak_cm3 * math.exp(-0.5 * normalized * normalized)
     if isinstance(profile, ErrorFunctionProfilePayload):
-        normalized = (
-            x_cm - profile.junction_position_cm
-        ) / profile.characteristic_length_cm
+        normalized = (x_cm - profile.junction_position_cm) / profile.characteristic_length_cm
         fraction = 0.5 * math.erfc(normalized)
         if profile.orientation == "increasing_x":
             fraction = 1.0 - fraction
@@ -63,10 +61,10 @@ def devsim_expression(profile: ProfilePayload, region: RegionPayload) -> str:
     if isinstance(profile, ConstantProfilePayload):
         return f"{profile.value_cm3:.17g}"
     if isinstance(profile, LinearProfilePayload):
-        fraction = f"((x-{region.x0_cm:.17g})/{(region.x1_cm-region.x0_cm):.17g})"
+        fraction = f"((x-{region.x0_cm:.17g})/{(region.x1_cm - region.x0_cm):.17g})"
         return (
             f"{profile.start_value_cm3:.17g}+{fraction}*"
-            f"{(profile.end_value_cm3-profile.start_value_cm3):.17g}"
+            f"{(profile.end_value_cm3 - profile.start_value_cm3):.17g}"
         )
     if isinstance(profile, GaussianProfilePayload):
         return (
@@ -75,8 +73,7 @@ def devsim_expression(profile: ProfilePayload, region: RegionPayload) -> str:
         )
     if isinstance(profile, ErrorFunctionProfilePayload):
         argument = (
-            f"((x-{profile.junction_position_cm:.17g})/"
-            f"{profile.characteristic_length_cm:.17g})"
+            f"((x-{profile.junction_position_cm:.17g})/{profile.characteristic_length_cm:.17g})"
         )
         base = f"0.5*erfc{argument}"
         if profile.orientation == "increasing_x":
@@ -94,7 +91,7 @@ def devsim_expression(profile: ProfilePayload, region: RegionPayload) -> str:
                 segment = f"{y0:.17g}"
             else:
                 boundary = x1
-                segment = f"{y0:.17g}+(x-{x0:.17g})*{((y1-y0)/(x1-x0)):.17g}"
+                segment = f"{y0:.17g}+(x-{x0:.17g})*{((y1 - y0) / (x1 - x0)):.17g}"
             expression = f"ifelse(x < {boundary:.17g}, {segment}, {expression})"
         return expression
     raise TypeError(f"unsupported profile payload: {type(profile).__name__}")

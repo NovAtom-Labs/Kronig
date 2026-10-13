@@ -1,0 +1,5 @@
+Investigate how a graded donor implant changes the electrostatic field and carrier transport in a one-dimensional silicon structure. Work in this folder and keep the simulation reproducible.
+
+Use a 2 micrometre silicon region with uniform boron background doping of 2e16 cm^-3 and a Gaussian phosphorus implant with peak concentration 8e17 cm^-3 centred at 1.7 micrometres from the left boundary. Use ohmic contacts at both ends. Compare the electrical response at -0.5 V, 0 V, +0.2 V, and +0.4 V, with the other contact grounded.
+
+Show the doping, potential, electric field, electron and hole concentrations, space charge, band profiles, carrier mobility, recombination, and terminal current density as interactive results. Use drift-diffusion, doping-dependent mobility and Shockley-Read-Hall recombination where appropriate. Check convergence, current conservation, and whether the field and charge profiles are physically consistent. Ask me for missing physical inputs before making the plan.

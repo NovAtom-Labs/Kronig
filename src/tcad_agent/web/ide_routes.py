@@ -12,13 +12,14 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from tcad_agent.agent.supervisor import AgentRunConflictError, AgentSupervisor
 from tcad_agent.bundles.export import BundleArchiveService, BundleExportRecord
+from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.ide.changes import WorkspaceChangeTracker, attribute_changes
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed, format_sse
@@ -37,6 +38,7 @@ from tcad_agent.ide.models import (
     WorkspaceTextFile,
 )
 from tcad_agent.ide.repository import WorkspaceFileConflictError
+from tcad_agent.ide.result_catalog import SavedResultCatalog, SavedResultListing
 from tcad_agent.ide.results import (
     WorkspaceResultComparison,
     WorkspaceResultError,
@@ -47,6 +49,8 @@ from tcad_agent.ide.sessions import WorkspaceSessionBusyError, WorkspaceSessionS
 from tcad_agent.ide.store import IDEStoreError, MessageNotFoundError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.prompting.models import PromptPreparationRecord
+from tcad_agent.recovery.models import RecoveryAction
+from tcad_agent.recovery.proposals import RecoveryProposalService, recovery_failures_from_report
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.results.query import (
     DatasetQueryError,
@@ -54,6 +58,8 @@ from tcad_agent.results.query import (
     query_dataset,
 )
 from tcad_agent.runtime.paths import RuntimePaths
+from tcad_agent.validation.assessment import assess_result
+from tcad_agent.validation.policy import validation_policy_digest
 from tcad_agent.web.schemas import (
     AnswerClarificationRequest,
     ApprovePlanRequest,
@@ -61,6 +67,7 @@ from tcad_agent.web.schemas import (
     DenyAgentApprovalRequest,
     ExportBundleRequest,
     OpenWorkspaceRequest,
+    RecoveryReviewRequest,
     ResolveAgentApprovalRequest,
     RevisePlanRequest,
     SaveWorkspaceFileRequest,
@@ -109,9 +116,7 @@ class IDEServices:
 
 
 def build_default_ide_services() -> IDEServices:
-    runtime_root = Path(
-        os.getenv("TCAD_WORKSPACE", str(Path.cwd() / ".tcad-agent"))
-    ).resolve()
+    runtime_root = Path(os.getenv("TCAD_WORKSPACE", str(Path.cwd() / ".tcad-agent"))).resolve()
     store = SqliteIDEStore(runtime_root / "ide.sqlite3")
     events = EventFeed(store)
     return IDEServices(
@@ -219,9 +224,7 @@ def select_directory() -> Path | None:
     )
 
 
-def build_ide_router(
-    services: IDEServices, supervisor: AgentSupervisor
-) -> APIRouter:
+def build_ide_router(services: IDEServices, supervisor: AgentSupervisor) -> APIRouter:
     router = APIRouter(prefix="/api")
 
     @router.post("/system/directories/select")
@@ -248,9 +251,7 @@ def build_ide_router(
         return services.workspaces.get(workspace_id)
 
     @router.get("/workspaces/{workspace_id}/entries")
-    def workspace_entries(
-        workspace_id: UUID, path: str = "."
-    ) -> tuple[WorkspaceEntry, ...]:
+    def workspace_entries(workspace_id: UUID, path: str = ".") -> tuple[WorkspaceEntry, ...]:
         return services.workspaces.entries(workspace_id, path)
 
     @router.get("/workspaces/{workspace_id}/experiments")
@@ -260,9 +261,7 @@ def build_ide_router(
         workspace = services.workspaces.get(workspace_id)
         root = workspace.root.resolve()
         summaries: list[ExperimentProjectSummary] = []
-        for record in services.store.list_experiment_results_for_workspace(
-            workspace_id
-        ):
+        for record in services.store.list_experiment_results_for_workspace(workspace_id):
             project = record.project_root.resolve(strict=False)
             if not project.is_relative_to(root):
                 raise AgentAPIError(
@@ -271,6 +270,7 @@ def build_ide_router(
                     "A recorded experiment no longer belongs to this repository.",
                 )
             relative = project.relative_to(root).as_posix()
+            outcome = services.store.find_run_outcome(record.run_id)
             artifacts = {
                 key: f"{relative}/{name}"
                 for key, name in {
@@ -289,21 +289,211 @@ def build_ide_router(
                     project_path=relative,
                     execution_state=record.execution_state,
                     validation_state=record.validation_state,
+                    failed_check_count=outcome.failed_check_count if outcome else None,
+                    unmet_deliverables=outcome.unmet_deliverables if outcome else (),
                     artifacts=artifacts,
                 )
             )
         return tuple(summaries)
 
+    @router.get("/workspaces/{workspace_id}/saved-results")
+    def saved_results(workspace_id: UUID) -> SavedResultListing:
+        workspace = services.workspaces.get(workspace_id)
+        try:
+            return SavedResultCatalog(services.results).list(workspace.root)
+        except WorkspaceResultError as exc:
+            raise AgentAPIError(
+                409,
+                "invalid_result_catalog",
+                "Saved evidence storage is unavailable or failed integrity checks.",
+            ) from exc
+
+    @router.get("/workspaces/{workspace_id}/saved-results/{bundle_run_id}")
+    def saved_result(workspace_id: UUID, bundle_run_id: str) -> dict[str, object]:
+        workspace = services.workspaces.get(workspace_id)
+        try:
+            view = SavedResultCatalog(services.results).read(workspace.root, bundle_run_id)
+        except WorkspaceResultError as exc:
+            raise AgentAPIError(
+                409,
+                "invalid_result_bundle",
+                "The saved result is unavailable or failed provenance checks.",
+            ) from exc
+        payload = view.model_dump(mode="json")
+        payload.update(saved_bundle_id=bundle_run_id, workspace_id=str(workspace_id))
+        enrich_result(payload, view)
+        return payload
+
+    def enrich_result(payload: dict, view: WorkspaceResultView) -> None:
+        payload["assessment"] = assess_result(
+            view.result, spec=view.experiment, validation=view.validation
+        ).model_dump(mode="json")
+        actions = []
+        policy_current = view.validation.validation_policy_digest == validation_policy_digest()
+        for action in (
+            RecoveryAction
+            if policy_current and view.validation.acceptance_limits is not None
+            else ()
+        ):
+            if action is RecoveryAction.STOP_AND_REPORT:
+                continue
+            for failure in recovery_failures_from_report(view.result, view.validation):
+                try:
+                    RecoveryProposalService().propose(
+                        view.experiment,
+                        action=action,
+                        failure=failure,
+                        original_bundle_id=view.manifest.run_id,
+                        validation_limits=view.validation.acceptance_limits,
+                        validation_policy_digest=view.validation.validation_policy_digest,
+                    )
+                    actions.append(action.value)
+                    break
+                except ValueError:
+                    continue
+        payload["recovery_actions"] = actions
+
+    @router.post(
+        "/workspaces/{workspace_id}/saved-results/{bundle_run_id}/recalculate", status_code=201
+    )
+    def recalculate_saved_result(workspace_id: UUID, bundle_run_id: str) -> AgentRunRecord:
+        payload = saved_result(workspace_id, bundle_run_id)
+        from tcad_agent.domain.models import ExperimentSpec
+
+        original = ExperimentSpec.model_validate(payload["experiment"])
+        candidate = original.model_copy(
+            update={
+                "name": f"{original.name} {uuid4().hex[:6]} recalculation",
+                "metadata": {**original.metadata, "derived_from_bundle": bundle_run_id},
+            }
+        )
+        prepared = ExperimentEngine().prepare(candidate, payload["manifest"]["backend"])
+        session = current_session(workspace_id)
+        try:
+            return supervisor.review_prepared(
+                session.id,
+                prepared,
+                f"Recalculate {original.name} from verified bundle {bundle_run_id}. "
+                "Scientific inputs unchanged.",
+            )
+        except AgentRunConflictError as exc:
+            raise AgentAPIError(
+                409,
+                "agent_run_conflict",
+                "Finish or stop the active run before preparing another calculation.",
+            ) from exc
+
+    @router.post(
+        "/workspaces/{workspace_id}/saved-results/{bundle_run_id}/recovery", status_code=201
+    )
+    def review_saved_recovery(
+        workspace_id: UUID,
+        bundle_run_id: str,
+        request: RecoveryReviewRequest,
+    ) -> dict[str, object]:
+        saved_result(workspace_id, bundle_run_id)
+        workspace = services.workspaces.get(workspace_id)
+        view = SavedResultCatalog(services.results).read(workspace.root, bundle_run_id)
+        if request.action is RecoveryAction.STOP_AND_REPORT:
+            return {"stopped": True, "original_bundle_id": bundle_run_id}
+        if (
+            view.validation.acceptance_limits is None
+            or view.validation.validation_policy_digest != validation_policy_digest()
+        ):
+            raise AgentAPIError(
+                422,
+                "recovery_limits_unavailable",
+                "This result lacks the current recorded validation policy and acceptance limits. "
+                "Recalculate it before preparing numerical recovery.",
+            )
+        proposal = None
+        for failure in recovery_failures_from_report(view.result, view.validation):
+            try:
+                proposal = RecoveryProposalService().propose(
+                    view.experiment,
+                    action=request.action,
+                    failure=failure,
+                    original_bundle_id=bundle_run_id,
+                    validation_limits=view.validation.acceptance_limits,
+                    validation_policy_digest=view.validation.validation_policy_digest,
+                )
+                break
+            except ValueError:
+                continue
+        if proposal is None:
+            raise AgentAPIError(
+                422,
+                "recovery_not_applicable",
+                "That numerical change is not supported by the recorded scientific failure.",
+            )
+        # Preserve the candidate's exact digest. A separate project suffix belongs to
+        # artifact placement, not to the scientific experiment being compared.
+        prepared = ExperimentEngine().prepare(
+            proposal.candidate_spec, view.manifest.backend, recovery_proposal=proposal
+        )
+        session = current_session(workspace_id)
+        try:
+            run = supervisor.review_prepared(
+                session.id,
+                prepared,
+                f"Review numerical recovery for {view.experiment.name}: {request.action.value}. "
+                f"Original bundle {bundle_run_id} remains unchanged.",
+            )
+        except AgentRunConflictError as exc:
+            raise AgentAPIError(
+                409,
+                "agent_run_conflict",
+                "Finish or stop the active run before preparing recovery.",
+            ) from exc
+        return {"run": run.model_dump(mode="json"), "proposal": proposal.model_dump(mode="json")}
+
+    @router.get("/workspaces/{workspace_id}/saved-results/{bundle_run_id}/datasets/{dataset_id}")
+    def saved_result_dataset(
+        workspace_id: UUID,
+        bundle_run_id: str,
+        dataset_id: str,
+        max_points: Annotated[int, Query(ge=4, le=50_000)] = 2_000,
+        slice_axis: str | None = None,
+        slice_index: Annotated[int | None, Query(ge=0)] = None,
+    ) -> DatasetQueryResult:
+        payload = saved_result(workspace_id, bundle_run_id)
+        try:
+            return query_dataset(
+                CanonicalResult.model_validate(payload["result"]),
+                dataset_id,
+                max_points=max_points,
+                slice_axis=slice_axis,
+                slice_index=slice_index,
+            )
+        except DatasetQueryError as exc:
+            raise AgentAPIError(422, "invalid_dataset_query", str(exc)) from exc
+
+    @router.post("/workspaces/{workspace_id}/saved-results/{bundle_run_id}/export", status_code=201)
+    def export_saved_result(
+        workspace_id: UUID,
+        bundle_run_id: str,
+        payload: ExportBundleRequest,
+    ) -> BundleExportRecord:
+        saved_result(workspace_id, bundle_run_id)
+        workspace = services.workspaces.get(workspace_id)
+        try:
+            return services.bundle_archives.export(
+                RuntimePaths.from_workspace(workspace.root).bundle_root / bundle_run_id,
+                Path(payload.destination),
+            )
+        except (OSError, ValueError) as exc:
+            raise AgentAPIError(
+                409,
+                "bundle_export_failed",
+                "The verified bundle could not be exported to that destination.",
+            ) from exc
+
     @router.get("/workspaces/{workspace_id}/files/preview")
-    def workspace_file_preview(
-        workspace_id: UUID, path: str
-    ) -> WorkspaceFilePreview:
+    def workspace_file_preview(workspace_id: UUID, path: str) -> WorkspaceFilePreview:
         return services.workspaces.preview_file(workspace_id, path)
 
     @router.get("/workspaces/{workspace_id}/files/raw")
-    def workspace_file_raw(
-        workspace_id: UUID, path: str, download: bool = False
-    ) -> FileResponse:
+    def workspace_file_raw(workspace_id: UUID, path: str, download: bool = False) -> FileResponse:
         preview = services.workspaces.preview_file(workspace_id, path)
         if not download and preview.kind not in {"image", "pdf"}:
             raise HTTPException(
@@ -325,9 +515,7 @@ def build_ide_router(
         )
 
     @router.get("/workspaces/{workspace_id}/results")
-    def workspace_results(
-        workspace_id: UUID, path: str
-    ) -> WorkspaceResultView:
+    def workspace_results(workspace_id: UUID, path: str) -> WorkspaceResultView:
         workspace = services.workspaces.get(workspace_id)
         try:
             return services.results.read(workspace.root, path)
@@ -361,9 +549,7 @@ def build_ide_router(
             ) from exc
 
     @router.get("/workspaces/{workspace_id}/files/content")
-    def workspace_file_content(
-        workspace_id: UUID, path: str
-    ) -> WorkspaceTextFile:
+    def workspace_file_content(workspace_id: UUID, path: str) -> WorkspaceTextFile:
         return services.workspaces.editable_file(workspace_id, path)
 
     @router.put("/workspaces/{workspace_id}/files/content")
@@ -412,9 +598,7 @@ def build_ide_router(
         session = current_session(workspace_id)
         return services.conversations.messages(session.id)
 
-    @router.post(
-        "/workspaces/{workspace_id}/session/messages", status_code=201
-    )
+    @router.post("/workspaces/{workspace_id}/session/messages", status_code=201)
     def create_session_message(
         workspace_id: UUID, payload: CreateMessageRequest
     ) -> ConversationMessage:
@@ -422,16 +606,12 @@ def build_ide_router(
         return services.conversations.add_user_message(session.id, payload.content)
 
     @router.post("/workspaces/{workspace_id}/session/runs", status_code=202)
-    def start_agent_run(
-        workspace_id: UUID, payload: StartAgentRunRequest
-    ) -> AgentRunRecord:
+    def start_agent_run(workspace_id: UUID, payload: StartAgentRunRequest) -> AgentRunRecord:
         session = current_session(workspace_id)
         try:
             message = services.store.get_message(payload.message_id)
         except MessageNotFoundError as exc:
-            raise AgentAPIError(
-                404, "message_not_found", "The message was not found."
-            ) from exc
+            raise AgentAPIError(404, "message_not_found", "The message was not found.") from exc
         if message.conversation_id != session.id or message.role != "user":
             raise AgentAPIError(
                 400,
@@ -439,9 +619,7 @@ def build_ide_router(
                 "The run must reference a user message in this workspace session.",
             )
         try:
-            contextual = supervisor.approve_contextual_plan(
-                workspace_id, message.content
-            )
+            contextual = supervisor.approve_contextual_plan(workspace_id, message.content)
         except IDEStoreError as exc:
             raise AgentAPIError(
                 409,
@@ -451,9 +629,7 @@ def build_ide_router(
         if contextual is not None:
             return contextual
         try:
-            return supervisor.start(
-                session.id, message.content, persist_message=False
-            )
+            return supervisor.start(session.id, message.content, persist_message=False)
         except AgentRunConflictError as exc:
             raise AgentAPIError(
                 409,
@@ -480,10 +656,7 @@ def build_ide_router(
         conversation = services.conversations.get(run.conversation_id)
         workspace = services.workspaces.get(conversation.workspace_id)
         result = services.store.get_experiment_result(run_id)
-        bundle_root = (
-            RuntimePaths.from_workspace(workspace.root).bundle_root
-            / result.bundle_run_id
-        )
+        bundle_root = RuntimePaths.from_workspace(workspace.root).bundle_root / result.bundle_run_id
         try:
             view = services.results.read_bundle(bundle_root)
         except WorkspaceResultError as exc:
@@ -501,12 +674,14 @@ def build_ide_router(
             )
         payload = view.model_dump(mode="json")
         payload["project_result_path"] = (
-            project_root / "results.json"
-        ).relative_to(workspace.root.resolve()).as_posix()
+            (project_root / "results.json").relative_to(workspace.root.resolve()).as_posix()
+        )
         payload["execution_state"] = result.execution_state
         payload["validation_state"] = result.validation_state
         payload["agent_run_id"] = str(run_id)
         payload["workspace_id"] = str(workspace.id)
+        payload["saved_bundle_id"] = view.manifest.run_id
+        enrich_result(payload, view)
         return payload
 
     @router.get("/runs/{run_id}/result/datasets/{dataset_id}")
@@ -539,21 +714,14 @@ def build_ide_router(
         status_code=201,
         response_model=BundleExportRecord,
     )
-    def export_managed_bundle(
-        run_id: UUID, payload: ExportBundleRequest
-    ) -> BundleExportRecord:
+    def export_managed_bundle(run_id: UUID, payload: ExportBundleRequest) -> BundleExportRecord:
         run = services.store.get_run(run_id)
         conversation = services.conversations.get(run.conversation_id)
         workspace = services.workspaces.get(conversation.workspace_id)
         result = services.store.get_experiment_result(run_id)
-        bundle_root = (
-            RuntimePaths.from_workspace(workspace.root).bundle_root
-            / result.bundle_run_id
-        )
+        bundle_root = RuntimePaths.from_workspace(workspace.root).bundle_root / result.bundle_run_id
         try:
-            return services.bundle_archives.export(
-                bundle_root, Path(payload.destination)
-            )
+            return services.bundle_archives.export(bundle_root, Path(payload.destination))
         except (OSError, ValueError) as exc:
             raise AgentAPIError(
                 409,
@@ -562,9 +730,7 @@ def build_ide_router(
             ) from exc
 
     @router.post("/runs/{run_id}/plan/approve", status_code=202)
-    def approve_prepared_plan(
-        run_id: UUID, payload: ApprovePlanRequest
-    ) -> AgentRunRecord:
+    def approve_prepared_plan(run_id: UUID, payload: ApprovePlanRequest) -> AgentRunRecord:
         try:
             return supervisor.approve_plan(
                 run_id,
@@ -580,9 +746,7 @@ def build_ide_router(
             ) from exc
 
     @router.post("/runs/{run_id}/plan/revise", status_code=202)
-    def revise_prepared_plan(
-        run_id: UUID, payload: RevisePlanRequest
-    ) -> AgentRunRecord:
+    def revise_prepared_plan(run_id: UUID, payload: RevisePlanRequest) -> AgentRunRecord:
         try:
             return supervisor.revise_plan(
                 run_id,
@@ -717,20 +881,14 @@ def build_ide_router(
         approval_id: UUID, payload: ResolveAgentApprovalRequest
     ) -> AgentRunRecord:
         try:
-            return supervisor.approve_category(
-                approval_id, payload.expected_revision
-            )
+            return supervisor.approve_category(approval_id, payload.expected_revision)
         except IDEStoreError as exc:
             raise resolve_approval_error(exc) from exc
 
     @router.post("/approvals/{approval_id}/deny")
-    def deny_agent_action(
-        approval_id: UUID, payload: DenyAgentApprovalRequest
-    ) -> AgentRunRecord:
+    def deny_agent_action(approval_id: UUID, payload: DenyAgentApprovalRequest) -> AgentRunRecord:
         try:
-            return supervisor.deny(
-                approval_id, payload.expected_revision, payload.reason
-            )
+            return supervisor.deny(approval_id, payload.expected_revision, payload.reason)
         except IDEStoreError as exc:
             raise resolve_approval_error(exc) from exc
 

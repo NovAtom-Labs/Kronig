@@ -19,8 +19,179 @@ from tcad_agent.knowledge.retrieve import KnowledgeIndex
 ROOT = Path(__file__).parents[3]
 
 
+def test_agent_can_discover_and_reopen_verified_saved_results_without_chat(
+    tmp_path, monkeypatch, result_bundle_factory
+):
+    from tcad_agent.runtime.paths import RuntimePaths
+
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "data"))
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    result_bundle_factory(RuntimePaths.from_workspace(workspace).bundle_root)
+    executor = TcadDomainExecutor(workspace)
+    listing = executor(TcadDomainAction(operation="list_saved_results"))
+    opened = executor(
+        TcadDomainAction(operation="open_saved_result", payload={"run_id": "run-0001"})
+    )
+
+    assert listing.status == "ok"
+    assert listing.data["entries"][0]["bundle_run_id"] == "run-0001"
+    assert opened.code == "saved_result_opened"
+    assert opened.data["bundle_run_id"] == "run-0001"
+    assert opened.data["dataset_count"] > 0
+
+
+def test_preparation_retains_confirmed_automatic_sampling(tmp_path):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Extract three representative points",
+            fields=tuple(
+                IntentField(path="profile_sampling." + key, value=value, origin="researcher")
+                for key, value in (
+                    ("mode", "automatic"),
+                    ("method", "schedule_quantiles"),
+                    ("sample_count", 3),
+                )
+            ),
+        ),
+    )
+    payload = valid_spec_payload()
+    assert tools.prepare_experiment(payload, backend="devsim").code == "requested_scope_missing"
+    payload["profile_sampling"] = {
+        "mode": "automatic",
+        "method": "schedule_quantiles",
+        "sample_count": 2,
+    }
+    assert tools.prepare_experiment(payload, backend="devsim").code == "requested_scope_missing"
+    payload["profile_sampling"]["sample_count"] = 3
+    assert tools.prepare_experiment(payload, backend="devsim").status == "ok"
+
+
+def test_preparation_refuses_unrequested_automatic_sampling(tmp_path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation", objective="Use requested points"
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["profile_sampling"] = {
+        "mode": "automatic",
+        "method": "schedule_quantiles",
+        "sample_count": 3,
+    }
+    assert tools.prepare_experiment(payload, backend="devsim").code == "requested_scope_missing"
+
+
 def valid_spec_payload() -> dict:
     return yaml.safe_load((ROOT / "examples" / "pn-junction.yaml").read_text())
+
+
+def test_frequency_equilibrium_baseline_satisfies_confirmed_zero_bias_scope(tmp_path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Solve equilibrium and linear response around it",
+            selected_capabilities=("study.equilibrium", "study.frequency"),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["study"] = {
+        "kind": "frequency",
+        "contact": payload["contacts"][0]["id"],
+        "start": "1 kHz",
+        "stop": "1 MHz",
+        "points": 7,
+        "amplitude": "10 mV",
+        "spacing": "log",
+    }
+    response = tools.prepare_experiment(payload, backend="devsim")
+    assert response.status == "ok"
+
+
+def test_biased_small_signal_plan_cannot_claim_an_unrecorded_equilibrium_point(tmp_path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Separate equilibrium and biased response",
+            selected_capabilities=("study.equilibrium", "study.ac"),
+        ),
+    )
+    payload = valid_spec_payload()
+    contact = payload["contacts"][0]["id"]
+    payload["study"] = {
+        "kind": "ac",
+        "contact": contact,
+        "frequency": "1 MHz",
+        "amplitude": "10 mV",
+        "bias_schedule": {"kind": "dc_points", "contact": contact, "values": ["0.2 V"]},
+    }
+    assert tools.prepare_experiment(payload, backend="devsim").code == "requested_scope_missing"
+
+
+def test_requested_legacy_current_alias_matches_normalized_density(tmp_path: Path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Check zero terminal current density",
+            selected_capabilities=("observable.terminal_current",),
+        ),
+    )
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+    assert response.code != "requested_scope_missing"
+    assert response.status == "ok"
+
+
+def test_preparation_cannot_drop_a_confirmed_study(tmp_path: Path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Measure small-signal response over bias",
+            selected_capabilities=("study.ac", "study.dc"),
+        ),
+    )
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+    assert response.status == "refused"
+    assert response.code == "requested_scope_missing"
+    assert "study.ac" in response.data["missing_capabilities"]
+
+
+def test_preparation_cannot_drop_explicit_profile_sampling(tmp_path: Path):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Extract profiles at zero bias",
+            fields=(
+                IntentField(
+                    path="profile_sampling.bias_values", value=["0 V"], origin="researcher"
+                ),
+            ),
+        ),
+    )
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+    assert response.status == "refused"
+    assert response.code == "requested_scope_missing"
 
 
 def test_prepare_experiment_returns_typed_plan(tmp_path: Path) -> None:
@@ -120,12 +291,8 @@ def test_execute_experiment_keeps_runtime_bundle_outside_workspace(
             root = output_root / "run-recorded"
             (root / "results").mkdir(parents=True)
             (root / "validation").mkdir()
-            (root / "results" / "canonical.json").write_text(
-                '{"status":"completed"}\n'
-            )
-            (root / "validation" / "report.json").write_text(
-                '{"overall":"passed"}\n'
-            )
+            (root / "results" / "canonical.json").write_text('{"status":"completed"}\n')
+            (root / "validation" / "report.json").write_text('{"overall":"passed"}\n')
             (root / "report.md").write_text("# Report\n")
             (root / "traceability.json").write_text('{"records":[]}\n')
             return ExperimentBundle(run_id="run-recorded", state="completed", root=root)
@@ -184,12 +351,8 @@ def test_execute_approved_plan_loads_exact_repository_artifact_by_digest(
             root = output_root / "run-approved"
             (root / "results").mkdir(parents=True)
             (root / "validation").mkdir()
-            (root / "results" / "canonical.json").write_text(
-                '{"status":"completed"}\n'
-            )
-            (root / "validation" / "report.json").write_text(
-                '{"overall":"passed"}\n'
-            )
+            (root / "results" / "canonical.json").write_text('{"status":"completed"}\n')
+            (root / "validation" / "report.json").write_text('{"overall":"passed"}\n')
             (root / "report.md").write_text("# Report\n")
             (root / "traceability.json").write_text('{"records":[]}\n')
             return ExperimentBundle(run_id="run-approved", state="completed", root=root)
@@ -205,9 +368,7 @@ def test_execute_approved_plan_loads_exact_repository_artifact_by_digest(
     response = tools.execute_approved_plan(
         {
             "approved_plan_digest": prepared["plan_digest"],
-            "structured_plan_path": preparation.data["plan_artifacts"][
-                "structured_plan"
-            ],
+            "structured_plan_path": preparation.data["plan_artifacts"]["structured_plan"],
             "timeout_seconds": 30,
         }
     )

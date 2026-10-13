@@ -166,6 +166,26 @@ def test_serve_desktop_owns_storage_inside_data_lock(
     ]
 
 
+def test_supervision_is_established_before_desktop_work_is_admitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[str] = []
+    config = DesktopLaunchConfig(
+        host="127.0.0.1", port=0, launch_token="x" * 43, data_dir=tmp_path,
+        owner_pipe=True,
+    )
+    monkeypatch.setattr(desktop_server, "start_owner_monitor", lambda: events.append("owned"),
+                        raising=False)
+
+    def fail_bind(_config: DesktopLaunchConfig) -> None:
+        assert events == ["owned"], "backend work preceded independent ownership"
+        raise OSError("fixture binding failure")
+
+    monkeypatch.setattr(desktop_server, "bind_desktop_socket", fail_bind)
+    with pytest.raises(OSError, match="fixture binding failure"):
+        serve_desktop(config)
+
+
 def test_serve_desktop_cleans_storage_after_startup_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -5,6 +5,56 @@ function assertEqual(actual, expected, message) {
 }
 
 const agent = globalThis.AgentKronigAgentView;
+const failedSdkSnapshot = {runState: "failed", terminalDetail:
+  "ValidationException: invalid tool_use. api_key=hidden-key Authorization: Bearer hidden-bearer\nSDK session /Users/person/.claude/projects/sessions/abc.json", steps: []};
+const safeFailure = agent.failurePresentation(failedSdkSnapshot);
+assertEqual(safeFailure.summary.includes("ValidationException"), false, "SDK internals do not dominate the friendly failure summary");
+assertEqual(safeFailure.diagnostics.includes("invalid tool_use"), true, "failure evidence remains available separately");
+assertEqual(safeFailure.diagnostics.includes("hidden-key"), false, "freeform credential values are redacted");
+assertEqual(safeFailure.diagnostics.includes("hidden-bearer"), false, "authorization credentials are redacted");
+assertEqual(safeFailure.diagnostics.includes("/Users/person"), false, "SDK session paths are sanitized");
+assertEqual(agent.sanitizeDiagnostic('{"api_key":"json-secret", "password": "quoted-secret"}').includes("json-secret"), false,
+  "quoted JSON credential keys are sanitized in diagnostics");
+assertEqual(agent.sanitizeDiagnostic('{"api_key":"json-secret", "password": "quoted-secret"}').includes("quoted-secret"), false,
+  "quoted JSON password values are sanitized in diagnostics");
+assertEqual(agent.sanitizeDiagnostic("token=opaque AWS_SECRET_ACCESS_KEY=aws-secret X-Amz-Signature=url-secret").includes("opaque"), false,
+  "bare token assignments are sanitized");
+assertEqual(agent.sanitizeDiagnostic("token=opaque AWS_SECRET_ACCESS_KEY=aws-secret X-Amz-Signature=url-secret").includes("aws-secret"), false,
+  "cloud secret assignments are sanitized");
+assertEqual(agent.sanitizeDiagnostic("token=opaque AWS_SECRET_ACCESS_KEY=aws-secret X-Amz-Signature=url-secret").includes("url-secret"), false,
+  "signed request signatures are sanitized");
+assertEqual(agent.researchTrail(failedSdkSnapshot).current.label, safeFailure.summary, "the trail uses the friendly failure first");
+assertEqual(agent.outcomeSummary(failedSdkSnapshot, {}).diagnostics, safeFailure.diagnostics, "the outcome exposes a separately copyable diagnostic");
+const privateFailure = agent.failurePresentation({runState: "failed", steps: [
+  {toolName: "think", status: "failed", output: "private deliberations"},
+]});
+assertEqual(privateFailure.diagnostics.includes("private deliberations"), false, "private reasoning never becomes failure diagnostics");
+const cancelledStage = agent.researchTrail({runState: "cancelled", steps: [
+  {toolName: "terminal", phase: "execute", status: "running", startedAt: "2026-10-05T00:00:00Z"},
+]});
+assertEqual(cancelledStage.stages[0].status, "stopped", "stale tool state cannot imply live work after cancellation");
+assertEqual(cancelledStage.stages[0].label.includes("completed"), false, "cancelled work is never relabelled as completed");
+
+const ledgerRecords = [
+  {path: "temperature", quantity: "Temperature", value: 300, authority: "researcher_owned", source: {id: "confirmed-experiment-spec", kind: "researcher"}, status: "resolved", rationale: "Explicit input"},
+  {path: "solver.relative_error", quantity: "Relative error", value: 1e-8, authority: "platform_reviewed_default", source: {id: "solver-default", kind: "platform", digest: "a".repeat(64)}, status: "resolved", rationale: "Platform default"},
+  {path: "physics.models.0", quantity: "Model", value: "srh", authority: "evidence_backed_expert_suggestion", source: {id: "model-reference", kind: "evidence"}, status: "resolved", rationale: "Reviewed model"},
+  {path: "metadata.length", quantity: "Length", value: 1e-6, authority: "deterministically_derived", source: {id: "geometry", kind: "derived"}, derivation: "x1 minus x0", status: "resolved", rationale: "Derived extent"},
+];
+const inputLedger = agent.inputLedger(ledgerRecords);
+assertEqual(inputLedger.length, 4, "distinct input authorities are preserved before approval");
+assertEqual(inputLedger.find((group) => group.authority === "researcher_owned").records[0].value, "300", "the user's typed value remains inspectable");
+assertEqual(inputLedger.find((group) => group.authority === "platform_reviewed_default").records[0].digest, "a".repeat(64), "numerical defaults retain source digest provenance");
+assertEqual(inputLedger.find((group) => group.authority === "deterministically_derived").records[0].derivation, "x1 minus x0", "derived values retain derivation evidence");
+assertEqual(agent.planReview({status: "pending", prepared: {completeness: {records: ledgerRecords}}}).inputLedger.length,
+  4, "plan review exposes the actual typed completeness ledger");
+const reviewOutcomeTrail = agent.researchTrail({
+  runState: "blocked", steps: [], pendingApprovals: [],
+  resultReady: {overallState: "needs_attention"},
+  terminalDetail: "The simulation finished. Two checks need review.",
+});
+assertEqual(reviewOutcomeTrail.title, "Results need review", "scientific warnings are not an agent blocker");
+assertEqual(reviewOutcomeTrail.current?.animated, false, "finished scientific results cannot animate");
 const rows = agent.activityRows({
   steps: [{
     id: "action-1",
@@ -159,19 +209,32 @@ const recoveredTrail = agent.researchTrail({
   steps: [
     {id: "invalid-1", status: "failed", phase: "validate", toolName: "terminal", summary: "invalid_spec"},
     {id: "edit-1", status: "completed", phase: "edit", toolName: "file_editor", summary: "Corrected schema"},
-    {id: "validate-1", status: "running", phase: "validate", toolName: "terminal", summary: "Retry validation"},
+    {id: "validate-1", status: "completed", phase: "validate", toolName: "terminal", summary: "Retry validation"},
   ],
   pendingApprovals: [],
 });
 assertEqual(recoveredTrail.recovery !== null, true, "resolved intermediate failures become one neutral recovery note");
 assertEqual(recoveredTrail.recovery.includes("resolved automatically"), true, "recovery note explains that no researcher action was needed");
 assertEqual(recoveredTrail.stages.some((stage) => stage.status === "failed"), false, "recovered attempts do not look like terminal failures in chat");
+const unresolvedTrail = agent.researchTrail({runState: "running", pendingApprovals: [], steps: [
+  {id: "bad", status: "failed", toolName: "tcad_domain", arguments: {operation: "prepare_experiment"}},
+  {id: "schema", status: "completed", toolName: "tcad_domain", arguments: {operation: "describe_spec"}},
+  {id: "retry", status: "running", toolName: "tcad_domain", arguments: {operation: "prepare_experiment"}},
+]});
+assertEqual(unresolvedTrail.recovery, null, "schema inspection and a pending retry do not prove recovery");
+assertEqual(agent.researchTrail({runState: "running", steps: [{id:"file", status:"completed", toolName:"file_editor", arguments:{path:"src/study.py"}}], pendingApprovals:[]}).recent.some(row=>Boolean(row.detail)), true, "chat retains actual operation details");
 
 const queuedTrail = agent.researchTrail({
   runState: "queued",
   steps: [],
   pendingApprovals: [],
 });
+const failedRequest = agent.researchTrail({runState:"failed", steps:[], pendingApprovals:[],
+  terminalDetail:"Request preparation timed out. No simulation was started."});
+assertEqual(failedRequest.current?.label.includes("timed out"), true, "safe failure reason remains visible in chat");
+assertEqual(failedRequest.current?.animated, false, "failed request does not animate");
+assertEqual(agent.experimentProjectView({execution_state:"completed",validation_state:"needs_review",
+  failed_check_count:2}).statusLabel, "2 validation checks failed", "navigator names the actionable evidence count");
 assertEqual(queuedTrail.current.label, "Preparing the research approach", "a new run starts with an honest narrative state");
 
 const preparingTrail = agent.researchTrail({
@@ -188,10 +251,36 @@ const preparingTrail = agent.researchTrail({
 }, new Date("2026-10-04T10:00:15Z").getTime());
 assertEqual(preparingTrail.current.label, "Resolving the scientific intent", "preparation events drive the notebook narrative");
 assertEqual(preparingTrail.current.detail, "Still working · 12s", "quiet model time remains visibly alive without fake actions");
-assertEqual(preparingTrail.stages.length, 4, "pre-plan milestones remain visible in sequence");
-assertEqual(preparingTrail.stages[2].label, "Consulting local TCAD knowledge", "local knowledge retrieval is distinguishable");
+assertEqual(preparingTrail.stages.length, 0, "preparation uses one current operation without redundant stage rows");
+assertEqual(preparingTrail.recent.length, 0, "preparation does not repeat an invented run-start event");
 assertEqual(preparingTrail.title, "Preparing request", "preprocessing uses a task-neutral title");
 assertEqual(preparingTrail.meta, "Live", "preparation does not claim that zero actions is useful progress");
+
+for (const terminalState of ["completed", "failed", "blocked", "cancelled", "paused"]) {
+  const terminalTrail = agent.researchTrail({
+    runState: terminalState,
+    currentOperation: terminalState === "failed" ? "Run failed" : "Run finished",
+    preparationStages: [{
+      phase: "reasoning_about_scientific_intent",
+      label: "Resolving the scientific intent",
+      status: "running",
+      startedAt: "2026-10-04T10:00:03Z",
+    }],
+    inference: {
+      id: "stale-inference",
+      label: "Analyzing context and choosing the next action",
+      status: "running",
+      startedAt: "2026-10-04T10:00:04Z",
+    },
+    steps: [],
+    pendingApprovals: [],
+  }, new Date("2026-10-04T10:00:15Z").getTime());
+  assertEqual(
+    Boolean(terminalTrail.current?.animated),
+    false,
+    `${terminalState} research never retains a live animation`,
+  );
+}
 
 const clarificationTrail = agent.researchTrail({
   runState: "waiting_for_user",
@@ -347,12 +436,18 @@ const failed = agent.outcomeSummary(
       {status: "failed", summary: "Run validation", output: "assertion failed"},
     ],
     currentOperation: "Run failed",
+    terminalDetail: "The configured request still needs a researcher-owned input.",
   },
   {files: [{path: "src/physics.py"}]},
 );
 assertEqual(failed.tone, "danger", "failed run uses failure treatment");
 assertEqual(failed.failedStep, "Run validation", "failure keeps the failed step");
 assertEqual(failed.lastSuccessfulStep, "Inspect files", "failure keeps partial evidence");
+assertEqual(
+  failed.warnings.includes("The configured request still needs a researcher-owned input."),
+  true,
+  "terminal failure detail is presented as an actionable warning",
+);
 
 const needsAttention = agent.outcomeSummary(
   {

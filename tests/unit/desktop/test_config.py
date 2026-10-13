@@ -63,3 +63,17 @@ def test_desktop_launch_config_rejects_unsafe_environment(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         DesktopLaunchConfig.from_environment(environment)
+
+
+def test_owner_pipe_is_an_explicit_validated_launch_contract(tmp_path: Path) -> None:
+    environment = {
+        "AGENT_KRONIG_DESKTOP_TOKEN": "x" * 43,
+        "AGENT_KRONIG_DATA_DIR": str(tmp_path),
+        "AGENT_KRONIG_DESKTOP_OWNER_PIPE": "1",
+    }
+    assert DesktopLaunchConfig.from_environment(environment).owner_pipe is True
+    environment.pop("AGENT_KRONIG_DESKTOP_OWNER_PIPE")
+    assert DesktopLaunchConfig.from_environment(environment).owner_pipe is False
+    environment["AGENT_KRONIG_DESKTOP_OWNER_PIPE"] = "invalid"
+    with pytest.raises(ValueError, match="owner pipe"):
+        DesktopLaunchConfig.from_environment(environment)

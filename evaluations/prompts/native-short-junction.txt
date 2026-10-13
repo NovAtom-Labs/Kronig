@@ -1,0 +1,1 @@
+Make a 1D silicon pn study. Left 0.6 um p=3e16, right 0.9 um n=7e16, cm^-3. Ohmic ends, right grounded. Bias left at -0.2, 0, 0.15 V. Need band bending, carriers, field, charge and current density in the app. Use SRH and drift diffusion. Don't guess missing settings.

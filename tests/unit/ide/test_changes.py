@@ -34,9 +34,7 @@ def test_change_tracker_reports_only_changes_after_the_baseline(tmp_path: Path) 
     tracked.write_text("before run\nafter run\n")
     changes = WorkspaceChangeTracker().compare(root, baseline)
 
-    assert [(row.path, row.operation) for row in changes.files] == [
-        ("model.py", "modified")
-    ]
+    assert [(row.path, row.operation) for row in changes.files] == [("model.py", "modified")]
     assert changes.files[0].before_sha256 == baseline.files["model.py"].sha256
     assert changes.files[0].additions == 1
     assert changes.files[0].deletions == 0

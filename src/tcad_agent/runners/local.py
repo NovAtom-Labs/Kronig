@@ -35,6 +35,7 @@ class LocalRunner:
         environment.update(job.environment)
         environment["PYTHONUNBUFFERED"] = "1"
         command = [str(self.devsim_python), str(job.entrypoint), *job.arguments]
+        owns_group = os.name != "nt" and os.environ.get("AGENT_KRONIG_DESKTOP_OWNER_PIPE") != "1"
         started = time.monotonic()
         with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
             process = subprocess.Popen(
@@ -44,16 +45,22 @@ class LocalRunner:
                 stdout=stdout,
                 stderr=stderr,
                 text=True,
-                start_new_session=True,
+                start_new_session=owns_group,
             )
             try:
                 return_code = process.wait(timeout=budget.seconds)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGTERM)
+                if owns_group:
+                    os.killpg(process.pid, signal.SIGTERM)
+                else:
+                    process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if owns_group:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    else:
+                        process.kill()
                     process.wait(timeout=5)
                 return NativeRunResult(
                     backend="devsim",

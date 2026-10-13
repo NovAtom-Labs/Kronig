@@ -10,6 +10,20 @@ from tcad_agent.validation.datasets import axes_compatible
 from tcad_agent.validation.models import ValidationCheck
 
 
+def _has_valid_values(dataset: Dataset) -> bool:
+    return bool(dataset.values) and (dataset.validity is None or any(dataset.validity))
+
+
+def _not_applicable(identifier: str, message: str, paths: tuple[str, ...]) -> ValidationCheck:
+    return ValidationCheck(
+        id=identifier,
+        level="physical",
+        status="not_applicable",
+        message=message,
+        evidence_paths=paths,
+    )
+
+
 def _position_profiles(
     result: CanonicalResult,
     dataset: Dataset,
@@ -49,13 +63,9 @@ def _position_profiles(
             profiles.append(
                 (
                     tuple(
-                        dataset.values[offset * width + index]
-                        for offset in range(dataset.shape[0])
+                        dataset.values[offset * width + index] for offset in range(dataset.shape[0])
                     ),
-                    tuple(
-                        validity[offset * width + index]
-                        for offset in range(dataset.shape[0])
-                    ),
+                    tuple(validity[offset * width + index] for offset in range(dataset.shape[0])),
                 )
             )
     return positions, (str(other_axis.kind), other_axis.values), tuple(profiles)
@@ -92,18 +102,23 @@ def physics_checks(
         )
     if potential.unit != "V" or electric.unit != "V/m":
         return (_failed_field_check("incompatible canonical units"),)
+    if not _has_valid_values(potential) or not _has_valid_values(electric):
+        return (
+            _not_applicable(
+                "electric-field-potential-gradient",
+                "No valid potential and field samples are available.",
+                ("result.datasets.potential", "result.datasets.electric_field"),
+            ),
+        )
     try:
         x_potential, potential_study_axis, potential_profiles = _position_profiles(
             result, potential
         )
-        _x_electric, electric_study_axis, electric_profiles = _position_profiles(
-            result, electric
-        )
+        _x_electric, electric_study_axis, electric_profiles = _position_profiles(result, electric)
     except ValueError as exc:
         return (_failed_field_check(str(exc)),)
-    if (
-        potential_study_axis != electric_study_axis
-        or len(potential_profiles) != len(electric_profiles)
+    if potential_study_axis != electric_study_axis or len(potential_profiles) != len(
+        electric_profiles
     ):
         return (_failed_field_check("potential and field study axes do not match"),)
     gradients: list[float] = []
@@ -129,7 +144,13 @@ def physics_checks(
         gradients.extend(profile_gradients)
         measured_fields.extend(field_values)
     if not gradients:
-        return (_failed_field_check("no converged field profile is available"),)
+        return (
+            _not_applicable(
+                "electric-field-potential-gradient",
+                "No jointly valid field profile is available.",
+                ("result.datasets.potential", "result.datasets.electric_field"),
+            ),
+        )
     if len(gradients) != len(measured_fields):
         return (_failed_field_check("node-edge topology mismatch"),)
     maximum_error = max(
@@ -148,6 +169,10 @@ def physics_checks(
             status="passed" if maximum_error <= limit else "failed",
             measured_value=maximum_error,
             limit=limit,
+            unit="V/m",
+            absolute_tolerance=field_atol_v_per_m,
+            relative_tolerance=field_rtol,
+            scale=scale,
             message="Electric field must equal the negative spatial gradient of potential.",
             evidence_origin="derived",
             evidence_paths=("result.datasets.potential", "result.datasets.electric_field"),
@@ -182,6 +207,10 @@ def poisson_residual_checks(
         )
     if flux.unit != "C/m^2" or charge.unit != "C/m^3":
         return (_failed_poisson_check("incompatible canonical units", paths),)
+    if not _has_valid_values(flux) or not _has_valid_values(charge):
+        return (
+            _not_applicable(identifier, "No valid flux and charge samples are available.", paths),
+        )
     try:
         flux_positions, flux_study, flux_profiles = _position_profiles(result, flux)
         node_positions, charge_study, charge_profiles = _position_profiles(result, charge)
@@ -217,29 +246,24 @@ def poisson_residual_checks(
                 right_edge = edge_indices[local_index]
                 charge_index = start + local_index
                 if not (
-                    flux_valid[left_edge]
-                    and flux_valid[right_edge]
-                    and charge_valid[charge_index]
+                    flux_valid[left_edge] and flux_valid[right_edge] and charge_valid[charge_index]
                 ):
                     continue
                 control_width = (
-                    segment_positions[local_index + 1]
-                    - segment_positions[local_index - 1]
+                    segment_positions[local_index + 1] - segment_positions[local_index - 1]
                 ) / 2
                 if control_width <= 0:
                     return (
-                        _failed_poisson_check(
-                            "position coordinates are not increasing", paths
-                        ),
+                        _failed_poisson_check("position coordinates are not increasing", paths),
                     )
-                divergence = (
-                    flux_values[right_edge] - flux_values[left_edge]
-                ) / control_width
+                divergence = (flux_values[right_edge] - flux_values[left_edge]) / control_width
                 density = charge_values[charge_index]
                 errors.append(abs(divergence - density))
                 scales.append(max(abs(divergence), abs(density)))
     if not errors:
-        return (_failed_poisson_check("no valid interior control volume is available", paths),)
+        return (
+            _not_applicable(identifier, "No valid interior control volume is available.", paths),
+        )
     maximum_error = max(errors)
     limit = absolute_tolerance_c_per_m3 + relative_tolerance * max(scales)
     return (
@@ -249,6 +273,10 @@ def poisson_residual_checks(
             status="passed" if maximum_error <= limit else "failed",
             measured_value=maximum_error,
             limit=limit,
+            unit="C/m^3",
+            absolute_tolerance=absolute_tolerance_c_per_m3,
+            relative_tolerance=relative_tolerance,
+            scale=max(scales),
             message="The divergence of electric displacement flux must equal charge density.",
             evidence_origin="derived",
             evidence_paths=paths,
@@ -256,9 +284,7 @@ def poisson_residual_checks(
     )
 
 
-def _failed_poisson_check(
-    reason: str, paths: tuple[str, str]
-) -> ValidationCheck:
+def _failed_poisson_check(reason: str, paths: tuple[str, str]) -> ValidationCheck:
     return ValidationCheck(
         id="poisson-residual-consistency",
         level="physical",
@@ -372,10 +398,7 @@ def capacitance_consistency_checks(
             continue
         frequency_axis = result.axes[ac.axes[0]]
         bias_axis = result.axes[quasistatic.axes[0]]
-        if (
-            frequency_axis.kind is not AxisKind.FREQUENCY
-            or bias_axis.kind is not AxisKind.BIAS
-        ):
+        if frequency_axis.kind is not AxisKind.FREQUENCY or bias_axis.kind is not AxisKind.BIAS:
             continue
         frequency_index = min(
             range(len(frequency_axis.values)), key=frequency_axis.values.__getitem__
@@ -385,9 +408,7 @@ def capacitance_consistency_checks(
             range(len(bias_axis.values)),
             key=lambda index: abs(bias_axis.values[index] - target_bias),
         )
-        comparisons.append(
-            (terminal, ac.values[frequency_index], quasistatic.values[bias_index])
-        )
+        comparisons.append((terminal, ac.values[frequency_index], quasistatic.values[bias_index]))
     if not comparisons:
         return (
             ValidationCheck(
@@ -426,6 +447,8 @@ def capacitance_consistency_checks(
             ),
         ),
     )
+
+
 def _failed_field_check(reason: str) -> ValidationCheck:
     return ValidationCheck(
         id="electric-field-potential-gradient",
@@ -487,7 +510,15 @@ def band_checks(result: CanonicalResult) -> tuple[ValidationCheck, ...]:
         )
         if ec_valid and ev_valid
     )
-    minimum_gap = min(gaps, default=float("-inf"))
+    if not gaps:
+        return (
+            _not_applicable(
+                "band-ordering",
+                "No jointly valid band-energy samples exist.",
+                ("result.datasets.conduction_band", "result.datasets.valence_band"),
+            ),
+        )
+    minimum_gap = min(gaps)
     return (
         ValidationCheck(
             id="band-ordering",
@@ -495,6 +526,7 @@ def band_checks(result: CanonicalResult) -> tuple[ValidationCheck, ...]:
             status="passed" if gaps and minimum_gap > 0 else "failed",
             measured_value=minimum_gap,
             limit="> 0 eV",
+            unit="eV",
             message="Conduction-band energy must exceed valence-band energy.",
             evidence_origin="derived",
             evidence_paths=(
@@ -579,11 +611,30 @@ def _rate_identity_check(
             message=message,
             evidence_paths=("result.datasets",),
         )
+    usable_values = tuple(
+        (ref, one, two)
+        for ref, one, two, ref_valid, one_valid, two_valid in zip(
+            reference.values,
+            first.values,
+            second.values,
+            reference.validity or (True,) * len(reference.values),
+            first.validity or (True,) * len(first.values),
+            second.validity or (True,) * len(second.values),
+            strict=True,
+        )
+        if ref_valid and one_valid and two_valid
+    )
+    if not usable_values:
+        return ValidationCheck(
+            id=identifier,
+            level="physical",
+            status="not_applicable",
+            message="No jointly valid canonical rate samples are available.",
+            evidence_paths=("result.datasets",),
+        )
     errors: list[float] = []
     scales: list[float] = []
-    for reference_value, first_value, second_value in zip(
-        reference.values, first.values, second.values, strict=True
-    ):
+    for reference_value, first_value, second_value in usable_values:
         errors.extend(
             (
                 abs(first_value - signs[0] * reference_value),
@@ -594,9 +645,7 @@ def _rate_identity_check(
     if identifier == "recombination-component-balance":
         errors = [
             abs(reference_value - first_value - second_value)
-            for reference_value, first_value, second_value in zip(
-                reference.values, first.values, second.values, strict=True
-            )
+            for reference_value, first_value, second_value in usable_values
         ]
     maximum_error = max(errors, default=0.0)
     limit = absolute_tolerance + relative_tolerance * max(scales, default=0.0)
@@ -606,6 +655,10 @@ def _rate_identity_check(
         status="passed" if maximum_error <= limit else "failed",
         measured_value=maximum_error,
         limit=limit,
+        unit=reference.unit,
+        absolute_tolerance=absolute_tolerance,
+        relative_tolerance=relative_tolerance,
+        scale=max(scales),
         message=message,
         evidence_origin="derived",
         evidence_paths=("result.datasets",),

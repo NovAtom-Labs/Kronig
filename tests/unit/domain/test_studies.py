@@ -6,6 +6,44 @@ from tcad_agent.domain.studies import Study1D, expand_study_points
 STUDY = TypeAdapter(Study1D)
 
 
+def test_ac_at_explicit_bias_schedule_preserves_the_dependency():
+    study = STUDY.validate_python(
+        {
+            "kind": "ac",
+            "contact": "drive",
+            "frequency": "1 MHz",
+            "amplitude": "10 mV",
+            "bias_schedule": {
+                "kind": "dc",
+                "contact": "drive",
+                "start": "-1 V",
+                "stop": "1 V",
+                "step": "0.5 V",
+            },
+        }
+    )
+    assert [value.to("V") for value in expand_study_points(study.bias_schedule)] == [
+        -1,
+        -0.5,
+        0,
+        0.5,
+        1,
+    ]
+
+
+def test_ac_bias_dependency_rejects_different_driven_contacts():
+    with pytest.raises(ValidationError, match="same contact"):
+        STUDY.validate_python(
+            {
+                "kind": "ac",
+                "contact": "drive",
+                "frequency": "1 MHz",
+                "amplitude": "10 mV",
+                "bias_schedule": {"kind": "dc_points", "contact": "other", "values": ["1 V"]},
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

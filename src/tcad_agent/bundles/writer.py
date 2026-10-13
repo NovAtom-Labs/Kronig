@@ -32,6 +32,16 @@ class BundleWriter:
             for directory in ("compiled", "logs", "native", "results", "validation"):
                 (staging / directory).mkdir(parents=True, exist_ok=False)
             self._write_json(staging / "experiment.json", inputs.spec.model_dump_json(indent=2))
+            if inputs.completeness is not None:
+                self._write_json(
+                    staging / "scientific-inputs.json",
+                    inputs.completeness.model_dump_json(indent=2),
+                )
+            if inputs.recovery_comparison is not None:
+                self._write_json(
+                    staging / "recovery-comparison.json",
+                    inputs.recovery_comparison.model_dump_json(indent=2),
+                )
             for source in inputs.job.input_files:
                 shutil.copy2(source, staging / "compiled" / source.name)
             shutil.copy2(inputs.native.stdout_path, staging / "logs" / "stdout.log")
@@ -51,9 +61,7 @@ class BundleWriter:
                 raise FileNotFoundError(f"event ledger does not exist: {inputs.events_path}")
             shutil.copy2(inputs.events_path, staging / "events.jsonl")
             traceability = build_traceability(inputs.spec, inputs.result)
-            self._write_json(
-                staging / "traceability.json", traceability.model_dump_json(indent=2)
-            )
+            self._write_json(staging / "traceability.json", traceability.model_dump_json(indent=2))
             report = MarkdownReport().render(
                 inputs.spec,
                 inputs.result,
@@ -70,8 +78,7 @@ class BundleWriter:
             )
             execution_state: Literal["failed", "completed"] = (
                 "completed"
-                if inputs.native.status == "completed"
-                and inputs.result.status == "completed"
+                if inputs.native.status == "completed" and inputs.result.status == "completed"
                 else "failed"
             )
             validation_state: Literal["passed", "needs_review"] = (

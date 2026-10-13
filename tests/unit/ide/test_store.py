@@ -63,9 +63,7 @@ def test_every_run_owned_foreign_key_is_in_the_cleanup_graph(tmp_path: Path) -> 
     with sqlite3.connect(store.path) as connection:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
         referencing = {
             table
@@ -85,9 +83,7 @@ def test_run_and_pending_approval_survive_store_reconstruction(
     database = tmp_path / "ide.sqlite3"
     store = SqliteIDEStore(database)
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     approval = store.create_approval(
         run.id,
@@ -107,9 +103,7 @@ def test_run_and_pending_approval_survive_store_reconstruction(
 def test_run_transitions_reject_a_stale_revision(tmp_path: Path) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     running = store.transition_run(run.id, run.revision, RunState.RUNNING)
 
@@ -125,9 +119,7 @@ def test_prepared_plan_is_typed_pending_state_and_approved_once(
 ) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Research run"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Research run")
     run = store.create_run(conversation.id, conversation.id)
     prepared = ExperimentEngine().prepare(valid_spec, "devsim")
 
@@ -160,9 +152,7 @@ def test_prepared_plan_is_typed_pending_state_and_approved_once(
 def test_managed_experiment_result_is_persisted_by_agent_run(tmp_path: Path) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Research run"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Research run")
     run = store.create_run(conversation.id, conversation.id)
 
     created = store.save_experiment_result(
@@ -182,9 +172,7 @@ def test_managed_experiment_result_is_persisted_by_agent_run(tmp_path: Path) -> 
 def test_workspace_experiment_history_is_newest_first(tmp_path: Path) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Research run"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Research run")
     first = store.create_run(conversation.id, conversation.id)
     second = store.create_run(conversation.id, conversation.id)
     store.save_experiment_result(
@@ -215,9 +203,7 @@ def test_structured_run_outcome_persists_independent_component_states(
 ) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Research run"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Research run")
     run = store.create_run(conversation.id, conversation.id)
 
     created = store.save_run_outcome(
@@ -244,9 +230,7 @@ def test_pending_plan_can_be_revised_and_replaced(
 ) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Research run"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Research run")
     run = store.create_run(conversation.id, conversation.id)
     first_prepared = ExperimentEngine().prepare(valid_spec, "devsim")
     first = store.save_prepared_plan(
@@ -280,9 +264,7 @@ def test_pending_plan_can_be_revised_and_replaced(
 def test_approval_resolution_is_optimistic_and_persisted(tmp_path: Path) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     approval = store.create_approval(
         run.id,
@@ -293,17 +275,13 @@ def test_approval_resolution_is_optimistic_and_persisted(tmp_path: Path) -> None
         {"command": "pip install package"},
     )
 
-    resolved = store.resolve_approval(
-        approval.id, approval.revision, ApprovalDecision.APPROVE
-    )
+    resolved = store.resolve_approval(approval.id, approval.revision, ApprovalDecision.APPROVE)
 
     assert resolved.decision is ApprovalDecision.APPROVE
     assert resolved.resolved_at is not None
     assert store.list_pending_approvals(conversation.id) == ()
     with pytest.raises(IDEStoreError, match="stale approval revision"):
-        store.resolve_approval(
-            approval.id, approval.revision, ApprovalDecision.DENY
-        )
+        store.resolve_approval(approval.id, approval.revision, ApprovalDecision.DENY)
 
 
 def test_permission_category_grant_is_scoped_to_one_run_and_persisted(
@@ -312,9 +290,7 @@ def test_permission_category_grant_is_scoped_to_one_run_and_persisted(
     database = tmp_path / "ide.sqlite3"
     store = SqliteIDEStore(database)
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     first_run = store.create_run(conversation.id, conversation.id)
     approval = store.create_approval(
         first_run.id,
@@ -357,9 +333,7 @@ def test_terminal_run_expires_permission_and_plan_consent(
 ) -> None:
     store = SqliteIDEStore(tmp_path / f"{terminal_state.value}.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Research run"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Research run")
     run = store.create_run(conversation.id, conversation.id)
     prepared = ExperimentEngine().prepare(valid_spec, "devsim")
     pending = store.save_prepared_plan(
@@ -389,9 +363,7 @@ def test_broad_unrecognized_permission_cannot_be_granted_for_a_run(
 ) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     approval = store.create_approval(
         run.id,
@@ -411,9 +383,7 @@ def test_broad_unrecognized_permission_cannot_be_granted_for_a_run(
 def test_terminal_run_does_not_expose_stale_pending_approval(tmp_path: Path) -> None:
     store = SqliteIDEStore(tmp_path / "ide.sqlite3")
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     store.create_approval(
         run.id,
@@ -433,9 +403,7 @@ def test_run_baseline_is_persisted_and_first_capture_wins(tmp_path: Path) -> Non
     database = tmp_path / "ide.sqlite3"
     store = SqliteIDEStore(database)
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     captured_at = datetime.now(UTC)
     first = WorkspaceBaseline(
@@ -464,9 +432,7 @@ def test_terminal_change_manifest_is_immutable(tmp_path: Path) -> None:
     database = tmp_path / "ide.sqlite3"
     store = SqliteIDEStore(database)
     workspace = WorkspaceManager(store).open(tmp_path)
-    conversation = ConversationService(store, EventFeed(store)).create(
-        workspace.id, "Agent task"
-    )
+    conversation = ConversationService(store, EventFeed(store)).create(workspace.id, "Agent task")
     run = store.create_run(conversation.id, conversation.id)
     now = datetime.now(UTC)
     first = WorkspaceChangeSet(
@@ -554,19 +520,25 @@ def test_delete_conversation_tree_removes_only_owned_session_records(
     assert store.get_run_change_manifest(run.id) is None
     with sqlite3.connect(store.path) as connection:
         for table in ("conversation_messages", "ide_events", "agent_runs"):
-            assert connection.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE conversation_id = ?",
-                (str(first.id),),
-            ).fetchone()[0] == 0
+            assert (
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE conversation_id = ?",
+                    (str(first.id),),
+                ).fetchone()[0]
+                == 0
+            )
         for table in (
             "approval_requests",
             "run_permission_grants",
             "run_change_baselines",
             "run_change_manifests",
         ):
-            assert connection.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", (str(run.id),)
-            ).fetchone()[0] == 0
+            assert (
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE run_id = ?", (str(run.id),)
+                ).fetchone()[0]
+                == 0
+            )
     assert store.get_conversation(second.id).workspace_id == second_workspace.id
     assert store.get_workspace(first_workspace.id).root == first_root.resolve()
     assert repository_file.read_text(encoding="utf-8") == '{"status":"valid"}'

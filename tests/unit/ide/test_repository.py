@@ -16,9 +16,7 @@ def test_inspector_accepts_a_non_git_directory(tmp_path: Path) -> None:
     assert snapshot.root == root.resolve()
     assert snapshot.display_name == "research"
     assert snapshot.git.available is False
-    assert [entry.name for entry in RepositoryInspector().entries(root)] == [
-        "experiment.yaml"
-    ]
+    assert [entry.name for entry in RepositoryInspector().entries(root)] == ["experiment.yaml"]
 
 
 def test_entries_report_external_symlink_without_following_it(tmp_path: Path) -> None:

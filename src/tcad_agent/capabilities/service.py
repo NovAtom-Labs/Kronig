@@ -22,9 +22,7 @@ from tcad_agent.physics.registry import PhysicsRegistry
 class CapabilityService:
     """Checks requested features without interpreting device names."""
 
-    def check(
-        self, spec: ExperimentSpec, manifest: CapabilityManifest
-    ) -> CapabilityDecision:
+    def check(self, spec: ExperimentSpec, manifest: CapabilityManifest) -> CapabilityDecision:
         issues: list[CapabilityIssue] = []
         self._check_one(issues, "dimension", spec.dimension, manifest.dimensions)
         self._check_many(
@@ -82,9 +80,7 @@ class CapabilityService:
                 CapabilityIssue(
                     path="physics.models",
                     code="missing_model_dependency",
-                    message=(
-                        "Klaassen mobility requires coupled electron and hole continuity"
-                    ),
+                    message=("Klaassen mobility requires coupled electron and hole continuity"),
                     requested="klaassen_mobility",
                     supported=("electron_continuity", "hole_continuity"),
                 )
@@ -133,9 +129,7 @@ class CapabilityService:
             }.intersection(spec.physics.models)
             silicon_schottky = any(
                 str(contact.kind) == "metal_work_function"
-                and spec.regions[
-                    0 if str(contact.location) == "x_min" else -1
-                ].material
+                and spec.regions[0 if str(contact.location) == "x_min" else -1].material
                 == "silicon"
                 for contact in spec.contacts
             )
@@ -167,9 +161,7 @@ class CapabilityService:
                     )
                 )
             regions_by_id = {region.id: region for region in spec.regions}
-            for index, temperature_profile in enumerate(
-                spec.physics.temperature_profiles
-            ):
+            for index, temperature_profile in enumerate(spec.physics.temperature_profiles):
                 if regions_by_id[temperature_profile.region].material != "silicon":
                     issues.append(
                         CapabilityIssue(
@@ -217,21 +209,9 @@ class CapabilityService:
             for interface in spec.interfaces
             for capability in (
                 "continuity",
-                *(
-                    ("fixed_charge",)
-                    if interface.fixed_charge_density is not None
-                    else ()
-                ),
-                *(
-                    ("surface_srh",)
-                    if interface.surface_electron_velocity is not None
-                    else ()
-                ),
-                *(
-                    ("interface_trap",)
-                    if interface.trap_density is not None
-                    else ()
-                ),
+                *(("fixed_charge",) if interface.fixed_charge_density is not None else ()),
+                *(("surface_srh",) if interface.surface_electron_velocity is not None else ()),
+                *(("interface_trap",) if interface.trap_density is not None else ()),
             )
         )
         self._check_many(
@@ -243,25 +223,15 @@ class CapabilityService:
         if manifest.backend == "devsim":
             region_material = {region.id: region.material for region in spec.regions}
             for index, interface in enumerate(spec.interfaces):
-                if (
-                    interface.surface_electron_velocity is None
-                    and interface.trap_density is None
-                ):
+                if interface.surface_electron_velocity is None and interface.trap_density is None:
                     continue
                 materials = {
                     region_material[interface.left_region],
                     region_material[interface.right_region],
                 }
-                reviewed_pairs = (
-                    materials == {"silicon"}
-                    or (
-                        "silicon" in materials
-                        and bool(
-                            materials.intersection(
-                                {"silicon_dioxide", "generic_dielectric"}
-                            )
-                        )
-                    )
+                reviewed_pairs = materials == {"silicon"} or (
+                    "silicon" in materials
+                    and bool(materials.intersection({"silicon_dioxide", "generic_dielectric"}))
                 )
                 if not reviewed_pairs:
                     issues.append(
@@ -356,6 +326,20 @@ class CapabilityService:
                         )
                     )
         self._check_one(issues, "study.kind", spec.study.kind, manifest.studies)
+        bias_schedule = getattr(spec.study, "bias_schedule", None)
+        if bias_schedule is not None:
+            self._check_one(
+                issues, "study.bias_schedule.kind", bias_schedule.kind, manifest.studies
+            )
+            if manifest.backend != "devsim":
+                issues.append(
+                    CapabilityIssue(
+                        path="study.bias_schedule",
+                        code="unsupported",
+                        requested="coupled bias and AC",
+                        message="Coupled bias and AC execution is not reviewed for this adapter.",
+                    )
+                )
         study_contact = getattr(spec.study, "contact", None)
         if study_contact is not None:
             selected = next(contact for contact in spec.contacts if contact.id == study_contact)
@@ -393,9 +377,7 @@ class CapabilityService:
                     CapabilityIssue(
                         path="study.parameter_path",
                         code="missing_parameter_model",
-                        message=(
-                            f"parameter sweep requires model {parameter.required_model}"
-                        ),
+                        message=(f"parameter sweep requires model {parameter.required_model}"),
                         requested=spec.study.parameter_path,
                         supported=(parameter.required_model,),
                     )
@@ -406,10 +388,7 @@ class CapabilityService:
             tuple(str(observable) for observable in spec.observables),
             manifest.observables,
         )
-        if any(
-            str(observable) == "absolute_terminal_current"
-            for observable in spec.observables
-        ):
+        if any(str(observable) == "absolute_terminal_current" for observable in spec.observables):
             missing_area = tuple(contact.id for contact in spec.contacts if contact.area is None)
             if missing_area:
                 issues.append(
@@ -431,9 +410,10 @@ class CapabilityService:
             "hole_diffusion_current_density",
             "current_decomposition_residual",
         }
-        if decomposition_outputs.intersection(
-            str(observable) for observable in spec.observables
-        ) and "fermi" in spec.physics.models:
+        if (
+            decomposition_outputs.intersection(str(observable) for observable in spec.observables)
+            and "fermi" in spec.physics.models
+        ):
             issues.append(
                 CapabilityIssue(
                     path="observables",
@@ -454,14 +434,22 @@ class CapabilityService:
         )
         bias_points = 1
         if isinstance(spec.study, DCStudy):
-            bias_points = round(
-                (spec.study.stop.to("V") - spec.study.start.to("V"))
-                / spec.study.step.to("V")
-            ) + 1
+            bias_points = (
+                round(
+                    (spec.study.stop.to("V") - spec.study.start.to("V")) / spec.study.step.to("V")
+                )
+                + 1
+            )
         elif isinstance(spec.study, (DCPointsStudy, TemperatureStudy, ParameterStudy)):
             bias_points = len(spec.study.values)
         elif isinstance(spec.study, FrequencyStudy):
             bias_points = spec.study.points
+        if bias_schedule is not None:
+            from tcad_agent.domain.studies import expand_study_points
+
+            bias_points = len(expand_study_points(bias_schedule)) * (
+                spec.study.points if isinstance(spec.study, FrequencyStudy) else 1
+            )
         self._check_limit(
             issues,
             "study.bias_points",

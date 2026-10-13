@@ -66,6 +66,7 @@
       else if (imaginary && axisIds.length === 1) plotKind = "complex_response";
       else if (axisIds.length === 1) plotKind = "curve";
       else if (axisIds.length === 2 && kinds.includes("position")) plotKind = "profile_family";
+      else if (axisIds.length === 2 && shape.includes(1)) plotKind = "curve_family";
       else if (axisIds.length === 2) plotKind = "heatmap";
       return [{
         name,
@@ -163,6 +164,91 @@
     });
   }
 
+  function operatingPoints(payload) {
+    const result = payload?.result || {};
+    if (result.operating_points?.length) return result.operating_points.map((point) => ({
+      ...point, converged: point.state === "converged",
+    }));
+    return result.bias_points || [];
+  }
+
+  function pointLabel(point, payload) {
+    if (!point.coordinates) return `${formatNumber(point.bias_v)} V`;
+    return Object.entries(point.coordinates).map(([kind, value]) => {
+      const axis = Object.values(payload.result?.axes || {}).find((item) => item.kind === kind || item.id === kind);
+      return `${axis?.label || label(kind)}: ${formatNumber(value)}${axis?.unit ? ` ${axis.unit}` : ""}`;
+    }).join(" · ");
+  }
+
+  function sampleCounts(payload) {
+    const records = new Map();
+    const frequencies = new Set();
+    datasetOptions(payload).filter((dataset) => dataset.axes.some((axis) => axis.kind === "frequency"))
+      .forEach((dataset) => dataset.values.forEach((_value, flatIndex) => {
+        let remainder = flatIndex;
+        const coordinates = {};
+        for (let index = dataset.shape.length - 1; index >= 0; index -= 1) {
+          const axis = dataset.axes[index];
+          const value = axis.values[remainder % dataset.shape[index]];
+          remainder = Math.floor(remainder / dataset.shape[index]);
+          if (axis.kind !== "position") coordinates[axis.id] = value;
+          if (axis.kind === "frequency") frequencies.add(value);
+        }
+        const key = JSON.stringify(Object.entries(coordinates).sort(([a], [b]) => a.localeCompare(b)));
+        const valid = !dataset.validity || dataset.validity[flatIndex];
+        const previous = records.get(key);
+        records.set(key, {coordinates, valid: Boolean(valid && (!previous || previous.valid))});
+      }));
+    return {
+      operatingPoints: operatingPoints(payload).length,
+      frequencies: frequencies.size,
+      frequencySamples: records.size,
+      validFrequencySamples: [...records.values()].filter((point) => point.valid).length,
+      frequencyGrid: [...records.values()],
+    };
+  }
+
+  function statusDimensions(payload) {
+    const assessment = payload?.assessment;
+    const checks = validationPresentation((payload?.validation?.checks || [])
+      .filter((check) => !check.level || ["numerical", "physical"].includes(check.level)));
+    const executionState = payload?.execution_state || payload?.manifest?.execution_state
+      || payload?.manifest?.state || payload?.result?.status || "unknown";
+    const executionPassed = assessment ? assessment.execution?.status === "passed" : executionState === "completed";
+    const scientificStatus = assessment?.numerical?.status;
+    const scientificState = scientificStatus
+      ? scientificStatus === "passed" ? "passed" : scientificStatus === "not_applicable" ? "unavailable" : "needs_review"
+      : !checks.applicable ? "unavailable" : checks.failed ? "needs_review" : "passed";
+    const traces = payload?.traceability?.records;
+    const outputStatus = assessment?.output_coverage?.status;
+    const deliverableState = outputStatus
+      ? outputStatus === "passed" ? "complete" : outputStatus === "not_applicable" ? "unavailable" : "incomplete"
+      : payload?.deliverable_state || payload?.manifest?.deliverable_state
+        || (Array.isArray(traces) && traces.length ? traces.every((item) => item.status === "satisfied") ? "complete" : "incomplete" : "unavailable");
+    return {
+      execution: {label: "Execution", state: executionPassed ? "completed" : executionState,
+        tone: executionPassed ? "success" : "warning",
+        detail: assessment?.execution?.message || (executionPassed ? "Canonical execution completed" : "Execution is incomplete")},
+      scientific: {label: "Scientific validation", state: scientificState,
+        tone: scientificState === "passed" ? "success" : scientificState === "unavailable" ? "neutral" : "warning",
+        detail: assessment?.numerical?.message || checks.headline},
+      deliverables: {label: "Requested outputs", state: deliverableState,
+        tone: deliverableState === "complete" ? "success" : deliverableState === "unavailable" ? "neutral" : "warning",
+        detail: assessment?.output_coverage?.message || (deliverableState === "complete" ? "Requested outputs delivered" : deliverableState === "unavailable" ? "Output coverage evidence unavailable" : "Requested outputs need review")},
+    };
+  }
+
+  function validationEvidence(check) {
+    const evidence = [check.level && label(check.level), check.evidence_origin && label(check.evidence_origin)].filter(Boolean);
+    const quantity = (value) => `${typeof value === "number" ? formatNumber(value) : String(value)}${check.unit ? ` ${check.unit}` : ""}`;
+    [["measured", check.measured_value], ["limit", check.limit],
+      ["absolute tolerance", check.absolute_tolerance], ["scale", check.scale]]
+      .forEach(([name, value]) => { if (value !== null && value !== undefined) evidence.push(`${name} ${quantity(value)}`); });
+    if (check.relative_tolerance !== null && check.relative_tolerance !== undefined) evidence.push(`relative tolerance ${formatNumber(check.relative_tolerance)}`);
+    if (check.applicability_reason) evidence.push(check.applicability_reason);
+    return evidence.join(" · ");
+  }
+
   function summarize(payload) {
     const fields = payload?.result?.fields || {};
     const datasets = payload?.result?.datasets || {};
@@ -170,7 +256,7 @@
     const electricField = finiteValues(
       datasets.electric_field?.values || fields.electric_field?.values,
     );
-    const currents = (payload?.result?.bias_points || []).flatMap(
+    const currents = operatingPoints(payload).flatMap(
       (point) => finiteValues(Object.values(point.terminal_currents_a_per_m2 || {})),
     );
     const checks = Array.isArray(payload?.validation?.checks)
@@ -193,7 +279,8 @@
       maximumTerminalCurrent: currents.length
         ? Math.max(...currents.map(Math.abs))
         : null,
-      operatingPointCount: (payload?.result?.bias_points || []).length,
+      operatingPointCount: operatingPoints(payload).length,
+      ...sampleCounts(payload),
       fieldCount: Object.keys(datasets).length || Object.keys(fields).length,
       validationPassed,
       validationApplicable: checks.length - validationNotApplicable,
@@ -226,8 +313,8 @@
       applicable,
       failed,
       headline,
-      notApplicable,
-      passed,
+      notApplicableCount: notApplicable,
+      passedCount: passed,
       summary: `${passed} passed · ${failed} failed · ${notApplicable} not applicable`,
       tone: failed ? "failed" : applicable ? "success" : "neutral",
     };
@@ -292,8 +379,9 @@
       };
     }
     if (dataset.shape.length !== 2) return null;
-    const positionIndex = dataset.axes.findIndex((axis) => axis.kind === "position");
-    if (positionIndex < 0) return null;
+    const positionIndex = dataset.axes.some((axis) => axis.kind === "position")
+      ? dataset.axes.findIndex((axis) => axis.kind === "position")
+      : Math.max(0, dataset.shape.findIndex((size) => size > 1));
     const otherIndex = positionIndex === 0 ? 1 : 0;
     const boundedSlice = Math.min(
       dataset.shape[otherIndex] - 1,
@@ -312,7 +400,7 @@
       axis: dataset.axes[positionIndex],
       values: profile,
       validity,
-      valueUnit: dataset.unit,
+      valueUnit: complexMode === "phase" ? "°" : dataset.unit,
       label: dataset.label,
       sliceAxis: dataset.axes[otherIndex],
       sliceIndex: boundedSlice,
@@ -450,6 +538,11 @@
     }
     if (!strip.children.length) strip.append(element("p", "result-empty", "No region geometry is available."));
     section.append(strip);
+    const contacts = element("div", "result-contact-labels");
+    (payload.experiment?.contacts || []).forEach((contact) => {
+      contacts.append(element("span", "", `${contact.id} · ${contact.location}`));
+    });
+    if (contacts.children.length) section.append(contacts);
     return section;
   }
 
@@ -674,7 +767,7 @@
 
   function renderFields(payload, comparisonRuns = []) {
     const datasets = comparisonDatasetOptions([payload, ...comparisonRuns]).filter(
-      (dataset) => ["curve", "complex_response", "profile_family", "heatmap"].includes(
+      (dataset) => ["curve", "complex_response", "profile_family", "curve_family", "heatmap"].includes(
         dataset.plotKind,
       ),
     );
@@ -808,9 +901,9 @@
       option.value = dataset.name;
       select.append(option);
     });
-    const slice = element("select", "hidden");
+    const slice = element("select");
     slice.setAttribute("aria-label", "Displayed operating point");
-    const mode = element("select", "hidden");
+    const mode = element("select");
     mode.setAttribute("aria-label", "Complex result view");
     [["magnitude", "Magnitude"], ["phase", "Phase"], ["real", "Real"], ["imaginary", "Imaginary"]].forEach(([value, text]) => {
       const option = element("option", "", text);
@@ -830,7 +923,7 @@
     exportSvg.type = "button";
     const exportPng = element("button", "result-export", "PNG");
     exportPng.type = "button";
-    const overlay = element("select", "hidden");
+    const overlay = element("select");
     overlay.setAttribute("aria-label", "Compatible result overlay");
     const navigation = chartNavigation();
     const exportGroup = element("div", "result-export-group");
@@ -856,10 +949,15 @@
     chartRoot.append(svg, tooltip);
     section.append(chartRoot);
 
+    const identity = element("p", "result-dataset-identity");
+    section.append(identity);
+
     let viewport = null;
     let chartState = null;
     const redraw = () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
+      identity.textContent = `${dataset.label} · ${dataset.unit}`;
+      select.title = identity.textContent;
       if (overlay.dataset.primary !== dataset.id) {
         overlay.replaceChildren();
         const none = element("option", "", "No overlay");
@@ -873,22 +971,27 @@
         overlay.dataset.primary = dataset.id;
       }
       overlayField.classList.toggle("hidden", overlay.options.length <= 1);
-      modeField.classList.toggle("hidden", dataset.plotKind !== "complex_response");
+      modeField.classList.toggle("hidden", !dataset.imaginaryValues);
       scaleField.classList.toggle("hidden", dataset.plotKind === "heatmap");
       const previousSlice = slice.value;
       slice.replaceChildren();
-      if (dataset.plotKind === "profile_family") {
-        const positionIndex = dataset.axes.findIndex((axis) => axis.kind === "position");
+      if (["profile_family", "curve_family"].includes(dataset.plotKind)) {
+        const positionIndex = dataset.axes.some((axis) => axis.kind === "position")
+          ? dataset.axes.findIndex((axis) => axis.kind === "position")
+          : Math.max(0, dataset.shape.findIndex((size) => size > 1));
         const sliceAxis = dataset.axes[positionIndex === 0 ? 1 : 0];
+        const preferred = payload.result?.metadata?.profile_bias_values_v || [];
         sliceAxis.values.forEach((value, index) => {
-          const option = element("option", "", `${sliceAxis.label}: ${formatNumber(value)} ${sliceAxis.unit}`);
+          const requested = sliceAxis.kind === "bias" && preferred.some(bias=>Math.abs(bias-value)<1e-10);
+          const option = element("option", "", `${sliceAxis.label}: ${formatNumber(value)} ${sliceAxis.unit}${requested ? " · requested profile" : ""}`);
           option.value = String(index);
           slice.append(option);
         });
         slice.value = availableSelection(
-          previousSlice,
+          previousSlice || String(Math.max(0, sliceAxis.values.findIndex(value=>preferred.some(bias=>Math.abs(bias-value)<1e-10)))),
           Array.from(slice.options).map((option) => option.value),
         );
+        slice.title = slice.selectedOptions?.[0]?.textContent || "";
         sliceField.classList.remove("hidden");
       } else {
         sliceField.classList.add("hidden");
@@ -998,19 +1101,20 @@
   function renderOperatingPoints(payload) {
     const section = element("section", "result-section");
     const heading = element("div", "result-section-heading");
-    const points = payload.result?.bias_points || [];
-    heading.append(element("h2", "", "Operating points"));
+    const points = operatingPoints(payload);
+    const counts = sampleCounts(payload);
+    heading.append(element("h2", "", counts.frequencySamples ? "DC operating points" : "Operating points"));
     heading.append(element("span", "", String(points.length)));
     section.append(heading);
     if (!points.length) {
       section.append(element("p", "result-empty", "No operating points are available."));
-      return section;
+      if (!counts.frequencySamples) return section;
     }
     const wrap = element("div", "result-table-wrap");
     const table = element("table", "result-table");
     const head = table.createTHead();
     const header = head.insertRow();
-    ["Bias", "Terminal", "Current density", "Converged"].forEach((name) => {
+    ["Operating point", "Terminal", "Current density", "Converged"].forEach((name) => {
       header.append(element("th", "", name));
     });
     const body = table.createTBody();
@@ -1019,8 +1123,8 @@
       (currents.length ? currents : [["Unavailable", null]]).forEach(([terminal, current]) => {
         const row = body.insertRow();
         [
-          `${formatNumber(point.bias_v)} V`,
-          label(terminal),
+          pointLabel(point, payload),
+          terminal,
           current === null ? "Unavailable" : `${formatNumber(current)} A/m²`,
           point.converged ? "Yes" : "No",
         ].forEach((value) => row.append(element("td", "", value)));
@@ -1028,11 +1132,28 @@
     });
     wrap.append(table);
     section.append(wrap);
+    if (counts.frequencySamples) {
+      const acHeading = element("div", "result-section-heading");
+      acHeading.append(element("h2", "", "Small-signal sample grid"),
+        element("span", "", `${counts.frequencySamples} AC samples · ${counts.validFrequencySamples} valid`));
+      const acWrap = element("div", "result-table-wrap");
+      const acTable = element("table", "result-table result-ac-grid");
+      const acHeader = acTable.createTHead().insertRow();
+      ["Sample coordinates", "Valid"].forEach((name) => acHeader.append(element("th", "", name)));
+      const acBody = acTable.createTBody();
+      counts.frequencyGrid.forEach((point) => {
+        const row = acBody.insertRow();
+        row.append(element("td", "", pointLabel(point, payload)), element("td", "", point.valid ? "Yes" : "No"));
+      });
+      acWrap.append(acTable);
+      section.append(acHeading, acWrap);
+    }
     return section;
   }
 
   function renderValidation(payload) {
     const section = element("section", "result-section");
+    section.dataset.resultSection = "validation";
     const heading = element("div", "result-section-heading");
     heading.append(element("h2", "", "Validation"));
     heading.append(badge(label(payload.validation?.overall || "unavailable"), payload.validation?.overall || ""));
@@ -1049,10 +1170,7 @@
       const mark = element("span", "result-validation-mark", check.status === "passed" ? "✓" : check.status === "not_applicable" ? "N/A" : check.status === "failed" ? "×" : "!");
       const copy = element("div");
       copy.append(element("strong", "", check.message || label(check.id)));
-      const evidence = [label(check.level), label(check.evidence_origin)];
-      if (check.measured_value !== null && check.measured_value !== undefined) evidence.push(`measured ${formatNumber(check.measured_value)}`);
-      if (check.limit !== null && check.limit !== undefined) evidence.push(`limit ${check.limit}`);
-      copy.append(element("small", "", evidence.join(" · ")));
+      copy.append(element("small", "", validationEvidence(check)));
       row.append(mark, copy, badge(label(check.status), check.status));
       return row;
     };
@@ -1101,6 +1219,104 @@
     return section;
   }
 
+  function renderInputLedger(payload) {
+    const details = element("details", "result-section result-input-ledger");
+    details.append(element("summary", "", "Reviewed inputs and authority"));
+    details.append(element("p", "result-empty", "Authority identifies responsibility for reviewing the contract, not who originally typed a value. Source IDs identify recorded contract evidence; original prompt-level attribution is unavailable unless explicitly recorded."));
+    const ledger = globalThis.AgentKronigAgentView?.inputLedger(payload.completeness?.records || []);
+    if (!ledger?.length) {
+      details.append(element("p", "result-empty", "Input authority records are unavailable for this bundle. Inspect the recorded experiment and input digest."));
+      return details;
+    }
+    ledger.forEach((group) => {
+      const section = element("section", "result-input-group");
+      section.append(element("h3", "", group.label));
+      const list = element("dl", "result-provenance");
+      group.records.forEach((record) => {
+        const row = element("div");
+        const value = element("dd");
+        value.append(element("strong", "", record.value), element("small", "", `${record.source} · ${record.status}`));
+        if (record.derivation) value.append(element("small", "", record.derivation));
+        if (record.digest) value.append(element("small", "", `Source digest: ${record.digest}`));
+        if (record.rationale) value.append(element("small", "", record.rationale));
+        row.append(element("dt", "", record.path), value);
+        list.append(row);
+      });
+      section.append(list);
+      details.append(section);
+    });
+    return details;
+  }
+
+  function renderRecovery(payload) {
+    const section = element("section", "result-section result-recovery");
+    const heading = element("div", "result-section-heading");
+    heading.append(element("h2", "", "Numerical recovery"));
+    section.append(heading, element("p", "result-empty", "Review a proposed numerical change before running a new experiment. The original bundle, physics, requested outputs, and scientific acceptance limits are preserved."));
+    const labels = {
+      refine_mesh: "Review finer mesh",
+      increase_iteration_limit: "Review higher iteration limit",
+      reduce_bias_step: "Review smaller continuation steps",
+      stop_and_report: "Keep results and stop",
+    };
+    const actions = [...new Set([...(payload.recovery_actions || []), "stop_and_report"])]
+      .filter((action) => Object.hasOwn(labels, action));
+    const controls = element("div", "result-recovery-actions");
+    actions.forEach((action) => {
+      const button = element("button", "", labels[action]);
+      button.type = "button";
+      button.dataset.recoveryAction = action;
+      button.addEventListener("click", () => {
+        section.dispatchEvent(new CustomEvent("kronig:review-recovery", {bubbles: true, detail: {
+          workspaceId: payload.workspace_id,
+          bundleRunId: payload.saved_bundle_id || payload.manifest?.run_id,
+          action,
+        }}));
+      });
+      controls.append(button);
+    });
+    section.append(controls);
+    return section;
+  }
+
+  function renderRecoveryComparison(comparison) {
+    const section = element("details", "result-section result-recovery-comparison");
+    section.append(element("summary", "", "Reviewed numerical recovery provenance"));
+    const identity = element("dl", "result-provenance");
+    [
+      ["Original bundle", comparison.original_bundle_id],
+      ["New bundle", comparison.new_bundle_id],
+      ["Reviewed action", comparison.action],
+      ["Original input digest", comparison.original_spec_digest],
+      ["New input digest", comparison.candidate_spec_digest],
+      ["Preserved physics digest", comparison.preserved_physics_digest],
+    ].forEach(([name, value]) => {
+      const row = element("div");
+      row.append(element("dt", "", name), element("dd", "", String(value || "Unavailable")));
+      identity.append(row);
+    });
+    const changes = element("table", "result-table result-recovery-changes");
+    const header = changes.createTHead().insertRow();
+    ["Numerical field", "Original value", "Reviewed value"].forEach((name) => header.append(element("th", "", name)));
+    const body = changes.createTBody();
+    (comparison.changes || []).forEach((change) => {
+      const row = body.insertRow();
+      [change.path, JSON.stringify(change.before), JSON.stringify(change.after)]
+        .forEach((value) => row.append(element("td", "", value ?? "Unavailable")));
+    });
+    const wrap = element("div", "result-table-wrap");
+    wrap.append(changes);
+    const limits = element("dl", "result-provenance");
+    (comparison.validation_limits || []).forEach((limit) => {
+      const row = element("div");
+      row.append(element("dt", "", limit.name), element("dd", "", formatNumber(limit.value)));
+      limits.append(row);
+    });
+    section.append(identity, wrap,
+      element("h3", "result-comparison-heading", "Unchanged scientific acceptance values"), limits);
+    return section;
+  }
+
   function render(root, payload, comparisonRuns = []) {
     root.replaceChildren();
     const workbench = element("article", "results-workbench");
@@ -1111,7 +1327,12 @@
     identity.append(element(
       "p",
       "",
-      `${label(payload.experiment?.study?.kind || "study")} · ${payload.result?.bias_points?.length || 0} operating point${payload.result?.bias_points?.length === 1 ? "" : "s"}`,
+      (() => {
+        const counts = sampleCounts(payload);
+        const dc = `${counts.operatingPoints} ${counts.frequencySamples ? "DC " : ""}operating point${counts.operatingPoints === 1 ? "" : "s"}`;
+        const ac = counts.frequencySamples ? ` · ${counts.frequencySamples} AC samples · ${counts.validFrequencySamples} valid · ${counts.frequencies} frequencies` : "";
+        return `${label(payload.experiment?.study?.kind || "study")} · ${dc}${ac}`;
+      })(),
     ));
     const badges = element("div", "result-badges");
     badges.append(
@@ -1123,13 +1344,13 @@
     header.append(identity);
     if (globalThis.agentKronigDesktop?.exportResultsPdf) {
       const commands = element("div", "result-command-bar");
-      if (payload.agent_run_id && payload.workspace_id) {
+      if ((payload.agent_run_id || payload.saved_bundle_id) && payload.workspace_id) {
         const popout = element("button", "result-popout", "Open in window");
         popout.type = "button";
         popout.addEventListener("click", () => {
           void globalThis.agentKronigDesktop.openResultsWindow({
             workspaceId: payload.workspace_id,
-            runId: payload.agent_run_id,
+            ...(payload.saved_bundle_id ? {bundleRunId: payload.saved_bundle_id} : {runId: payload.agent_run_id}),
           });
         });
         const exportBundle = element("button", "result-export-bundle", "Export bundle");
@@ -1143,7 +1364,10 @@
               suggestedName: `${payload.experiment?.name || payload.manifest?.run_id || "results"}.akbundle`,
             });
             if (!selection?.cancelled && selection?.path) {
-              const response = await fetch(`/api/runs/${payload.agent_run_id}/bundle/export`, {
+              const endpoint = payload.saved_bundle_id
+                ? `/api/workspaces/${encodeURIComponent(payload.workspace_id)}/saved-results/${encodeURIComponent(payload.saved_bundle_id)}/export`
+                : `/api/runs/${encodeURIComponent(payload.agent_run_id)}/bundle/export`;
+              const response = await fetch(endpoint, {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({destination: selection.path}),
@@ -1176,28 +1400,49 @@
       commands.append(exportPdf);
       header.append(commands);
     }
-    const status = resultStatus(payload);
-    const statusBanner = element("section", `result-status is-${status.tone}`);
-    statusBanner.append(
-      element("strong", "", status.title),
-      element("span", "", status.detail),
-    );
-    workbench.append(
-      header,
-      statusBanner,
-      renderStructure(payload),
-      renderMetrics(payload),
-      renderFields(payload, comparisonRuns),
-    );
-    const lower = element("div", "result-lower-grid");
-    lower.append(renderOperatingPoints(payload), renderValidation(payload));
-    workbench.append(lower, renderProvenance(payload));
+    const statusBanner = element("section", "result-status-dimensions");
+    Object.entries(statusDimensions(payload)).forEach(([key, dimension]) => {
+      const row = element("div", `result-status is-${dimension.tone}`);
+      row.dataset.statusDimension = key;
+      row.append(element("strong", "", `${dimension.label}: ${label(dimension.state)}`), element("span", "", dimension.detail));
+      statusBanner.append(row);
+    });
     root.append(workbench);
+    workbench.append(header, statusBanner);
+    const section = (name, renderer, parent = workbench) => {
+      try { parent.append(renderer()); }
+      catch (error) {
+        const fallback = element("section", "result-section result-section-error");
+        fallback.setAttribute("role", "alert");
+        fallback.append(element("h2", "", `${name} could not be displayed`),
+          element("p", "", "The rest of your results remain available. Refresh the viewer or inspect the canonical result and validation files."));
+        parent.append(fallback);
+        console.error(`Result section failed: ${name}`, error);
+      }
+    };
+    section("Structure", () => renderStructure(payload));
+    section("Metrics", () => renderMetrics(payload));
+    section("Plots", () => renderFields(payload, comparisonRuns));
+    const lower = element("div", "result-lower-grid");
+    workbench.append(lower);
+    section("Operating points", () => renderOperatingPoints(payload), lower);
+    section("Validation evidence", () => renderValidation(payload), lower);
+    if (payload.workspace_id && (payload.saved_bundle_id || payload.manifest?.run_id) && payload.recovery_actions?.length) {
+      section("Numerical recovery", () => renderRecovery(payload));
+    }
+    section("Provenance", () => renderProvenance(payload));
+    section("Reviewed inputs", () => renderInputLedger(payload));
+    if (payload.recovery_comparison) {
+      section("Recovery provenance", () => renderRecoveryComparison(payload.recovery_comparison));
+    }
     return workbench;
   }
 
   globalThis.AgentKronigResults = {
     availableSelection,
+    sampleCounts,
+    statusDimensions,
+    validationEvidence,
     datasetOptions,
     comparisonDatasetOptions,
     compatibleOverlayOptions,

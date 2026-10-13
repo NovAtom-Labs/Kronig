@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark">
     <title>Agent Kronig workspace · NovAtom Labs</title>
     <link rel="stylesheet" href="/static/theme.css?v=20260928-1">
-    <link rel="stylesheet" href="/static/ide.css?v=20261004-4">
+    <link rel="stylesheet" href="/static/ide.css?v=20261005-2">
   </head>
   <body>
     <div class="ide-shell">
@@ -51,7 +51,7 @@
         </form>
         <section id="experiment-projects" class="experiment-projects" hidden aria-labelledby="experiment-projects-title">
           <header>
-            <span id="experiment-projects-title" title="Appears after a simulation attempt creates managed result artifacts.">RECENT RESULTS</span>
+            <span id="experiment-projects-title" title="Verified scientific results survive app restart without retaining conversations.">SAVED RESULTS</span>
             <span id="experiment-project-count">0</span>
           </header>
           <div id="experiment-project-list" class="experiment-project-list"></div>
@@ -144,14 +144,14 @@
                 <span id="clarification-progress">Question 1 of 1</span>
               </div>
               <h2 id="clarification-title">Confirm the scientific intent</h2>
-              <details class="clarification-context">
-                <summary>What Agent Kronig understood</summary>
-                <p id="clarification-summary"></p>
-              </details>
               <nav id="clarification-steps" class="clarification-steps" aria-label="Clarification questions"></nav>
             </header>
             <form id="clarification-form">
               <div class="clarification-scroll">
+                <details class="clarification-context">
+                  <summary>What Agent Kronig understood</summary>
+                  <p id="clarification-summary"></p>
+                </details>
                 <div id="clarification-questions" class="clarification-questions"></div>
               </div>
               <div class="clarification-actions">
@@ -170,9 +170,11 @@
               <h2 id="plan-review-title">Review prepared experiment</h2>
               <p id="plan-review-summary"></p>
             </header>
+            <div class="plan-review-scroll">
             <dl id="plan-review-facts" class="plan-review-facts"></dl>
             <p id="plan-review-path" class="plan-review-path"></p>
             <p class="plan-review-consent">Unattended covers this approved local simulation, validation, and result preparation. External files, network access, installs, remote systems, Git changes, and system changes still pause for permission.</p>
+            </div>
             <div class="plan-review-actions">
               <button id="open-plan" type="button">Open plan</button>
               <button id="revise-plan" type="button">Request changes</button>
@@ -276,12 +278,12 @@
     <script src="/static/ide-markdown.js?v=20260925-2" defer></script>
     <script src="/static/ide-events.js?v=20261004-1" defer></script>
     <script src="/static/ide-layout.js?v=20260928-2" defer></script>
-    <script src="/static/ide-agent.js?v=20261004-2" defer></script>
+    <script src="/static/ide-agent.js?v=20261005-2" defer></script>
     <script src="/static/ide-changes.js?v=20260925-4" defer></script>
     <script src="/static/prompt-clarification.js?v=20261004-2" defer></script>
     <script src="/static/desktop-bridge.js?v=20260925-1" defer></script>
     <script src="/static/scientific-chart.js?v=20261004-2" defer></script>
-    <script src="/static/results-workbench.js?v=20261004-2" defer></script>
-    <script src="/static/ide.js?v=20261004-4" defer></script>
+    <script src="/static/results-workbench.js?v=20261005-2" defer></script>
+    <script src="/static/ide.js?v=20261005-2" defer></script>
   </body>
 </html>

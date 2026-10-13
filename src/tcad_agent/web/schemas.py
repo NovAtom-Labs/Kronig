@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tcad_agent.ide.models import PlanApprovalMode
 from tcad_agent.prompting.models import ClarificationAnswer
+from tcad_agent.recovery.models import RecoveryAction
 
 
 class WebRequest(BaseModel):
@@ -48,6 +49,10 @@ class SaveWorkspaceFileRequest(WebRequest):
 
 class ExportBundleRequest(WebRequest):
     destination: str = Field(min_length=1, max_length=4096)
+
+
+class RecoveryReviewRequest(WebRequest):
+    action: RecoveryAction
 
 
 class ResolveAgentApprovalRequest(WebRequest):

@@ -39,9 +39,7 @@ class CapturingLLM:
             "runtime_research_reason": None,
         }
         return SimpleNamespace(
-            message=Message(
-                role="assistant", content=[TextContent(text=json.dumps(response))]
-            )
+            message=Message(role="assistant", content=[TextContent(text=json.dumps(response))])
         )
 
 
@@ -68,6 +66,14 @@ def test_gateway_receives_bounded_structured_capabilities() -> None:
     assert payload["capability_catalog"]["backend"] == "devsim"
     assert len(payload["capability_catalog"]["capabilities"]) <= 128
     assert "device" not in payload["capability_catalog"]
+
+
+def test_public_catalog_uses_unambiguous_current_observables():
+    view = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend("devsim")).public_view()
+    ids = {item.id for item in view.capabilities}
+    assert "observable.terminal_current" not in ids
+    assert "observable.terminal_current_density" in ids
+    assert "observable.absolute_terminal_current" in ids
 
 
 def test_system_policy_distinguishes_researcher_inputs_from_expert_defaults() -> None:

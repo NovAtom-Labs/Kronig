@@ -1,2 +1,1 @@
 """DEVSIM adapter."""
-

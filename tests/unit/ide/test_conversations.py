@@ -14,9 +14,7 @@ def test_conversation_messages_and_events_survive_restart(tmp_path: Path) -> Non
     workspace = WorkspaceManager(first_store).open(root)
     first_service = ConversationService(first_store, EventFeed(first_store))
     conversation = first_service.create(workspace.id, "PN junction")
-    message = first_service.add_user_message(
-        conversation.id, "Inspect the repository"
-    )
+    message = first_service.add_user_message(conversation.id, "Inspect the repository")
 
     second_store = SqliteIDEStore(database)
     second_service = ConversationService(second_store, EventFeed(second_store))

@@ -98,9 +98,7 @@ class TabulatedProfilePayload(_ProfilePayload):
             raise ValueError("tabulated profile coordinates and values must match")
         if any(
             right <= left
-            for left, right in zip(
-                self.positions_cm, self.positions_cm[1:], strict=False
-            )
+            for left, right in zip(self.positions_cm, self.positions_cm[1:], strict=False)
         ):
             raise ValueError("tabulated profile coordinates must increase")
         return self
@@ -117,9 +115,7 @@ class PiecewiseConstantProfilePayload(_ProfilePayload):
             raise ValueError("piecewise profile requires one value per interval")
         if any(
             right <= left
-            for left, right in zip(
-                self.boundaries_cm, self.boundaries_cm[1:], strict=False
-            )
+            for left, right in zip(self.boundaries_cm, self.boundaries_cm[1:], strict=False)
         ):
             raise ValueError("piecewise boundaries must increase")
         return self
@@ -156,9 +152,7 @@ class ContactPayload(_PayloadModel):
 
 
 class PhysicsPayload(_PayloadModel):
-    equations: tuple[
-        Literal["poisson", "electron_continuity", "hole_continuity"], ...
-    ]
+    equations: tuple[Literal["poisson", "electron_continuity", "hole_continuity"], ...]
     models: tuple[
         Literal[
             "boltzmann",
@@ -226,6 +220,11 @@ class ACPayload(_PayloadModel):
     contact: str
     frequencies_hz: tuple[float, ...] = Field(min_length=1, max_length=10000)
     amplitude_v: float = Field(gt=0)
+    biases_v: tuple[float, ...] = Field(default=(0.0,), min_length=1, max_length=10000)
+    bias_scheduled: bool = False
+    strategy: Literal["fixed", "adaptive"] = "fixed"
+    minimum_step_v: float | None = Field(default=None, gt=0)
+    maximum_retries: int = Field(default=6, ge=0, le=32)
 
 
 class TransientPayload(_PayloadModel):
@@ -280,6 +279,8 @@ class DevsimPayload(_PayloadModel):
     solver: SolverPayload = Field(default_factory=SolverPayload)
     study: StudyPayload
     observables: tuple[str, ...] = Field(min_length=1, max_length=64)
+    profile_bias_values_v: tuple[float, ...] | None = None
+    profile_sampling_provenance: dict[str, object] | None = None
 
     @model_validator(mode="after")
     def validate_references(self) -> Self:

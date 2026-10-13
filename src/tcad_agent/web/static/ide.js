@@ -600,7 +600,7 @@ function showFile(preview) {
 }
 
 function showCanonicalResult(preview, payload) {
-  activeFile = preview;
+  activeFile = {...preview, content: JSON.stringify(payload, null, 2)};
   activeResult = payload;
   resultComparisonHistory = [
     payload,
@@ -616,13 +616,7 @@ function showCanonicalResult(preview, payload) {
   fileViewerState.textContent = "Verified result";
   fileViewerRefresh.hidden = false;
   fileViewerEdit.hidden = true;
-  fileViewerDownload.hidden = false;
-  fileViewerDownload.href = window.AgentKronigFileViewer.fileUrl(
-    activeWorkspace.id,
-    preview.path,
-    true,
-  );
-  fileViewerDownload.download = preview.name;
+  fileViewerDownload.hidden = true;
   fileViewerPreview.textContent = "Results";
   fileViewerSource.textContent = "Evidence";
   fileViewerModes.hidden = false;
@@ -676,6 +670,27 @@ async function openManagedResult(runId) {
     },
     payload,
   );
+}
+
+async function openSavedResult(bundleRunId) {
+  const workspaceId = activeWorkspace?.id;
+  if (!workspaceId) return;
+  const payload = await api(`/api/workspaces/${workspaceId}/saved-results/${encodeURIComponent(bundleRunId)}`);
+  if (activeWorkspace?.id !== workspaceId) return;
+  showCanonicalResult({path: payload.canonical_path, name: "canonical.json", size: 0}, payload);
+}
+
+async function reviewSavedCalculation(bundleRunId, action = null) {
+  const workspaceId = activeWorkspace?.id;
+  if (!workspaceId) return;
+  const payload = await api(`/api/workspaces/${workspaceId}/saved-results/${encodeURIComponent(bundleRunId)}/${action ? "recovery" : "recalculate"}`, {
+    method: "POST", ...(action ? {body: JSON.stringify({action})} : {}),
+  });
+  if (activeWorkspace?.id !== workspaceId || payload.stopped) return;
+  setRun(payload.run || payload);
+  activateAgentView("chat");
+  await loadPlan(activeRun);
+  await refreshMessages(activeSession.id);
 }
 
 async function openFile(entry) {
@@ -783,12 +798,14 @@ async function refreshCurrentRepository() {
   }
 }
 
-function renderExperimentProjects(experiments = []) {
+function renderExperimentProjects(experiments = [], notice = "") {
   clearNode(experimentProjectList);
   experimentProjectCount.textContent = String(experiments.length);
-  experimentProjects.hidden = experiments.length === 0;
+  experimentProjects.hidden = experiments.length === 0 && !notice;
+  document.querySelector("#experiment-projects-title").textContent = "SAVED RESULTS";
+  if (notice) experimentProjectList.append(emptyCopy(notice));
   experiments.forEach((experiment) => {
-    const view = window.AgentKronigAgentView.experimentProjectView(experiment);
+    const name = experiment.name;
     const article = document.createElement("article");
     const summary = document.createElement("div");
     const primary = document.createElement("button");
@@ -797,34 +814,48 @@ function renderExperimentProjects(experiments = []) {
     const status = document.createElement("span");
     const disclosure = document.createElement("button");
     const actions = document.createElement("div");
-    article.className = `experiment-project is-${view.statusTone}`;
+    article.className = `experiment-project is-${experiment.validation_state === "passed" ? "success" : "warning"}`;
     summary.className = "experiment-project-summary";
     primary.type = "button";
     primary.className = "experiment-project-primary";
-    primary.title = view.path;
-    primary.setAttribute("aria-label", `${view.primaryAction}: ${view.name}`);
+    primary.title = name;
+    primary.setAttribute("aria-label", `Reopen results: ${name}`);
     identity.className = "experiment-project-identity";
-    title.textContent = view.name;
+    title.textContent = name;
     status.className = "experiment-project-status";
-    status.textContent = view.statusLabel;
+    status.textContent = experiment.reason || (experiment.validation_state === "passed" ? "Checks passed" : "Checks need review");
     identity.append(title, status);
     primary.append(identity);
-    primary.addEventListener("click", () => void openManagedResult(experiment.run_id));
+    primary.addEventListener("click", async () => {
+      try { await openSavedResult(experiment.bundle_run_id); }
+      catch (error) { showError(error.message); return; }
+      if (experiment.validation_state !== "passed") {
+        fileViewerBody.querySelector('[data-result-section="validation"]')?.scrollIntoView({block:"start"});
+      }
+    });
     disclosure.type = "button";
     disclosure.className = "experiment-project-disclosure";
     disclosure.textContent = "›";
-    disclosure.title = "Show result files";
-    disclosure.setAttribute("aria-label", `Show files for ${view.name}`);
+    disclosure.title = "Result actions";
+    disclosure.setAttribute("aria-label", `Result actions for ${name}`);
     disclosure.setAttribute("aria-expanded", "false");
     actions.className = "experiment-project-actions";
     actions.hidden = true;
-    view.secondaryActions.forEach(({label, path}) => {
+    const secondaryActions = experiment.project_path
+      ? [{label: "Plan", path: `${experiment.project_path}/PLAN.md`}, {label: "Report", path: `${experiment.project_path}/REPORT.md`}] : [];
+    secondaryActions.forEach(({label, path}) => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = label;
       button.addEventListener("click", () => void openFile({path}));
       actions.append(button);
     });
+    const recalculate = document.createElement("button");
+    recalculate.type = "button";
+    recalculate.textContent = "Recalculate";
+    recalculate.title = "Prepare a new plan with the same scientific inputs. Does not run until approved.";
+    recalculate.addEventListener("click", () => void reviewSavedCalculation(experiment.bundle_run_id).catch(error => showError(error.message)));
+    actions.append(recalculate);
     disclosure.addEventListener("click", () => {
       actions.hidden = !actions.hidden;
       disclosure.textContent = actions.hidden ? "›" : "⌄";
@@ -841,8 +872,27 @@ async function loadExperimentProjects(workspaceId = activeWorkspace?.id) {
     renderExperimentProjects([]);
     return;
   }
-  const experiments = await api(`/api/workspaces/${workspaceId}/experiments`);
-  if (activeWorkspace?.id === workspaceId) renderExperimentProjects(experiments);
+  const listing = await api(`/api/workspaces/${workspaceId}/saved-results`);
+  const notice = [listing.rejected_count ? `${listing.rejected_count} bundles are unavailable, incomplete, or failed integrity checks and were excluded.` : "",
+    listing.truncated ? "Showing up to 500 saved bundles." : ""].filter(Boolean).join(" ");
+  if (activeWorkspace?.id === workspaceId) renderExperimentProjects(listing.entries, notice);
+}
+
+function diagnosticDisclosure(text) {
+  const safe = window.AgentKronigAgentView.sanitizeDiagnostic(text);
+  if (!safe) return document.createDocumentFragment();
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  const pre = document.createElement("pre");
+  const copy = document.createElement("button");
+  details.className = "run-diagnostics";
+  summary.textContent = "Technical diagnostics";
+  pre.textContent = safe;
+  copy.type = "button";
+  copy.textContent = "Copy diagnostics";
+  copy.addEventListener("click", () => void navigator.clipboard.writeText(safe).catch(error => showError(error.message)));
+  details.append(summary, pre, copy);
+  return details;
 }
 
 function appendMessage(message) {
@@ -947,6 +997,11 @@ function renderChatProgress(snapshot, {allowFollow = true, wasNearBottom = null}
       phase.textContent = update.phase;
       label.textContent = update.label;
       row.append(phase, label);
+      if (update.detail) {
+        const detail = document.createElement("small");
+        detail.textContent = update.detail;
+        label.append(detail);
+      }
       recent.append(row);
     });
     narrative.append(recent);
@@ -957,6 +1012,7 @@ function renderChatProgress(snapshot, {allowFollow = true, wasNearBottom = null}
     recovery.textContent = trail.recovery;
     narrative.append(recovery);
   }
+  if (trail.diagnostics) narrative.append(diagnosticDisclosure(trail.diagnostics));
   const activityLink = document.createElement("button");
   activityLink.type = "button";
   activityLink.className = "research-trail-activity";
@@ -1156,7 +1212,11 @@ function advanceClarification() {
 function renderPlan(plan) {
   activePlan = plan;
   const view = window.AgentKronigAgentView.planReview(plan);
+  const oldLedger = planReviewCard.querySelector("[data-plan-input-ledger]");
+  const ledgerOpen = Boolean(oldLedger?.open);
+  oldLedger?.remove();
   planReviewCard.classList.toggle("hidden", !view.visible);
+  agentChat.classList.toggle("has-plan-review", view.visible);
   if (!view.visible) {
     clearNode(planReviewFacts);
     planRevisionForm.classList.add("hidden");
@@ -1182,7 +1242,33 @@ function renderPlan(plan) {
     planReviewFacts.append(term, description);
   });
   planReviewPath.textContent = view.planPath;
-  planReviewCard.scrollIntoView({block: "nearest"});
+  planReviewPath.title = view.planPath;
+  const ledger = document.createElement("details");
+  ledger.dataset.planInputLedger = "true";
+  ledger.open = ledgerOpen;
+  const heading = document.createElement("summary");
+  heading.textContent = "Scientific inputs and authority";
+  ledger.append(heading);
+  const ledgerNote = document.createElement("p");
+  ledgerNote.textContent = "Authority describes who reviews the contract, not who supplied each value. Original input attribution is unavailable unless explicitly recorded.";
+  ledger.append(ledgerNote);
+  (view.inputLedger || []).forEach(group => {
+    const section = document.createElement("section");
+    const title = document.createElement("strong");
+    const list = document.createElement("dl");
+    title.textContent = group.label;
+    group.records.forEach(record => {
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = record.quantity || record.path;
+      dd.textContent = [typeof record.value === "object" ? JSON.stringify(record.value) : record.value,
+        record.source, record.derivation, record.rationale].filter(value => value != null && value !== "").join(" · ");
+      list.append(dt, dd);
+    });
+    section.append(title, list);
+    ledger.append(section);
+  });
+  planReviewFacts.after(ledger);
 }
 
 async function approvePreparedPlan(mode) {
@@ -1343,9 +1429,10 @@ function renderRunSummary(snapshot) {
   detail.textContent = summary.executionState
     ? `${summary.failedCheckCount} failed checks · ${summary.unmetDeliverables.length} unmet outputs`
     : summary.failedStep
-    ? `${summary.failedStep}${summary.failureOutput ? `: ${String(summary.failureOutput).slice(0, 180)}` : ""}`
+    ? summary.failureSummary
     : `${summary.completedSteps} actions completed · ${summary.changedFiles} files changed`;
   agentRunSummary.append(title, detail);
+  if (summary.diagnostics) agentRunSummary.append(diagnosticDisclosure(summary.diagnostics));
   const evidence = [
     ["Phases", summary.phases?.join(" → ")],
     ["Changed files", summary.changedPaths?.join("\n")],
@@ -1872,6 +1959,10 @@ function connectEvents(sessionKey) {
       void openManagedResult(eventRunId).catch((error) => showError(error.message));
       void loadExperimentProjects(workspaceId).catch((error) => showError(error.message));
     }
+    if (event.kind === "saved_result_ready") {
+      void openSavedResult(event.payload.bundle_run_id).catch(error => showError(error.message));
+      void loadExperimentProjects(workspaceId).catch(error => showError(error.message));
+    }
     if (["clarification_answered", "prompt_compiled"].includes(event.kind)) {
       renderClarification(null);
     }
@@ -1905,7 +1996,7 @@ function connectEvents(sessionKey) {
     "agent_progress_started", "agent_progress_interrupted",
     "prompt_preparation_started", "prompt_preparation_progress",
     "clarification_required", "clarification_answered", "prompt_compiled",
-    "plan_ready", "plan_approved", "plan_revision_requested", "result_ready",
+    "plan_ready", "plan_approved", "plan_revision_requested", "result_ready", "saved_result_ready",
   ].forEach((kind) => eventSource.addEventListener(kind, receive));
   eventSource.onopen = () => {
     streamState.textContent = "LIVE";
@@ -1995,6 +2086,8 @@ async function restoreRoute() {
     await loadExperimentProjects(workspace.id);
     if (!navigationGuard.isCurrent(routeToken)) return;
     await bindSession(session, route.workspaceId, routeToken);
+    const requestedBundle = new URLSearchParams(window.location.search).get("saved_bundle_id");
+    if (/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(requestedBundle || "")) await openSavedResult(requestedBundle);
     const requestedResult = new URLSearchParams(window.location.search).get("result_run_id");
     if (/^[0-9a-f-]{36}$/i.test(requestedResult || "")) {
       await openManagedResult(requestedResult);
@@ -2289,7 +2382,13 @@ fileViewerEdit.addEventListener("click", () => void beginFileEdit());
 fileViewerSave.addEventListener("click", () => void saveFileEdit());
 fileViewerCancel.addEventListener("click", cancelFileEdit);
 fileViewerRefresh.addEventListener("click", () => {
-  if (activeFile) void openFile({path: activeFile.path});
+  if (activeResult?.saved_bundle_id) void openSavedResult(activeResult.saved_bundle_id).catch(error => showError(error.message));
+  else if (activeFile) void openFile({path: activeFile.path});
+});
+window.addEventListener("kronig:review-recovery", event => {
+  const detail = event.detail;
+  if (!detail || detail.workspaceId !== activeWorkspace?.id) return;
+  void reviewSavedCalculation(detail.bundleRunId, detail.action).catch(error => showError(error.message));
 });
 fileViewerClose.addEventListener("click", closeFileViewer);
 if (window.agentKronigDesktop) desktopSettings.hidden = false;

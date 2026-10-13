@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from openhands.sdk.conversation import ConversationExecutionStatus
 from openhands.sdk.event import Event
 from pydantic import JsonValue
 
 from tcad_agent.agent.events import AgentEventBridge, safe_event_text
+from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter
+from tcad_agent.experiments.models import PreparedExperiment
 from tcad_agent.ide.changes import WorkspaceChangeTracker, attribute_changes
 from tcad_agent.ide.conversations import ConversationService
 from tcad_agent.ide.events import EventFeed
@@ -30,7 +33,12 @@ from tcad_agent.ide.models import (
 )
 from tcad_agent.ide.store import IDEStoreError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
-from tcad_agent.prompting.models import ClarificationAnswer
+from tcad_agent.prompting.errors import ResearcherInputRequiredError
+from tcad_agent.prompting.models import (
+    ClarificationAnswer,
+    ClarificationQuestion,
+    PreparationDecision,
+)
 from tcad_agent.prompting.service import PromptPreparationService
 
 
@@ -138,12 +146,21 @@ class AgentSupervisor:
                 run.state in _ACTIVE_STATES
                 for run in self.services.store.list_runs_for_workspace(workspace.id)
             ):
-                raise AgentRunConflictError(
-                    "the workspace already has an active agent run"
-                )
+                raise AgentRunConflictError("the workspace already has an active agent run")
             if persist_message:
                 self.services.conversations.add_user_message(conversation_id, prompt)
-            run = self.services.store.create_run(conversation_id, conversation_id)
+            prior = self.services.store.list_runs(conversation_id)
+            previous = prior[-1] if prior else None
+            sdk_conversation_id = (
+                uuid4()
+                if previous and previous.state in {RunState.CANCELLED, RunState.FAILED}
+                else previous.sdk_conversation_id
+                if previous
+                else conversation_id
+            )
+            # Interrupted SDK histories may contain unresolved tool-use blocks.
+            # Preserve the visible research chat, not that invalid execution tail.
+            run = self.services.store.create_run(conversation_id, sdk_conversation_id)
             baseline_warning: str | None = None
             try:
                 tracker = getattr(self.services, "changes", WorkspaceChangeTracker())
@@ -183,6 +200,43 @@ class AgentSupervisor:
                 )
                 raise
 
+    def review_prepared(
+        self,
+        conversation_id: UUID,
+        prepared: PreparedExperiment,
+        request: str,
+    ) -> AgentRunRecord:
+        """Stage a verified recalculation/recovery without invoking a provider or solver."""
+        conversation = self.services.conversations.get(conversation_id)
+        workspace = self.services.workspaces.get(conversation.workspace_id)
+        with self._guard:
+            if any(
+                run.state in _ACTIVE_STATES
+                for run in self.services.store.list_runs_for_workspace(workspace.id)
+            ):
+                raise AgentRunConflictError("the workspace already has an active agent run")
+            baseline = self.services.changes.capture(workspace.root)
+            artifacts = ExperimentPlanArtifactWriter(workspace.root).write(prepared)
+            self.services.conversations.add_user_message(conversation_id, request)
+            run = self.services.store.create_run(conversation_id, uuid4())
+            self.services.store.save_run_baseline(run.id, baseline)
+            self.services.store.save_prepared_plan(
+                run.id,
+                prepared,
+                plan_path=artifacts.markdown_path,
+                structured_plan_path=artifacts.json_path,
+            )
+            self.services.events.append(
+                conversation_id,
+                "plan_ready",
+                {
+                    "run_id": str(run.id),
+                    "plan_digest": prepared.plan_digest,
+                    "plan_path": artifacts.markdown_path.relative_to(workspace.root).as_posix(),
+                },
+            )
+            return self.services.store.get_run(run.id)
+
     def answer_clarification(
         self,
         run_id: UUID,
@@ -207,12 +261,14 @@ class AgentSupervisor:
         required = {question.id for question in decision.questions if question.required}
         if not set(by_id).issubset(known) or not required.issubset(by_id):
             raise IDEStoreError("clarification answers do not match the active questions")
-        combined = (*preparation.answers, *answers)
+        combined = tuple(
+            {answer.question_id: answer for answer in (*preparation.answers, *answers)}.values()
+        )
         updated = self.services.store.update_prompt_preparation(
             run_id,
             expected_revision,
             answers=combined,
-            decision=None,
+            decision=decision,
             compiled_request=None,
         )
         rendered = ["Clarification answers"]
@@ -221,9 +277,7 @@ class AgentSupervisor:
             rendered.extend(
                 (f"- {question_by_id[answer.question_id].prompt}", f"  {answer.answer}")
             )
-        self.services.conversations.add_user_message(
-            run.conversation_id, "\n".join(rendered)
-        )
+        self.services.conversations.add_user_message(run.conversation_id, "\n".join(rendered))
         queued = self._transition(run_id, RunState.QUEUED)
         self.services.events.append(
             run.conversation_id,
@@ -353,18 +407,12 @@ class AgentSupervisor:
         )
         return self._continue_if_ready(approval.run_id)
 
-    def approve_category(
-        self, approval_id: UUID, expected_revision: int
-    ) -> AgentRunRecord:
-        approval = self.services.store.resolve_approval_with_grant(
-            approval_id, expected_revision
-        )
+    def approve_category(self, approval_id: UUID, expected_revision: int) -> AgentRunRecord:
+        approval = self.services.store.resolve_approval_with_grant(approval_id, expected_revision)
         self._grants_for(approval.run_id).add(approval.permission_category)
         return self._continue_if_ready(approval.run_id)
 
-    def deny(
-        self, approval_id: UUID, expected_revision: int, reason: str
-    ) -> AgentRunRecord:
+    def deny(self, approval_id: UUID, expected_revision: int, reason: str) -> AgentRunRecord:
         approvals = self.services.store.resolve_approval_batch(
             approval_id, expected_revision, ApprovalDecision.DENY
         )
@@ -384,31 +432,31 @@ class AgentSupervisor:
         runtime = self._runtime_for(run_id)
         runtime.pause()
         paused = self._transition(run_id, RunState.PAUSED)
-        self.services.events.append(
-            paused.conversation_id, "run_paused", {"run_id": str(run_id)}
-        )
+        self.services.events.append(paused.conversation_id, "run_paused", {"run_id": str(run_id)})
         return paused
 
     def resume(self, run_id: UUID) -> AgentRunRecord:
         return self._continue(run_id)
 
     def stop(self, run_id: UUID) -> AgentRunRecord:
-        run = self.services.store.get_run(run_id)
         with self._guard:
+            run = self.services.store.get_run(run_id)
+            pending = tuple(
+                approval
+                for approval in self.services.store.list_pending_approvals(run.conversation_id)
+                if approval.run_id == run_id
+            )
+            cancelled = self._transition(run_id, RunState.CANCELLED)
             runtime = self._runtimes.get(run_id)
         if runtime is not None:
             runtime.interrupt()
-        for approval in self.services.store.list_pending_approvals(
-            run.conversation_id
-        ):
-            if approval.run_id == run_id:
-                self.services.store.resolve_approval(
-                    approval.id,
-                    approval.revision,
-                    ApprovalDecision.DENY,
-                )
+        for approval in pending:
+            self.services.store.resolve_approval(
+                approval.id,
+                approval.revision,
+                ApprovalDecision.DENY,
+            )
         self._persist_change_manifest(run_id)
-        cancelled = self._transition(run_id, RunState.CANCELLED)
         self.services.events.append(
             cancelled.conversation_id,
             "run_cancelled",
@@ -416,16 +464,12 @@ class AgentSupervisor:
         )
         return cancelled
 
-    def active_run_for_workspace(
-        self, workspace_id: UUID
-    ) -> AgentRunRecord | None:
+    def active_run_for_workspace(self, workspace_id: UUID) -> AgentRunRecord | None:
         """Return the live writer for one workspace, if one exists."""
 
         active = (
             run
-            for run in reversed(
-                self.services.store.list_runs_for_workspace(workspace_id)
-            )
+            for run in reversed(self.services.store.list_runs_for_workspace(workspace_id))
             if run.state in _ACTIVE_STATES
         )
         return next(active, None)
@@ -455,13 +499,19 @@ class AgentSupervisor:
     def _continue(
         self, run_id: UUID, *, runtime: RuntimeConversation | None = None
     ) -> AgentRunRecord:
-        run = self.services.store.get_run(run_id)
-        conversation = self.services.conversations.get(run.conversation_id)
-        workspace = self.services.workspaces.get(conversation.workspace_id)
-        active_runtime = runtime or self._runtime_for(run_id)
-        running = self._transition(run_id, RunState.RUNNING)
-        self._launch(running, workspace.root, runtime=active_runtime)
-        return running
+        with self._guard:
+            run = self.services.store.get_run(run_id)
+            if run.state is RunState.CANCELLED:
+                return run
+            conversation = self.services.conversations.get(run.conversation_id)
+            workspace = self.services.workspaces.get(conversation.workspace_id)
+            active_runtime = runtime or self._runtime_for(run_id)
+            running = self._transition(run_id, RunState.RUNNING)
+            if running.state is RunState.CANCELLED:
+                active_runtime.interrupt()
+                return running
+            self._launch(running, workspace.root, runtime=active_runtime)
+            return running
 
     def _runtime_for(self, run_id: UUID) -> RuntimeConversation:
         with self._guard:
@@ -480,9 +530,10 @@ class AgentSupervisor:
                 workspace=workspace.root,
                 permission_grants=permission_grants,
             )
-            runtime = self.runtime_factory.create(
-                workspace.root, run.sdk_conversation_id, bridge
-            )
+            runtime = self.runtime_factory.create(workspace.root, run.sdk_conversation_id, bridge)
+            if self.services.store.get_run(run_id).state is RunState.CANCELLED:
+                runtime.interrupt()
+                return runtime
             bridge.bind_plan_pause(runtime.pause)
             bridge.bind_result_pause(runtime.pause)
             self._runtimes[run_id] = runtime
@@ -503,6 +554,17 @@ class AgentSupervisor:
     def _begin_execution(
         self, run: AgentRunRecord, workspace: Path, compiled_prompt: str
     ) -> AgentRunRecord:
+        # Stop and runtime admission share one lock. Never trust a pre-provider
+        # run snapshot, and check again after factory callbacks can cancel.
+        with self._guard:
+            current = self.services.store.get_run(run.id)
+            if current.state is RunState.CANCELLED:
+                return current
+            return self._admit_execution(current, workspace, compiled_prompt)
+
+    def _admit_execution(
+        self, run: AgentRunRecord, workspace: Path, compiled_prompt: str
+    ) -> AgentRunRecord:
         permission_grants = self._grants_for(run.id)
         bridge = AgentEventBridge(
             run.conversation_id,
@@ -513,18 +575,28 @@ class AgentSupervisor:
             workspace=workspace,
             permission_grants=permission_grants,
         )
-        runtime = self.runtime_factory.create(
-            workspace, run.sdk_conversation_id, bridge
-        )
+        try:
+            preparation = self.services.store.get_prompt_preparation(run.id)
+            bridge.research_intent = preparation.decision.intent if preparation.decision else None
+        except IDEStoreError:
+            bridge.research_intent = None
+        runtime = self.runtime_factory.create(workspace, run.sdk_conversation_id, bridge)
+        current = self.services.store.get_run(run.id)
+        if current.state is RunState.CANCELLED:
+            runtime.interrupt()
+            return current
         bridge.bind_plan_pause(runtime.pause)
         bridge.bind_result_pause(runtime.pause)
         with self._guard:
             self._runtimes[run.id] = runtime
         runtime.send_message(compiled_prompt)
         running = self._transition(run.id, RunState.RUNNING)
-        self.services.events.append(
-            run.conversation_id, "run_started", {"run_id": str(run.id)}
-        )
+        if running.state is RunState.CANCELLED:
+            return running
+        self.services.events.append(run.conversation_id, "run_started", {"run_id": str(run.id)})
+        current = self.services.store.get_run(run.id)
+        if current.state is RunState.CANCELLED:
+            return current
         self._launch(running, workspace)
         return running
 
@@ -539,6 +611,43 @@ class AgentSupervisor:
             self._threads[run_id] = thread
         thread.start()
 
+    @staticmethod
+    def _researcher_input_clarification(
+        error: ResearcherInputRequiredError,
+    ) -> PreparationDecision:
+        questions = []
+        used_ids: set[str] = set()
+        for index, field_path in enumerate(error.field_paths[:7], start=1):
+            base = re.sub(r"[^a-z0-9]+", "_", field_path.casefold()).strip("_")
+            question_id = f"confirm_{base}"[:80] or f"confirm_input_{index}"
+            if question_id in used_ids:
+                suffix = f"_{index}"
+                question_id = f"{question_id[: 80 - len(suffix)]}{suffix}"
+            used_ids.add(question_id)
+            from tcad_agent.prompting.completeness import question_for_path
+
+            readable_question = question_for_path(field_path)
+            questions.append(
+                ClarificationQuestion(
+                    id=question_id,
+                    field_path=field_path,
+                    prompt=readable_question.prompt,
+                    reason=(
+                        "This scientific input must come from you. Agent Kronig will "
+                        "not infer it from repository files or reference material."
+                    ),
+                )
+            )
+        return PreparationDecision(
+            status="clarification",
+            summary=(
+                "The previous answers did not fully resolve a researcher-controlled "
+                "scientific input. Please confirm the item below so preparation can continue."
+            ),
+            questions=tuple(questions),
+            unresolved_critical=tuple(error.field_paths[:7]),
+        )
+
     def _prepare(self, run_id: UUID, workspace: Path) -> None:
         if self.preparation is None:
             return
@@ -547,6 +656,8 @@ class AgentSupervisor:
             conversation_id = self.services.store.get_run(run_id).conversation_id
 
             def report_progress(phase: str) -> None:
+                if self.services.store.get_run(run_id).state is RunState.CANCELLED:
+                    raise RuntimeError("Request preparation was cancelled.")
                 self.services.events.append(
                     conversation_id,
                     "prompt_preparation_progress",
@@ -558,6 +669,7 @@ class AgentSupervisor:
                 original_prompt=record.original_prompt,
                 answers=record.answers,
                 on_progress=report_progress,
+                previous_decision=record.decision,
             )
             current_run = self.services.store.get_run(run_id)
             if current_run.state is RunState.CANCELLED:
@@ -612,6 +724,32 @@ class AgentSupervisor:
                 },
             )
             self._begin_execution(current_run, workspace, compiled.compiled_prompt)
+        except ResearcherInputRequiredError as error:
+            current = self.services.store.get_run(run_id)
+            if current.state is RunState.CANCELLED:
+                return
+            decision = self._researcher_input_clarification(error)
+            updated = self.services.store.update_prompt_preparation(
+                run_id,
+                record.revision,
+                answers=record.answers,
+                decision=decision,
+                compiled_request=None,
+            )
+            waiting = self._transition(run_id, RunState.WAITING_FOR_USER)
+            self.services.events.append(
+                waiting.conversation_id,
+                "clarification_required",
+                {
+                    "run_id": str(run_id),
+                    "preparation_revision": updated.revision,
+                    "question_count": len(decision.questions),
+                    "questions": [
+                        question.model_dump(mode="json") for question in decision.questions
+                    ],
+                    "recovered_from_invalid_decision": True,
+                },
+            )
         except Exception as error:
             current = self.services.store.get_run(run_id)
             if current.state is RunState.CANCELLED:
@@ -654,6 +792,9 @@ class AgentSupervisor:
     ) -> None:
         try:
             terminal_detail: str | None = None
+            if self.services.store.get_run(run_id).state is RunState.CANCELLED:
+                runtime.interrupt()
+                return
             runtime.run()
             current = self.services.store.get_run(run_id)
             if current.state is RunState.CANCELLED:
@@ -739,9 +880,7 @@ class AgentSupervisor:
             terminal_payload: dict[str, JsonValue] = {"run_id": str(run_id)}
             if terminal_detail is not None:
                 terminal_payload["detail"] = terminal_detail
-            self.services.events.append(
-                final.conversation_id, kind, terminal_payload
-            )
+            self.services.events.append(final.conversation_id, kind, terminal_payload)
         except Exception as error:
             current = self.services.store.get_run(run_id)
             if current.state in {
@@ -788,16 +927,17 @@ class AgentSupervisor:
             )
 
     def _transition(self, run_id: UUID, state: RunState) -> AgentRunRecord:
-        current = self.services.store.get_run(run_id)
-        return self.services.store.transition_run(run_id, current.revision, state)
+        with self._guard:
+            current = self.services.store.get_run(run_id)
+            if current.state is RunState.CANCELLED:
+                return current
+            return self.services.store.transition_run(run_id, current.revision, state)
 
     def _recover_interrupted_runs(self) -> None:
         for run in self.services.store.list_runs_in_states(_ACTIVE_STATES):
             pending = tuple(
                 approval
-                for approval in self.services.store.list_pending_approvals(
-                    run.conversation_id
-                )
+                for approval in self.services.store.list_pending_approvals(run.conversation_id)
                 if approval.run_id == run.id
             )
             if pending:
@@ -818,8 +958,6 @@ class AgentSupervisor:
                 "run_cancelled",
                 {
                     "run_id": str(run.id),
-                    "detail": (
-                        "The run ended because the previous application session ended."
-                    ),
+                    "detail": ("The run ended because the previous application session ended."),
                 },
             )

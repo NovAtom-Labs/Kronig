@@ -10,6 +10,36 @@ from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries
 from tcad_agent.validation.engine import ValidationEngine
 
 
+def test_canonical_temperature_points_are_validated_without_legacy_bias_records(valid_spec):
+    from tcad_agent.results.models import OperatingPoint
+
+    result = CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        terminals=("left", "right"),
+        operating_points=tuple(
+            OperatingPoint(
+                index=i,
+                state="converged",
+                coordinates={"temperature": t},
+                terminal_currents_a_per_m2={"left": 1e-8, "right": -1e-8},
+            )
+            for i, t in enumerate((280, 300, 320))
+        ),
+    )
+    spec = valid_spec.model_copy(update={"observables": (Observable.TERMINAL_CURRENT_DENSITY,)})
+    report = ValidationEngine().validate(result, expected_bias_points=3, spec=spec)
+    for check in (
+        "bias-points-present",
+        "expected-point-count",
+        "all-points-converged",
+        "terminal-current-conservation",
+        "requested-observables-present",
+    ):
+        assert report.checks_by_id[check].status == "passed"
+
+
 def canonical_result(
     *,
     anode_current: float = 1.0,
@@ -39,6 +69,23 @@ def canonical_result(
     )
 
 
+def test_non_voltage_failed_point_is_classified_as_nonconvergence():
+    from tcad_agent.results.models import OperatingPoint
+
+    result = CanonicalResult(
+        backend="devsim",
+        status="completed",
+        simulator_version="2.9.1",
+        terminals=("left", "right"),
+        operating_points=(
+            OperatingPoint(index=0, state="failed", coordinates={"temperature": 300}),
+        ),
+    )
+    assert FailureKind.NON_CONVERGENCE in {
+        failure.kind for failure in ValidationEngine().classify_failures(result)
+    }
+
+
 def test_converged_but_nonconserving_result_fails_physical_validation() -> None:
     result = canonical_result(anode_current=1.0, cathode_current=-0.7, converged=True)
     report = ValidationEngine(current_rtol=1e-6).validate(result)
@@ -60,9 +107,7 @@ def test_valid_conserving_result_passes() -> None:
 
 def test_classifies_execution_failure_without_secondary_noise() -> None:
     engine = ValidationEngine()
-    failures = engine.classify_failures(
-        canonical_result(status="execution_failed", bias_points=())
-    )
+    failures = engine.classify_failures(canonical_result(status="execution_failed", bias_points=()))
     assert [failure.kind for failure in failures] == [FailureKind.EXECUTION]
 
 
@@ -186,9 +231,7 @@ def test_missing_requested_observable_fails_validation() -> None:
     incomplete = result.model_copy(
         update={
             "fields": {
-                name: field
-                for name, field in result.fields.items()
-                if name != "electron_density"
+                name: field for name, field in result.fields.items() if name != "electron_density"
             }
         }
     )

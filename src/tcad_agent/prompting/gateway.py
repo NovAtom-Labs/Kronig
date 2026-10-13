@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 
 from openhands.sdk import LLM, Message, TextContent
 from pydantic import ValidationError
 
 from tcad_agent.agent.runtime import llm_from_environment
 from tcad_agent.capabilities.descriptors import CapabilityCatalogView
+from tcad_agent.prompting.errors import (
+    ModelResponseError,
+    ResearcherInputRequiredError,
+)
 from tcad_agent.prompting.models import (
     ClarificationAnswer,
     EvidenceExcerpt,
@@ -20,8 +26,10 @@ from tcad_agent.prompting.models import (
 )
 
 
-class ModelResponseError(RuntimeError):
-    """Safe error for unavailable or invalid preparation model output."""
+class _ResearcherAuthorityViolation(ValueError):
+    def __init__(self, field_path: str) -> None:
+        self.field_path = field_path
+        super().__init__(f"evidence cannot choose researcher-owned field {field_path}")
 
 
 def _unwrap_json_fence(text: str) -> str:
@@ -37,6 +45,14 @@ def _repair_clarification_paths(text: str) -> str:
     """Derive omitted unresolved paths from already typed clarification questions."""
 
     payload = json.loads(text)
+    # Ancillary documentation must not become the provenance of a user-owned
+    # input. This repairs only contradictory citation metadata, never the
+    # origin or scientific value. Typed authority checks still run afterwards.
+    intent = payload.get("intent") if isinstance(payload, dict) else None
+    if isinstance(intent, dict) and isinstance(intent.get("fields"), list):
+        for field in intent["fields"]:
+            if isinstance(field, dict) and field.get("origin") == "researcher":
+                field["evidence_refs"] = []
     if (
         isinstance(payload, dict)
         and payload.get("status") == "clarification"
@@ -46,8 +62,7 @@ def _repair_clarification_paths(text: str) -> str:
         paths = tuple(
             question.get("field_path")
             for question in payload["questions"]
-            if isinstance(question, dict)
-            and isinstance(question.get("field_path"), str)
+            if isinstance(question, dict) and isinstance(question.get("field_path"), str)
         )
         if paths:
             payload["unresolved_critical"] = paths
@@ -91,7 +106,17 @@ class OpenHandsPreparationModel:
 
     @classmethod
     def from_environment(cls) -> OpenHandsPreparationModel:
-        return cls(llm_from_environment())
+        return cls(
+            llm_from_environment().model_copy(
+                update={
+                    "timeout": 120,
+                    "num_retries": 0,
+                    "retry_min_wait": 2,
+                    "retry_max_wait": 4,
+                    "max_output_tokens": 16384,
+                }
+            )
+        )
 
     @property
     def model(self) -> str:
@@ -105,18 +130,49 @@ class OpenHandsPreparationModel:
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
         capabilities: CapabilityCatalogView | None = None,
+        previous_decision: PreparationDecision | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> PreparationDecision:
         payload = {
             "original_researcher_message": original_prompt,
-            "clarification_answers": [
-                answer.model_dump(mode="json") for answer in answers
-            ],
+            "clarification_answers": [answer.model_dump(mode="json") for answer in answers],
             "workspace_context": workspace.model_dump(mode="json"),
             "local_evidence": [item.model_dump(mode="json") for item in evidence],
             "capability_catalog": (
-                capabilities.model_dump(mode="json") if capabilities is not None else None
+                {
+                    "backend": capabilities.backend,
+                    "digest": capabilities.digest,
+                    "limits": capabilities.limits,
+                    "capabilities": [
+                        item.model_dump(
+                            mode="json",
+                            exclude_defaults=True,
+                            include={
+                                "id",
+                                "summary",
+                                "requires",
+                                "conflicts",
+                                "required_inputs",
+                                "optional_inputs",
+                                "produces",
+                            },
+                        )
+                        for item in capabilities.capabilities
+                    ],
+                }
+                if capabilities is not None
+                else None
             ),
             "decision_schema": PreparationDecision.model_json_schema(),
+            "previous_decision": previous_decision.model_dump(mode="json")
+            if previous_decision
+            else None,
+            "answer_field_mapping": {
+                q.id: {"path": q.field_path, "question": q.prompt}
+                for q in previous_decision.questions
+            }
+            if previous_decision
+            else {},
         }
         messages = [
             Message(
@@ -138,17 +194,29 @@ class OpenHandsPreparationModel:
             ),
         ]
         last_validation_summary = "unknown schema mismatch"
+        last_update = 0.0
+
+        def receiving(_chunk: object) -> None:
+            nonlocal last_update
+            now = time.monotonic()
+            if on_progress and now - last_update >= 2:
+                last_update = now
+                on_progress("receiving_preparation_response")
+
         for attempt in range(2):
             try:
-                response = self._llm.completion(messages)
+                kwargs = (
+                    {"on_token": receiving}
+                    if "on_token" in inspect.signature(self._llm.completion).parameters
+                    else {}
+                )
+                response = self._llm.completion(messages, **kwargs)
             except Exception:
                 raise ModelResponseError(
                     "The configured model could not prepare the request."
                 ) from None
             text = "".join(
-                item.text
-                for item in response.message.content
-                if isinstance(item, TextContent)
+                item.text for item in response.message.content if isinstance(item, TextContent)
             ).strip()
             try:
                 decision = PreparationDecision.model_validate_json(
@@ -157,9 +225,36 @@ class OpenHandsPreparationModel:
                 decision = self._reconcile_explicit_researcher_origins(
                     decision, original_prompt, answers
                 )
-                self._validate_authority(decision, workspace, evidence)
+                self._validate_authority(decision, workspace, evidence, capabilities)
                 return decision
             except (ValidationError, ValueError) as error:
+                if isinstance(error, _ResearcherAuthorityViolation):
+                    paths = tuple(
+                        field.path
+                        for field in decision.intent.fields
+                        if field.origin is IntentOrigin.EVIDENCE
+                        and self._researcher_owned(field.path, capabilities)
+                    )
+                    from tcad_agent.prompting.completeness import question_for_path
+
+                    retained = decision.intent.model_copy(
+                        update={
+                            "fields": tuple(
+                                field for field in decision.intent.fields if field.path not in paths
+                            ),
+                            "unresolved_critical": paths,
+                        }
+                    )
+                    return decision.model_copy(
+                        update={
+                            "status": "clarification",
+                            "intent": retained,
+                            "questions": tuple(
+                                question_for_path(path, capabilities) for path in paths[:7]
+                            ),
+                            "unresolved_critical": paths,
+                        }
+                    )
                 details = (
                     error.errors(include_url=False, include_input=False)
                     if isinstance(error, ValidationError)
@@ -169,15 +264,17 @@ class OpenHandsPreparationModel:
                     str(item.get("msg", "invalid value")) for item in details[:4]
                 )
                 if attempt == 1:
+                    if isinstance(error, _ResearcherAuthorityViolation):
+                        raise ResearcherInputRequiredError(
+                            (error.field_path,), last_validation_summary
+                        ) from None
                     raise ModelResponseError(
                         "The configured model returned an invalid preparation decision: "
                         + last_validation_summary
                     ) from None
                 messages.extend(
                     (
-                        Message(
-                            role="assistant", content=[TextContent(text=text)]
-                        ),
+                        Message(role="assistant", content=[TextContent(text=text)]),
                         Message(
                             role="user",
                             content=[
@@ -198,6 +295,8 @@ class OpenHandsPreparationModel:
                         ),
                     )
                 )
+                if on_progress:
+                    on_progress("repairing_preparation_response")
         raise AssertionError("unreachable preparation retry loop")
 
     def _reconcile_explicit_researcher_origins(
@@ -253,6 +352,7 @@ class OpenHandsPreparationModel:
         decision: PreparationDecision,
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
+        capabilities: CapabilityCatalogView | None = None,
     ) -> None:
         if decision.intent is None:
             return
@@ -270,26 +370,28 @@ class OpenHandsPreparationModel:
             if field.origin is IntentOrigin.PLATFORM_DEFAULT and not field.path.startswith(
                 self._default_prefixes
             ):
-                raise ValueError(
-                    f"platform default cannot choose scientific field {field.path}"
-                )
+                raise ValueError(f"platform default cannot choose scientific field {field.path}")
             if field.origin is IntentOrigin.EVIDENCE:
-                if not self._is_expert_path(field.path):
-                    raise ValueError(
-                        f"evidence cannot choose researcher-owned field {field.path}"
-                    )
+                if self._researcher_owned(field.path, capabilities):
+                    raise _ResearcherAuthorityViolation(field.path)
                 if not set(field.evidence_refs).issubset(evidence_ids):
                     raise ValueError("intent references evidence outside the context packet")
             if field.origin is IntentOrigin.REPOSITORY:
-                reference = (
-                    (field.source_reference or "")
-                    .split("#", 1)[0]
-                    .split("=", 1)[0]
-                )
+                reference = (field.source_reference or "").split("#", 1)[0].split("=", 1)[0]
                 if reference not in workspace_references:
-                    raise ValueError(
-                        f"repository intent references unknown context: {reference}"
-                    )
+                    raise ValueError(f"repository intent references unknown context: {reference}")
+
+    def _researcher_owned(self, path: str, capabilities: CapabilityCatalogView | None) -> bool:
+        from tcad_agent.capabilities.descriptors import InputAuthority
+        from tcad_agent.prompting.completeness import covers
+
+        if capabilities and any(
+            item.authority is InputAuthority.RESEARCHER and covers(path, item.path)
+            for cap in capabilities.capabilities
+            for item in cap.required_inputs
+        ):
+            return True
+        return not self._is_expert_path(path)
 
     def _is_expert_path(self, path: str) -> bool:
         segments = set(path.replace("-", "_").split("."))
@@ -305,10 +407,9 @@ class OpenHandsPreparationModel:
             "solver",
             "validation",
         }
-        material_parameter = (
-            bool(segments & {"material", "materials"})
-            and path.rsplit(".", 1)[-1] not in {"composition", "name", "type"}
-        )
+        material_parameter = bool(segments & {"material", "materials"}) and path.rsplit(".", 1)[
+            -1
+        ] not in {"composition", "name", "type"}
         return (
             path.startswith(self._expert_prefixes)
             or bool(segments & expert_segments)
@@ -320,6 +421,9 @@ class OpenHandsPreparationModel:
     def _system_policy() -> str:
         return (
             "Return exactly one JSON object matching decision_schema and no prose. "
+            "Keep the JSON compact: concise summary, scientific values without redundant "
+            "restatements, brief rationales only where needed. Do not include serialized "
+            "quantity internals, copies of manuals, or schema definitions in field values. "
             "Classify the request generically as repository_change, simulation, analysis, "
             "explanation, or mixed. Never classify by a named device. Preserve the exact "
             "researcher's objective. Greetings, thanks, or casual conversation are complete "
@@ -331,8 +435,30 @@ class OpenHandsPreparationModel:
             "concentrations, contacts, applied conditions, study bounds, fixed parameters, "
             "or deliverables. If one of those is essential and absent, return clarification. "
             "Use the capability catalog as the authoritative bounded backend scope. "
+            "Always set selected_capabilities to the IDs of EVERY requested study and output. "
+            "Retain requested spatial extraction voltages as profile_sampling.bias_values. "
+            "If representative states were requested without exact voltages or a selection "
+            "policy, ask which points to use. Do not choose those operating points yourself. "
+            "Only when the researcher explicitly authorizes automatic sampling may you use "
+            "profile_sampling.mode=automatic with method=schedule_quantiles and the confirmed "
+            "sample_count. This is schedule coverage, "
+            "not a claim of physical regime identification. "
+            "Keep partial intent in clarification decisions, including all confirmed inputs. "
+            "Use previous_decision and answer_field_mapping to apply answers; do not ask again "
+            "for resolved inputs, forget them, or reinterpret them. Do not silently reduce "
+            "coupled analyses to one study. For AC at multiple DC biases preserve both schedules "
+            "and spatial extraction points as separate requirements. Question prompts must be "
+            "For coupled AC or frequency analyses, put voltage-schedule inputs under "
+            "study.bias_schedule.start/stop/step/values/contact and keep frequency inputs "
+            "in the outer study fields with explicit units. Do not conflate their bounds. "
+            "For a temperature study, the requested temperature list defines all physical "
+            "temperatures. Do not ask for another single temperature; adapter initialization "
+            "may use a value from that list without changing any requested study point. "
+            "natural scientific language, never raw schema paths or array indices. "
             "A simulator or backend explicitly named by the researcher is researcher-origin "
             "intent, not an evidence-origin expert choice. "
+            "For researcher-origin fields always use empty evidence_refs. "
+            "Do not attach documentation citations to user-supplied inputs. "
             "Ask about missing required researcher-owned inputs. Do not ask for expert "
             "or platform-owned inputs when reviewed evidence or defaults authorize them. "
             "Clarify ambiguous units, an unspecified driven contact or sweep schedule, "
@@ -384,6 +510,8 @@ class EnvironmentPreparationModel:
         workspace: WorkspaceContext,
         evidence: Sequence[EvidenceExcerpt],
         capabilities: CapabilityCatalogView | None = None,
+        previous_decision: PreparationDecision | None = None,
+        on_progress: Callable[[str], None] | None = None,
     ) -> PreparationDecision:
         if self._resolved is None:
             try:
@@ -398,4 +526,6 @@ class EnvironmentPreparationModel:
             workspace=workspace,
             evidence=evidence,
             capabilities=capabilities,
+            previous_decision=previous_decision,
+            on_progress=on_progress,
         )

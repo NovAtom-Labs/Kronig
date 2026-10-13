@@ -88,13 +88,16 @@ class BackendSupervisor extends EventEmitter {
     this.spawnArguments = [];
     this.spawnEnvironment = {};
     this.stopping = false;
+    this.stopPromise = null;
+    this.ownerMonitorPid = null;
   }
 
   get running() {
-    return Boolean(this.child && this.child.exitCode === null && !this.child.killed);
+    return Boolean(this.child && this.child.exitCode === null && this.child.signalCode === null);
   }
 
   async start() {
+    if (this.stopPromise || this.stopping) throw new Error("Backend cleanup is still pending");
     if (this.child) throw new Error("Backend supervisor has already been started");
     const token = this.tokenFactory();
     const environment = {
@@ -103,6 +106,7 @@ class BackendSupervisor extends EventEmitter {
       AGENT_KRONIG_DESKTOP_PORT: "0",
       AGENT_KRONIG_DESKTOP_TOKEN: token,
       AGENT_KRONIG_DATA_DIR: this.dataDir,
+      AGENT_KRONIG_DESKTOP_OWNER_PIPE: "1",
       PYTHONUNBUFFERED: "1",
       PYTHONUTF8: "1",
     };
@@ -112,7 +116,7 @@ class BackendSupervisor extends EventEmitter {
 
     const child = this.spawnImpl(this.command, this.args, {
       env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       detached: process.platform !== "win32",
     });
@@ -120,18 +124,23 @@ class BackendSupervisor extends EventEmitter {
     child.once("exit", (code, signal) => {
       if (this.child !== child || this.stopping || !this.readiness) return;
       this.readiness = null;
-      this.child = null;
+      // Retain the owned group identity until descendants have been cleaned up.
       this.emit("unexpected-exit", Object.freeze({code, signal}));
     });
 
     try {
       const readiness = await this.#waitForReadiness(child);
+      this.ownerMonitorPid = readiness.owner_monitor_pid || null;
       const healthy = await this.healthCheck(readiness.url, Date.now() + this.startupTimeoutMs);
       if (!healthy) throw new Error("Backend health check timed out");
+      if (this.child !== child || this.stopping || this.stopPromise
+        || child.exitCode !== null || child.signalCode !== null) {
+        throw new Error("Backend startup was interrupted by shutdown");
+      }
       this.readiness = Object.freeze({...readiness, launchToken: token});
       return this.readiness;
     } catch (error) {
-      await this.stop();
+      if (this.child === child) await this.stop();
       throw error;
     }
   }
@@ -180,32 +189,73 @@ class BackendSupervisor extends EventEmitter {
     });
   }
 
-  async stop() {
+  stop() {
+    if (this.stopPromise) return this.stopPromise;
+    this.stopPromise = this.#stopOwnedTree().finally(() => {this.stopPromise = null;});
+    return this.stopPromise;
+  }
+
+  async #stopOwnedTree() {
     const child = this.child;
-    this.child = null;
     this.readiness = null;
-    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    if (!child) return;
 
     this.stopping = true;
-    await this.#signalTree(child, "SIGTERM");
-    await Promise.race([
-      new Promise((resolve) => child.once("exit", resolve)),
-      delay(750),
-    ]);
-    if (child.exitCode === null && child.signalCode === null) {
-      await this.#signalTree(child, "SIGKILL");
-      await Promise.race([
-        new Promise((resolve) => child.once("exit", resolve)),
-        delay(750),
-      ]);
-    }
-    this.stopping = false;
-    if (child.exitCode === null && child.signalCode === null) {
-      throw new Error("Backend process tree did not terminate");
+    try {
+      await this.#signalTree(child, "SIGTERM");
+      if (!await this.#waitForTreeExit(child, 750)) {
+        await this.#signalTree(child, "SIGKILL");
+        if (!await this.#waitForTreeExit(child, 750)) {
+          throw new Error("Backend process tree did not terminate");
+        }
+      }
+      child.stdin?.destroy();
+      if (this.child === child) this.child = null;
+      this.ownerMonitorPid = null;
+    } finally {
+      this.stopping = false;
     }
   }
 
+  async #waitForTreeExit(child, timeout) {
+    const deadline = Date.now() + timeout;
+    do {
+      const backendExited = child.exitCode !== null || child.signalCode !== null;
+      let groupAlive = false;
+      if (process.platform !== "win32" && Number.isInteger(child.pid)) {
+        try {process.kill(-child.pid, 0); groupAlive = true;}
+        catch (error) {
+          if (error.code === "EPERM") groupAlive = true;
+          else if (error.code !== "ESRCH") throw error;
+        }
+      }
+      let monitorAlive = false;
+      if (this.ownerMonitorPid) {
+        try {process.kill(this.ownerMonitorPid, 0); monitorAlive = true;}
+        catch (error) {if (error.code !== "ESRCH") throw error;}
+      }
+      if (process.platform !== "win32" && backendExited && (groupAlive || monitorAlive)) {
+        // Signal-zero sees unreaped zombies on Linux; Darwin may return EPERM.
+        // Release ownership only when the table confirms no live owned work.
+        const records = await new Promise((resolve, reject) => {
+          execFile("ps", ["-axo", "pid=,pgid=,stat="], (failure, stdout) => {
+            if (failure) {reject(failure); return;}
+            resolve(stdout.split("\n").map((line) => line.trim().split(/\s+/)));
+          });
+        });
+        groupAlive = records.some(([pid, group, state]) =>
+          Number(group) === child.pid && state && !state.startsWith("Z"));
+        monitorAlive = Boolean(this.ownerMonitorPid && records.some(([pid, group, state]) =>
+          Number(pid) === this.ownerMonitorPid && state && !state.startsWith("Z")));
+      }
+      if (backendExited && !groupAlive && !monitorAlive) return true;
+      await delay(25);
+    } while (Date.now() < deadline);
+    return false;
+  }
+
   async #signalTree(child, signal) {
+    if (!Number.isInteger(child.pid)) return;
     if (process.platform === "win32") {
       const arguments_ = ["/PID", String(child.pid), "/T"];
       if (signal === "SIGKILL") arguments_.push("/F");

@@ -25,6 +25,10 @@ function parseReadinessLine(line) {
   if (!Number.isSafeInteger(value.pid) || value.pid <= 0) {
     throw readinessError("PID must be a positive integer");
   }
+  if (value.owner_monitor_pid !== undefined && (
+    !Number.isSafeInteger(value.owner_monitor_pid) || value.owner_monitor_pid <= 0
+    || value.owner_monitor_pid === value.pid
+  )) throw readinessError("owner monitor PID must identify a separate process");
   if (
     typeof value.runtime_fingerprint !== "string" ||
     !/^[a-zA-Z0-9._-]{6,128}$/.test(value.runtime_fingerprint)
@@ -60,6 +64,7 @@ function parseReadinessLine(line) {
     url: parsedUrl.origin,
     pid: value.pid,
     runtime_fingerprint: value.runtime_fingerprint,
+    ...(value.owner_monitor_pid === undefined ? {} : {owner_monitor_pid: value.owner_monitor_pid}),
   });
 }
 
