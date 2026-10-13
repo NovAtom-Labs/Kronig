@@ -1,0 +1,11 @@
+{
+  "physics.temperature": "300 K",
+  "temperature": "300 K",
+  "profiles": "Gaussian standard deviation 0.12 um. Keep the specified 1.7 um center and peak.",
+  "study.contact": "Left driven, right grounded.",
+  "driven_contact": "Drive left and ground right.",
+  "study": "Exactly -0.5, 0, +0.2 and +0.4 V on left, right at 0 V.",
+  "contacts": "Ideal ohmic ends, current density per unit area.",
+  "physics": "300 K; SRH electron and hole lifetimes 1 us each, reviewed doping-dependent mobility.",
+  "profile_sampling": "All four requested operating points."
+}

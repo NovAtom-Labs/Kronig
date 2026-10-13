@@ -10,7 +10,43 @@ from tcad_agent.prompting.gateway import (
     ModelResponseError,
     OpenHandsPreparationModel,
 )
-from tcad_agent.prompting.models import EvidenceExcerpt, WorkspaceContext
+from tcad_agent.prompting.models import EvidenceExcerpt, WorkspaceContext, WorkspaceFileContext
+
+
+def test_repository_reference_uses_known_workspace_relative_path_without_retry():
+    context = workspace().model_copy(
+        update={
+            "files": (
+                WorkspaceFileContext(
+                    path="reference.md", size=32, sha256="b" * 64, text_excerpt="Temperature300 K"
+                ),
+            )
+        }
+    )
+    response = json.dumps(
+        {
+            "status": "ready",
+            "summary": "Use the supplied study",
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Repeat study",
+                "fields": [
+                    {
+                        "path": "physics.temperature",
+                        "value": "300 K",
+                        "origin": "repository",
+                        "source_reference": "repo/reference.md#temperature",
+                    }
+                ],
+            },
+        }
+    )
+    llm = ScriptedLLM([response])
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Repeat study", answers=(), workspace=context, evidence=()
+    )
+    assert decision.intent.fields[0].source_reference == "reference.md#temperature"
+    assert len(llm.messages) == 1
 
 
 class ScriptedLLM:

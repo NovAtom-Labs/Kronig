@@ -51,7 +51,7 @@ from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
 
 class DevsimAdapter:
-    compiler_version = "0.2.0"
+    compiler_version = "0.2.1"
 
     def __init__(self, manifest: CapabilityManifest) -> None:
         self._manifest = manifest
@@ -332,7 +332,14 @@ class DevsimAdapter:
                     **material_parameters,
                 },
                 "sign_convention": spec.sign_convention.model_dump(mode="json"),
-                "solver": spec.solver.model_dump(mode="json"),
+                "solver": {
+                    **spec.solver.model_dump(mode="json"),
+                    "requested_precision": spec.solver.precision,
+                    "precision": (
+                        "extended"
+                        if spec.solver.precision == "backend_default" else spec.solver.precision
+                    ),
+                },
                 "study": study,
                 "observables": [str(value) for value in spec.observables],
             }
@@ -996,6 +1003,7 @@ class DevsimAdapter:
                 "parameter_set_id": data.get("parameter_set_id", "unknown"),
                 "parameter_sources": data.get("parameter_sources", {}),
                 "solver_configuration": data.get("solver_configuration", {}),
+                "numerical_precision": data.get("numerical_precision", {}),
                 "solver_events": data.get("solver_events", []),
                 "native_model_names": data.get("native_model_names", {}),
                 "regions": data.get("regions", []),

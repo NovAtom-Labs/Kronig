@@ -25,7 +25,13 @@ from pydantic import Field, ValidationError
 from tcad_agent.bundles.models import ExperimentBundle
 from tcad_agent.bundles.reader import BundleIntegrityError, BundleReader
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
-from tcad_agent.domain.studies import ACStudy, FrequencyStudy
+from tcad_agent.domain.studies import (
+    ACStudy,
+    DCPointsStudy,
+    DCStudy,
+    FrequencyStudy,
+    expand_study_points,
+)
 from tcad_agent.domain.units import QuantityValue
 from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter
 from tcad_agent.experiments.errors import (
@@ -133,6 +139,11 @@ class DomainTools:
                     "payload_shape": "direct ExperimentSpec object",
                     "do_not_wrap_in": "spec",
                     "next_operation": "validate_spec",
+                    "physical_quantities": (
+                        "Prefer explicit unit-bearing strings. Energy/work function uses "
+                        "energy units such as eV, not voltage units. The unit system "
+                        "performs canonical conversion; never infer dimensionality."
+                    ),
                 },
             },
         )
@@ -177,7 +188,15 @@ class DomainTools:
                 actual = {
                     "study." + spec.study.kind,
                     *("observable." + str(value) for value in spec.observables),
+                    "dimension." + str(spec.dimension),
+                    *("material." + str(region.material) for region in spec.regions),
+                    *("profile." + profile.kind for profile in spec.profiles),
+                    *("equation." + str(equation) for equation in spec.physics.equations),
+                    *("model." + str(model) for model in spec.physics.models),
+                    *("contact." + str(contact.kind) for contact in spec.contacts),
                 }
+                if any(contact.work_function is not None for contact in spec.contacts):
+                    actual.add("contact.metal_work_function")
                 schedule = getattr(spec.study, "bias_schedule", None)
                 if schedule:
                     actual.add("study." + schedule.kind)
@@ -189,6 +208,13 @@ class DomainTools:
                     # The small-signal contract solves and records the common-
                     # potential equilibrium baseline before frequency samples.
                     # A biased schedule does not implicitly deliver that state.
+                    actual.add("study.equilibrium")
+                dc_baseline = schedule if schedule is not None else spec.study
+                if (
+                    isinstance(dc_baseline, DCStudy | DCPointsStudy)
+                    and len({contact.voltage_offset.to("V") for contact in spec.contacts}) == 1
+                    and any(value.to("V") == 0 for value in expand_study_points(dc_baseline))
+                ):
                     actual.add("study.equilibrium")
                 sampling = next(
                     (
@@ -248,7 +274,18 @@ class DomainTools:
                 missing = sorted(
                     capability
                     for capability in self.research_intent.selected_capabilities
-                    if capability.startswith(("study.", "observable."))
+                    if capability.startswith(
+                        (
+                            "study.",
+                            "observable.",
+                            "model.",
+                            "equation.",
+                            "contact.",
+                            "dimension.",
+                            "material.",
+                            "profile.",
+                        )
+                    )
                     and {
                         # Match ExperimentSpec's schema-1.0 migration. This
                         # alias is density, never an absolute current in A.
@@ -746,8 +783,24 @@ class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
         else:
             response = self.tools.build_report(action.payload)
         serialized = json.loads(response.model_dump_json())
+        model_response = serialized
+        if response.code == "experiment_prepared":
+            # Keep complete typed evidence for the event bridge and artifact
+            # digest. Native meshes/plans are not useful conversational context
+            # and can exceed the SDK's 50k text limit, clipping approval paths.
+            prepared = serialized["data"]["prepared"]
+            model_response = {
+                **serialized,
+                "data": {
+                    "plan_digest": prepared["plan_digest"],
+                    "backend": prepared["backend"],
+                    "spec": prepared["spec"],
+                    "plan_artifacts": serialized["data"]["plan_artifacts"],
+                    "next_operation": "wait_for_product_approval_then_execute_approved_plan",
+                },
+            }
         return TcadDomainObservation.from_text(
-            text=json.dumps(serialized, sort_keys=True),
+            text=json.dumps(model_response, sort_keys=True),
             status=response.status,
             code=response.code,
             message=response.message,

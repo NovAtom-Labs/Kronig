@@ -37,6 +37,19 @@ def ide_client(tmp_path: Path) -> TestClient:
     return TestClient(create_app(ide=services))
 
 
+def test_result_not_yet_created_returns_readable_not_ready_instead_of_server_error(tmp_path):
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    events = EventFeed(store)
+    services = IDEServices(WorkspaceManager(store), ConversationService(store, events), events)
+    workspace = services.workspaces.open(tmp_path)
+    conversation = services.conversations.create(workspace.id, "Pending research")
+    run = store.create_run(conversation.id, conversation.id)
+    web = TestClient(create_app(ide=services), raise_server_exceptions=False)
+    response = web.get(f"/api/runs/{run.id}/result")
+    assert response.status_code == 404
+    assert response.json()["code"] == "result_not_ready"
+
+
 def test_saved_result_reopens_after_session_store_is_replaced(
     tmp_path, monkeypatch, result_bundle_factory
 ):

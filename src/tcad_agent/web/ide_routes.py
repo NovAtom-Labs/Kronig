@@ -655,7 +655,14 @@ def build_ide_router(services: IDEServices, supervisor: AgentSupervisor) -> APIR
         run = services.store.get_run(run_id)
         conversation = services.conversations.get(run.conversation_id)
         workspace = services.workspaces.get(conversation.workspace_id)
-        result = services.store.get_experiment_result(run_id)
+        try:
+            result = services.store.get_experiment_result(run_id)
+        except IDEStoreError as exc:
+            raise AgentAPIError(
+                404,
+                "result_not_ready",
+                "No verified simulation result has been produced for this run.",
+            ) from exc
         bundle_root = RuntimePaths.from_workspace(workspace.root).bundle_root / result.bundle_run_id
         try:
             view = services.results.read_bundle(bundle_root)

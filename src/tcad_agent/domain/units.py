@@ -5,8 +5,10 @@ from collections.abc import Mapping
 from typing import Any, Self
 
 import pint
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, GetJsonSchemaHandler, model_validator
+from pydantic.json_schema import JsonSchemaValue
 from pydantic.main import BaseModel
+from pydantic_core import CoreSchema
 
 from tcad_agent.domain.errors import UnitError
 
@@ -21,6 +23,28 @@ class QuantityValue(BaseModel):
     magnitude_si: float
     si_unit: str
     dimensionality: str
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        schema = handler(core_schema)
+        if handler.mode == "validation":
+            return {
+                "anyOf": [
+                    {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": (
+                            "An explicit value and physical unit, parsed deterministically. "
+                            "Prefer this input form instead of hand-converting SI fields."
+                        ),
+                        "examples": ["1 um", "300 K", "4.1 eV", "0.1 V", "1e16 cm^-3"],
+                    },
+                    schema,
+                ]
+            }
+        return schema
 
     @model_validator(mode="before")
     @classmethod

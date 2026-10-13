@@ -210,8 +210,55 @@ class PromptPreparationService:
                 if q.id in {answer.question_id for answer in answers}
             }
             fields = {field.path: field for field in decision.intent.fields}
+            previous_fields = {
+                canonical_path(field.path): field for field in previous_decision.intent.fields
+            }
+            # A measurement choice may be answered under a related field (e.g.
+            # frequency), but replacing an analysis requires explicit researcher
+            # provenance for the new study kind, not a partial model response.
+            new_kind = next(
+                (
+                    field
+                    for field in decision.intent.fields
+                    if canonical_path(field.path) == "study.kind"
+                    and field.origin.value == "researcher"
+                ),
+                None,
+            )
+            old_kind = previous_fields.get("study.kind")
+            analysis_changed = "study.kind" in changed or bool(
+                any(path.startswith("study.") for path in changed)
+                and new_kind is not None
+                and (
+                    (old_kind is not None and old_kind.value != new_kind.value)
+                    or (
+                        old_kind is None
+                        and "study." + str(new_kind.value)
+                        not in previous_decision.intent.selected_capabilities
+                    )
+                )
+            )
+            preserve_models = (
+                "physics.models" in previous_fields and "physics.models" not in changed
+            )
+            if analysis_changed:
+                changed.add("study.kind")
+            retained = tuple(
+                cap
+                for cap in previous_decision.intent.selected_capabilities
+                if (not cap.startswith("study.") or not analysis_changed)
+                and not ("physics.models" in changed and cap.startswith("model."))
+            )
+            current_caps = tuple(
+                cap
+                for cap in decision.intent.selected_capabilities
+                if not (preserve_models and cap.startswith("model."))
+            )
             for field in previous_decision.intent.fields:
-                if field.origin.value == "researcher" and canonical_path(field.path) not in changed:
+                if (
+                    field.origin.value in {"researcher", "repository"}
+                    and canonical_path(field.path) not in changed
+                ):
                     fields[field.path] = field
             decision = decision.model_copy(
                 update={
@@ -221,8 +268,8 @@ class PromptPreparationService:
                             "selected_capabilities": tuple(
                                 dict.fromkeys(
                                     (
-                                        *previous_decision.intent.selected_capabilities,
-                                        *decision.intent.selected_capabilities,
+                                        *retained,
+                                        *current_caps,
                                     )
                                 )
                             ),

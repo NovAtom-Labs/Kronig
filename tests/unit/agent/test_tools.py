@@ -93,6 +93,71 @@ def valid_spec_payload() -> dict:
     return yaml.safe_load((ROOT / "examples" / "pn-junction.yaml").read_text())
 
 
+def test_prepared_tool_text_is_bounded_while_typed_evidence_is_complete(tmp_path, monkeypatch):
+    from tcad_agent.agent.tools import ToolResponse
+
+    executor = TcadDomainExecutor(tmp_path)
+    prepared = {
+        "plan_digest": "a" * 64,
+        "backend": "devsim",
+        "spec": {"name": "study"},
+        "plan": {"native_mesh": "x" * 100000},
+    }
+    response = ToolResponse(
+        status="ok",
+        code="experiment_prepared",
+        message="Ready",
+        data={
+            "prepared": prepared,
+            "plan_artifacts": {"plan": "plan.md", "structured_plan": "plan.json"},
+        },
+    )
+    monkeypatch.setattr(executor.tools, "prepare_experiment", lambda *a, **k: response)
+    observation = executor(TcadDomainAction(operation="prepare_experiment", payload={}))
+    text = observation.content[0].text
+    assert len(text) < 50000
+    assert "plan.json" in text and "a" * 64 in text
+    assert observation.data["prepared"] == prepared
+
+
+def test_requested_physics_model_cannot_be_silently_replaced(tmp_path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Fermi transport",
+            selected_capabilities=("model.fermi",),
+        ),
+    )
+    payload = valid_spec_payload()
+    response = tools.prepare_experiment(payload, backend="devsim")
+    assert response.code == "requested_scope_missing"
+    assert "model.fermi" in response.data["missing_capabilities"]
+
+
+def test_recorded_zero_bias_dc_point_satisfies_equilibrium_baseline(tmp_path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Baseline and biased profiles",
+            selected_capabilities=("study.equilibrium", "study.dc_points"),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["study"] = {"kind": "dc_points", "contact": "anode", "values": ["0 V", "2 V", "-2 V"]}
+    assert tools.prepare_experiment(payload, backend="devsim").status == "ok"
+    payload["study"]["values"] = ["2 V", "-2 V"]
+    assert tools.prepare_experiment(payload, backend="devsim").code == "requested_scope_missing"
+    payload["study"]["values"] = ["0 V", "2 V", "-2 V"]
+    payload["contacts"][1]["voltage_offset"] = "0.1 V"
+    assert tools.prepare_experiment(payload, backend="devsim").code == "requested_scope_missing"
+
+
 def test_frequency_equilibrium_baseline_satisfies_confirmed_zero_bias_scope(tmp_path):
     from tcad_agent.prompting.models import ResolvedResearchIntent
 

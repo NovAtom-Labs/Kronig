@@ -60,6 +60,8 @@ def canonical_path(path: str) -> str:
         "amplitude_v": "amplitude",
     }
     parts = [aliases.get(part, part) for part in parts]
+    if parts in (["physics", "statistics"], ["physics", "contact_statistics_choice"]):
+        parts = ["physics", "models"]
     if parts[:2] == ["study", "dc_points"]:
         parts.pop(1)
     return ".".join(parts)
@@ -137,6 +139,8 @@ def _dimension_matches(value, unit, *, ambiguous):
     if isinstance(value, int | float):
         # A numeric intent has descriptor units only if those units are unique.
         return not ambiguous
+    if isinstance(value, dict) and "value" in value and isinstance(value.get("unit"), str):
+        value = f"{value['value']} {value['unit']}"
     try:
         return QuantityValue.model_validate(value).is_compatible_with(unit)
     except ValueError:

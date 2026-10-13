@@ -21,6 +21,35 @@ class TransientRecoveryExhausted(RuntimeError):
     """Raised when a transient step cannot be reduced within reviewed bounds."""
 
 
+def configure_numerical_precision(backend: Any, solver: dict[str, Any]) -> dict[str, Any]:
+    """Select arithmetic before creating models; unsupported requests fail closed."""
+    resolved = solver["precision"]
+    requested = solver.get("requested_precision", resolved)
+    if resolved not in {"standard", "extended"}:
+        raise ValueError(f"unsupported numerical precision: {resolved}")
+    info = backend.get_parameter(name="info")
+    supported = info.get("extended_precision") is True
+    extended = resolved == "extended"
+    if extended and not supported:
+        raise RuntimeError("requested extended precision is unavailable in this DEVSIM build")
+    native_parameters = {}
+    for name in ("extended_model", "extended_equation", "extended_solver"):
+        backend.set_parameter(name=name, value=extended)
+        effective = backend.get_parameter(name=name)
+        if effective != extended:
+            raise RuntimeError(f"DEVSIM did not enable requested numerical precision: {name}")
+        native_parameters[name] = effective
+    return {
+        "requested": requested,
+        "resolved": resolved,
+        "effective": resolved,
+        "policy_version": "novatom.devsim.precision.2026-10-13.v1",
+        "extended_precision_available": supported,
+        "native_parameters": native_parameters,
+        "backend_build_info": info,
+    }
+
+
 @dataclass
 class AdaptiveStepController:
     initial_step: float
@@ -455,6 +484,7 @@ def _run_payload_series(
         "parameter_set_id": reference.get("parameter_set_id"),
         "parameter_sources": reference.get("parameter_sources", {}),
         "solver_configuration": reference.get("solver_configuration", {}),
+        "numerical_precision": reference.get("numerical_precision", {}),
         "solver_events": solver_events,
         "native_model_names": reference.get("native_model_names", {}),
         "regions": reference.get("regions", []),
@@ -511,16 +541,26 @@ def main() -> int:
         contact_equation,
         create_1d_mesh,
         create_device,
+        delete_contact_equation,
+        delete_equation,
+        delete_interface_equation,
         edge_from_node_model,
         equation,
         finalize_mesh,
         get_circuit_node_value,
         get_contact_charge,
         get_contact_current,
+        get_contact_equation_command,
+        get_contact_equation_list,
         get_edge_model_values,
+        get_equation_command,
+        get_equation_list,
+        get_interface_equation_command,
+        get_interface_equation_list,
         get_node_model_values,
         get_parameter,
         interface_equation,
+        node_solution,
         set_node_values,
         set_parameter,
         solve,
@@ -562,6 +602,7 @@ def main() -> int:
         return _run_temperature_series(payload)
     if payload["study"]["kind"] == "parameter":
         return _run_parameter_series(payload)
+    numerical_precision = configure_numerical_precision(devsim, payload["solver"])
     device = "novatom_device"
     mesh = "novatom_mesh"
     regions = payload["regions"]
@@ -1337,6 +1378,12 @@ def main() -> int:
         "electron_continuity",
         "hole_continuity",
     }.issubset(payload["physics"]["equations"])
+    electrostatic_equations = {
+        region["id"]: get_equation_command(
+            device=device, region=region["id"], name="PotentialEquation"
+        )
+        for region in regions
+    }
     if drift_diffusion:
         for region in regions:
             if region["material"] != "silicon":
@@ -1902,6 +1949,11 @@ def main() -> int:
         )
 
     requested = set(payload["observables"])
+    native_model_names = dict(NATIVE_MODEL_NAMES)
+    if not drift_diffusion:
+        native_model_names.update(
+            electron_density="IntrinsicElectrons", hole_density="IntrinsicHoles"
+        )
 
     def extract_fields() -> dict[str, dict[str, Any]]:
         fields: dict[str, dict[str, Any]] = {}
@@ -1965,8 +2017,8 @@ def main() -> int:
             if region["material"] != "silicon":
                 continue
             model_outputs = {
-                "electron_density": ("Electrons", "cm^-3", "node"),
-                "hole_density": ("Holes", "cm^-3", "node"),
+                "electron_density": (native_model_names["electron_density"], "cm^-3", "node"),
+                "hole_density": (native_model_names["hole_density"], "cm^-3", "node"),
                 "recombination_rate": ("TotalRecombination", "cm^-3/s", "node"),
                 "srh_recombination_rate": ("USRH", "cm^-3/s", "node"),
                 "auger_recombination_rate": ("UAuger", "cm^-3/s", "node"),
@@ -2036,7 +2088,9 @@ def main() -> int:
                 ),
             }
             for output, (model, unit, centering) in model_outputs.items():
-                if output not in requested or not drift_diffusion:
+                if output not in requested or (
+                    not drift_diffusion and output not in {"electron_density", "hole_density"}
+                ):
                     continue
                 positions = node_positions if centering == "node" else edge_positions
                 getter = get_node_model_values if centering == "node" else get_edge_model_values
@@ -2213,15 +2267,142 @@ def main() -> int:
     dc_absolute_error = float(
         solver["carrier_absolute_error" if drift_diffusion else "electrostatic_absolute_error"]
     )
+    state_variables = [
+        (region["id"], variable)
+        for region in regions
+        for variable in (
+            ("Potential", "Electrons", "Holes")
+            if drift_diffusion and region["material"] == "silicon"
+            else ("Potential",)
+        )
+    ]
+    for region_name, variable in state_variables:
+        for checkpoint in ("Previous", "Recovery"):
+            node_solution(device=device, region=region_name, name=f"{checkpoint}{variable}")
+
+    def checkpoint_state(checkpoint: str, *, restore: bool = False) -> None:
+        # Native model-to-model copies retain extended arithmetic; a Python
+        # float round trip would truncate the last converged state to double.
+        for region_name, variable in state_variables:
+            saved = f"{checkpoint}{variable}"
+            set_node_values(
+                device=device,
+                region=region_name,
+                name=variable if restore else saved,
+                init_from=saved if restore else variable,
+            )
+
+    conducting_contacts = [
+        contact
+        for contact in payload["contacts"]
+        if _contact_region(payload, contact["location"])["material"] == "silicon"
+        and contact["kind"] != "insulating"
+    ]
+    driven_contact = next(
+        (contact for contact in payload["contacts"] if contact["id"] == requested_contact), None
+    )
+    equilibrium_predictor = bool(
+        drift_diffusion
+        and not is_transient
+        and driven_contact is not None
+        and _contact_region(payload, driven_contact["location"])["material"] != "silicon"
+        and conducting_contacts
+        and all(contact["kind"] == "ohmic" for contact in conducting_contacts)
+        # Intrinsic carrier models use the grounded electrochemical reference.
+        # A common nonzero contact potential requires a separate gauge transform.
+        and all(contact_offsets[contact["id"]] == 0 for contact in conducting_contacts)
+        and not any(
+            interface.get("trap_density_cm2") is not None
+            or interface.get("surface_electron_velocity_cm_s") is not None
+            for interface in payload["interfaces"]
+        )
+    )
+
+    def predict_stationary_equilibrium(bias_v: float) -> None:
+        if not equilibrium_predictor:
+            return
+        # Only the Newton starting state is predicted. Every original carrier,
+        # contact and interface equation is restored before the coupled solve
+        # and before any AC response or canonical field is extracted.
+        region_commands = [
+            get_equation_command(device=device, region=region["id"], name=name)
+            for region in regions
+            for name in get_equation_list(device=device, region=region["id"])
+        ]
+        contact_commands = [
+            get_contact_equation_command(
+                device=device, contact=_backend_contact_id(contact), name=name
+            )
+            for contact in payload["contacts"]
+            for name in get_contact_equation_list(
+                device=device, contact=_backend_contact_id(contact)
+            )
+            if name in {"ElectronContinuityEquation", "HoleContinuityEquation"}
+        ]
+        interface_commands = [
+            get_interface_equation_command(device=device, interface=interface, name=name)
+            for interface, _left, _right in interface_names
+            for name in get_interface_equation_list(device=device, interface=interface)
+            if name in {"ElectronContinuityEquation", "HoleContinuityEquation"}
+        ]
+        try:
+            for command in contact_commands:
+                delete_contact_equation(
+                    device=device, contact=command["contact"], name=command["name"]
+                )
+            for command in interface_commands:
+                delete_interface_equation(
+                    device=device, interface=command["interface"], name=command["name"]
+                )
+            for command in region_commands:
+                if command["name"] in {"ElectronContinuityEquation", "HoleContinuityEquation"}:
+                    delete_equation(device=device, region=command["region"], name=command["name"])
+            for command in electrostatic_equations.values():
+                equation(**command)
+            solve(
+                type="dc",
+                absolute_error=float(solver["electrostatic_absolute_error"]),
+                relative_error=float(solver["relative_error"]),
+                maximum_iterations=int(solver["maximum_iterations"]),
+            )
+            for region in regions:
+                if region["material"] == "silicon":
+                    for variable in ("Electrons", "Holes"):
+                        set_node_values(
+                            device=device,
+                            region=region["id"],
+                            name=variable,
+                            init_from=f"Intrinsic{variable}",
+                        )
+            solver_events.append(
+                {
+                    "phase": "stationary_equilibrium_predictor",
+                    "bias_v": bias_v,
+                    "outcome": "converged",
+                    "carrier_equations_restored_before_verification": True,
+                }
+            )
+        finally:
+            for command in region_commands:
+                equation(**command)
+            for command in contact_commands:
+                contact_equation(**command)
+            for command in interface_commands:
+                interface_equation(**command)
+
     for requested_bias in _bias_points(payload["study"]):
+        print(f"Requested operating point: {requested_bias:.17g} V", flush=True)
         bias = requested_bias
         converged = True
         attempts = 1
         message = None
         if requested_contact is not None:
             assert study_backend_contact is not None
+            checkpoint_state("Previous")
+            checkpoint_state("Recovery")
             set_dc_bias(bias)
             try:
+                predict_stationary_equilibrium(bias)
                 solve(
                     type="dc",
                     absolute_error=dc_absolute_error,
@@ -2251,13 +2432,18 @@ def main() -> int:
                 study = payload["study"]
                 if study.get("strategy") == "adaptive":
                     left = current_bias
-                    right = requested_bias
+                    step = (requested_bias - left) / 2
                     for _retry in range(study.get("maximum_retries", 0)):
-                        midpoint = left + (right - left) / 2
-                        if abs(midpoint - left) < study.get("minimum_step_v", 0.0):
+                        remaining = requested_bias - left
+                        candidate = left + math.copysign(min(abs(step), abs(remaining)), remaining)
+                        if abs(candidate - left) < study.get("minimum_step_v", 0.0):
                             break
-                        set_dc_bias(midpoint)
+                        checkpoint_state("Recovery", restore=True)
+                        print(f"Recovery operating point: {candidate:.17g} V", flush=True)
+                        set_dc_bias(candidate)
+                        attempts += 1
                         try:
+                            predict_stationary_equilibrium(candidate)
                             solve(
                                 type="dc",
                                 absolute_error=dc_absolute_error,
@@ -2269,56 +2455,31 @@ def main() -> int:
                                 {
                                     "phase": "recovery_midpoint",
                                     "requested_bias_v": requested_bias,
-                                    "attempted_bias_v": midpoint,
-                                    "attempt": attempts + 1,
+                                    "attempted_bias_v": candidate,
+                                    "attempt": attempts,
                                     "outcome": "failed",
                                 }
                             )
-                            right = midpoint
+                            step /= 2
                             continue
                         solver_events.append(
                             {
                                 "phase": "recovery_midpoint",
                                 "requested_bias_v": requested_bias,
-                                "attempted_bias_v": midpoint,
-                                "attempt": attempts + 1,
-                                "outcome": "converged",
-                            }
-                        )
-                        left = midpoint
-                        set_dc_bias(requested_bias)
-                        attempts += 1
-                        try:
-                            solve(
-                                type="dc",
-                                absolute_error=dc_absolute_error,
-                                relative_error=float(solver["relative_error"]),
-                                maximum_iterations=int(solver["maximum_iterations"]),
-                            )
-                        except Exception:
-                            solver_events.append(
-                                {
-                                    "phase": "recovery_target_retry",
-                                    "requested_bias_v": requested_bias,
-                                    "attempted_bias_v": requested_bias,
-                                    "attempt": attempts,
-                                    "outcome": "failed",
-                                }
-                            )
-                            continue
-                        solver_events.append(
-                            {
-                                "phase": "recovery_target_retry",
-                                "requested_bias_v": requested_bias,
-                                "attempted_bias_v": requested_bias,
+                                "attempted_bias_v": candidate,
                                 "attempt": attempts,
                                 "outcome": "converged",
                             }
                         )
-                        converged = True
-                        break
+                        left = candidate
+                        checkpoint_state("Recovery")
+                        if candidate == requested_bias:
+                            converged = True
+                            break
+                        step *= 1.5
                 if not converged:
                     message = "nonlinear solve did not converge"
+                    checkpoint_state("Previous", restore=True)
                     set_dc_bias(current_bias)
                     solve(
                         type="dc",
@@ -2615,11 +2776,12 @@ def main() -> int:
         "parameter_set_id": payload["physics"]["parameter_set_id"],
         "parameter_sources": payload["physics"].get("parameter_sources", {}),
         "solver_configuration": payload["solver"],
+        "numerical_precision": numerical_precision,
         "profile_bias_values_v": payload.get("profile_bias_values_v"),
         "profile_sampling_provenance": payload.get("profile_sampling_provenance"),
         "solver_events": solver_events,
         "native_model_names": {
-            name: NATIVE_MODEL_NAMES[name]
+            name: native_model_names[name]
             for name in payload["observables"]
             if name in NATIVE_MODEL_NAMES
         },

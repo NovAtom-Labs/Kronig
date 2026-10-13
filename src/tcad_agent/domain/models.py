@@ -203,6 +203,7 @@ class SignConvention(StrictModel):
 class SolverControls(StrictModel):
     """Bounded numerical controls whose defaults are platform reviewed."""
 
+    precision: Literal["backend_default", "standard", "extended"] = "backend_default"
     maximum_iterations: int = Field(default=80, ge=1, le=1000)
     relative_error: float = Field(default=1e-6, gt=0, le=1)
     electrostatic_absolute_error: float = Field(default=1.0, gt=0)

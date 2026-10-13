@@ -1,0 +1,1 @@
+Build a MOS capacitor with parameters SiO2 = 10nm, Si = 1micrometer with doping concentration of Na = 10^16 cm^-3, and metal workfunction of 4.1eV. Extract the C-V curve when swept from -5V to +5V

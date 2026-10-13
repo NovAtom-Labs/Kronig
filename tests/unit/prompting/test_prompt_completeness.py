@@ -187,3 +187,12 @@ def test_structured_profile_and_contact_checks_do_not_reask_supplied_fields():
         CapabilityManifest.from_backend("devsim")
     ).public_view()
     assert enforce_completeness(decision, catalog).status == "ready"
+
+
+def test_structured_quantity_with_contact_identity_does_not_reask_work_function():
+    from tcad_agent.prompting.completeness import _dimension_matches
+
+    assert _dimension_matches(
+        {"contact": "gate", "value": 4.1, "unit": "eV"}, "eV", ambiguous=False
+    )
+    assert not _dimension_matches({"value": 4.1, "unit": "V"}, "eV", ambiguous=False)

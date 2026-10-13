@@ -137,6 +137,32 @@ Question count is adaptive rather than fixed. The normal target is three to five
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
 
+### Numerical execution and precision
+
+`ExperimentSpec.solver.precision` is simulator-neutral: `backend_default`, `standard`, or
+`extended`. DEVSIM currently resolves `backend_default` to extended model, equation,
+and solver arithmetic. A native build without that support refuses the request before
+meshing rather than silently falling back. Native and canonical results retain the
+requested, resolved, and effective modes, all three native settings, build information,
+and precision-policy version. Explicit non-default precision is currently refused by
+the Sentaurus adapter until it has an implemented mapping.
+
+Failed DC steps restore native copies of the last converged state and retry bounded
+intermediate steps. Eligible stationary stacks with a driven dielectric boundary and
+grounded ohmic silicon contacts use an equilibrium initial guess, then restore and solve
+the full requested equations before extracting DC or AC results. Interface trap and
+surface kinetics do not use that predictor. Numerical initialization does not substitute
+for the carrier continuity equations, alter physical inputs, or relax validation limits.
+
+The agent-facing quantity schema accepts explicit unit strings such as `4.1 eV` and
+`0.1 V`; conversion is deterministic and work function remains an energy, not a voltage.
+Compiled plans stay complete in repository artifacts and internal records. Conversational
+tool responses reference those artifacts without copying large native meshes into the
+model's context. Follow-up answers preserve unrelated confirmed physics and analyses.
+
+See the [live researcher verification report](docs/verification/2026-10-13-exact-researcher-workflows.md)
+for the tested conditions, timing measurements, and the original junction contact limitation.
+
 ### Adaptive scientific research
 
 The repository agent follows a local-first evidence loop. It searches the packaged,

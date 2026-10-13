@@ -34,9 +34,7 @@ def test_terminal_charge_sweep_produces_generic_quasistatic_capacitance(tmp_path
                     "mesh_spacing": "10 nm",
                 },
             ],
-            "interfaces": [
-                {"id": "ab", "left_region": "layer_a", "right_region": "layer_b"}
-            ],
+            "interfaces": [{"id": "ab", "left_region": "layer_a", "right_region": "layer_b"}],
             "profiles": [
                 {
                     "kind": "constant",
@@ -60,7 +58,13 @@ def test_terminal_charge_sweep_produces_generic_quasistatic_capacitance(tmp_path
                 "minimum_step": "10 mV",
                 "maximum_retries": 10,
             },
-            "observables": ["terminal_charge", "potential", "electric_field"],
+            "observables": [
+                "terminal_charge",
+                "potential",
+                "electric_field",
+                "electron_density",
+                "hole_density",
+            ],
         }
     )
     adapter = DevsimAdapter.from_defaults()
@@ -74,3 +78,8 @@ def test_terminal_charge_sweep_produces_generic_quasistatic_capacitance(tmp_path
     assert result.datasets["terminal_charge__control"].unit == "C/m^2"
     assert result.datasets["capacitance__control"].unit == "F/m^2"
     assert len(result.datasets["capacitance__control"].values) == 5
+    assert min(result.datasets["electron_density"].values) > 0
+    assert min(result.datasets["hole_density"].values) > 0
+    assert result.datasets["electron_density"].shape == result.datasets["hole_density"].shape
+    assert result.metadata["native_model_names"]["electron_density"] == "IntrinsicElectrons"
+    assert result.metadata["native_model_names"]["hole_density"] == "IntrinsicHoles"

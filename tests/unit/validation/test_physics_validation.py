@@ -1,7 +1,12 @@
+import math
+
+import pytest
+
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.results.datasets import Dataset, ScientificAxis
 from tcad_agent.results.models import BiasPoint, CanonicalResult
 from tcad_agent.validation.engine import ValidationEngine
+from tcad_agent.validation.physics import sweep_continuity_checks
 
 
 def test_electric_field_must_equal_negative_potential_gradient() -> None:
@@ -459,6 +464,154 @@ def test_sweep_continuity_detects_isolated_canonical_outlier() -> None:
 
     assert continuous.checks_by_id["sweep-continuity"].status == "passed"
     assert discontinuous.checks_by_id["sweep-continuity"].status == "failed"
+
+
+def _canonical_sweep(
+    biases: tuple[float, ...],
+    values: tuple[float, ...],
+    *,
+    validity: tuple[bool, ...] | None = None,
+    bias_unit: str = "V",
+    value_unit: str = "A/m^2",
+) -> CanonicalResult:
+    return CanonicalResult(
+        backend="devsim",
+        simulator_version="2.9.1",
+        status="completed",
+        axes={
+            "bias": ScientificAxis(
+                id="bias", kind="bias", label="Bias", unit=bias_unit, values=biases
+            )
+        },
+        datasets={
+            "response": Dataset(
+                id="response",
+                label="Response",
+                unit=value_unit,
+                axes=("bias",),
+                shape=(len(values),),
+                centering="operating_point",
+                values=values,
+                validity=validity,
+            )
+        },
+    )
+
+
+@pytest.mark.parametrize("direction", (1.0, -1.0))
+def test_sweep_continuity_accepts_smooth_exponential_over_many_decades(
+    direction: float,
+) -> None:
+    biases = tuple(direction * (-2.0 + index / 10) for index in range(41))
+    result = _canonical_sweep(biases, tuple(math.exp(12 * value) for value in biases))
+
+    check = sweep_continuity_checks(result)[0]
+
+    assert check.status == "passed"
+    assert check.limit == 1000.0
+    assert check.measured_value == pytest.approx(math.exp(-1.2))
+    assert check.evidence_paths == ("result.datasets.response",)
+
+
+def test_sweep_continuity_accepts_smooth_saturation_with_flat_tail() -> None:
+    biases = tuple(-5.0 + index / 10 for index in range(101))
+    values = tuple(1 / (1 + math.exp(-12 * value)) for value in biases)
+
+    check = sweep_continuity_checks(_canonical_sweep(biases, values))[0]
+
+    assert check.status == "passed"
+
+
+@pytest.mark.parametrize(
+    ("bias_scale", "value_scale", "bias_unit", "value_unit"),
+    ((1.0, 1.0, "V", "A/m^2"), (1000.0, 1e-20, "mV", "F/m^2")),
+)
+def test_sweep_continuity_keeps_local_spike_threshold_independent_of_units(
+    bias_scale: float, value_scale: float, bias_unit: str, value_unit: str
+) -> None:
+    result = _canonical_sweep(
+        tuple(bias_scale * value for value in (-2.0, -1.0, 0.0, 1.0, 2.0)),
+        tuple(value_scale * value for value in (-2.0, -1.0, 10000.0, 1.0, 2.0)),
+        bias_unit=bias_unit,
+        value_unit=value_unit,
+    )
+
+    check = sweep_continuity_checks(result)[0]
+
+    assert check.status == "failed"
+    assert check.measured_value == pytest.approx(9999.0)
+    assert check.limit == 1000.0
+    assert check.unit == "1"
+
+
+def test_sweep_continuity_detects_a_single_secant_jump_with_configured_bound() -> None:
+    result = _canonical_sweep((0.0, 1.0, 2.0, 3.0, 4.0), (0.0, 1.0, 10001.0, 10002.0, 10003.0))
+
+    strict = sweep_continuity_checks(result)[0]
+    configured = sweep_continuity_checks(result, maximum_slope_outlier_ratio=10000.0)[0]
+
+    assert strict.status == "failed"
+    assert strict.measured_value == pytest.approx(10000.0)
+    assert configured.status == "passed"
+    assert configured.limit == 10000.0
+
+
+def test_sweep_continuity_allows_nonmonotonic_response_on_monotonic_bias() -> None:
+    result = _canonical_sweep((0.0, 1.0, 2.0, 3.0, 4.0), (0.0, 1.0, 0.0, -1.0, 0.0))
+
+    check = sweep_continuity_checks(result)[0]
+
+    assert check.status == "passed"
+    assert check.measured_value == pytest.approx(1.0)
+
+
+def test_sweep_continuity_does_not_join_slopes_across_masked_points() -> None:
+    result = _canonical_sweep(
+        tuple(float(index) for index in range(8)),
+        (0.0, 1.0, 2.0, 3.0, 0.0, 10000.0, 20000.0, 30000.0),
+        validity=(True, True, True, True, False, True, True, True),
+    )
+
+    check = sweep_continuity_checks(result)[0]
+
+    assert check.status == "passed"
+    assert check.measured_value == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "biases",
+    ((0.0, 1.0, 2.0, 3.0, 0.0, -1.0, -2.0, -3.0), (0.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 6.0)),
+)
+def test_sweep_continuity_does_not_join_distinct_bias_schedule_segments(
+    biases: tuple[float, ...],
+) -> None:
+    result = _canonical_sweep(biases, (0.0, 1.0, 2.0, 3.0, 1e8, 1e8 + 1, 1e8 + 2, 1e8 + 3))
+
+    check = sweep_continuity_checks(result)[0]
+
+    assert check.status == "passed"
+    assert check.measured_value == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("values", ((0.0,) * 5, (0.0, 0.0, 1.0, 0.0, 0.0)))
+def test_sweep_continuity_reports_unidentifiable_flat_reference_as_not_applicable(
+    values: tuple[float, ...],
+) -> None:
+    result = _canonical_sweep((0.0, 1.0, 2.0, 3.0, 4.0), values)
+
+    check = sweep_continuity_checks(result)[0]
+
+    assert check.status == "not_applicable"
+    assert check.measured_value is None
+
+
+def test_sweep_continuity_uses_bias_spacing_for_nonuniform_linear_sweep() -> None:
+    biases = (0.0, 0.001, 1.0, 100.0, 10000.0)
+
+    check = sweep_continuity_checks(_canonical_sweep(biases, biases))[0]
+
+    assert check.status == "passed"
+    assert check.measured_value == pytest.approx(1.0)
 
 
 def test_ac_and_quasistatic_capacitance_are_compared_when_pair_is_present() -> None:

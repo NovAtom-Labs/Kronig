@@ -149,6 +149,24 @@ def ready() -> PreparationDecision:
     )
 
 
+def test_scientific_agent_chat_finish_without_result_is_not_success(tmp_path):
+    decision = ready()
+    decision = decision.model_copy(
+        update={
+            "intent": decision.intent.model_copy(
+                update={"selected_capabilities": ("study.equilibrium",)}
+            )
+        }
+    )
+    services, conversation, _factory, supervisor = setup(tmp_path, [decision])
+    run = supervisor.start(conversation.id, "Run and show the scientific result")
+    supervisor.join(run.id, timeout=3)
+    assert services.store.get_run(run.id).state is RunState.BLOCKED
+    assert any(
+        event.kind == "run_blocked" for event in services.events.list_after(conversation.id, 0)
+    )
+
+
 def test_cancel_after_compilation_never_admits_runtime(tmp_path):
     services, conversation, factory, supervisor = setup(tmp_path, [ready()])
     append = services.events.append
@@ -204,7 +222,7 @@ def test_supervisor_waits_for_answers_then_executes_compiled_request(
     assert resumed.id == run.id
     supervisor.join(run.id, timeout=3)
 
-    assert services.store.get_run(run.id).state is RunState.COMPLETED
+    assert services.store.get_run(run.id).state is RunState.BLOCKED
     assert len(runtime.created) == 1
     sent = runtime.created[0].messages[0]
     assert '"kind":"agent_kronig.compiled_request"' in sent
@@ -271,7 +289,8 @@ def test_complete_request_compiles_without_clarification(tmp_path: Path) -> None
     run = supervisor.start(conversation.id, "Run the fully specified study at 300 K")
     supervisor.join(run.id, timeout=3)
 
-    assert services.store.get_run(run.id).state is RunState.COMPLETED
+    # This fake runtime only finishes chat; compilation is not a simulation.
+    assert services.store.get_run(run.id).state is RunState.BLOCKED
     preparation = services.store.get_prompt_preparation(run.id)
     assert preparation.compiled_request is not None
     kinds = [event.kind for event in services.events.iter_after(conversation.id, 0)]
@@ -336,4 +355,4 @@ def test_http_clarification_lifecycle_resumes_the_same_run(tmp_path: Path) -> No
     assert answered.status_code == 202
     assert answered.json()["id"] == str(run_id)
     supervisor.join(run_id, timeout=3)
-    assert store.get_run(run_id).state is RunState.COMPLETED
+    assert store.get_run(run_id).state is RunState.BLOCKED

@@ -23,6 +23,8 @@ def test_compiler_is_deterministic_and_name_agnostic(
         "positive_into_device"
     )
     assert compiled_input["solver"] == {
+        "precision": "extended",
+        "requested_precision": "backend_default",
         "maximum_iterations": 80,
         "relative_error": 1e-06,
         "electrostatic_absolute_error": 1.0,

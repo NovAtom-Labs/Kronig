@@ -24,6 +24,16 @@ class CapabilityService:
 
     def check(self, spec: ExperimentSpec, manifest: CapabilityManifest) -> CapabilityDecision:
         issues: list[CapabilityIssue] = []
+        if manifest.backend != "devsim" and spec.solver.precision != "backend_default":
+            issues.append(
+                CapabilityIssue(
+                    path="solver.precision",
+                    code="unsupported_numerical_precision",
+                    requested=spec.solver.precision,
+                    message="Explicit numerical precision has no reviewed mapping in this adapter.",
+                    supported=("backend_default",),
+                )
+            )
         self._check_one(issues, "dimension", spec.dimension, manifest.dimensions)
         self._check_many(
             issues,

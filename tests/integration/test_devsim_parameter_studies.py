@@ -74,6 +74,7 @@ def test_temperature_study_rebuilds_models_and_preserves_spatial_fields(
     samples = tuple(density.values[index * node_count] for index in range(3))
     assert samples[0] < samples[1] < samples[2]
     assert result.datasets["conduction_band"].axes[0] == "temperature"
+    assert result.metadata["numerical_precision"]["effective"] == "extended"
 
 
 @pytest.mark.integration

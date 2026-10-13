@@ -194,6 +194,8 @@ class SignConventionPayload(_PayloadModel):
 
 
 class SolverPayload(_PayloadModel):
+    precision: Literal["standard", "extended"] = "extended"
+    requested_precision: Literal["backend_default", "standard", "extended"] = "backend_default"
     maximum_iterations: int = Field(default=80, ge=1, le=1000)
     relative_error: float = Field(default=1e-6, gt=0, le=1)
     electrostatic_absolute_error: float = Field(default=1.0, gt=0)

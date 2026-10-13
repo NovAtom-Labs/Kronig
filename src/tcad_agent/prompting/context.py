@@ -26,7 +26,7 @@ class SearchableKnowledgeIndex(Protocol):
 
 
 class WorkspaceContextCollector:
-    """Collect identity-level repository context without reading file contents."""
+    """Collect bounded identity and untrusted scientific reference-document data."""
 
     _excluded_directories = frozenset(
         {
@@ -75,9 +75,15 @@ class WorkspaceContextCollector:
         truncated = len(ordered) > self.max_files
         selected = ordered[: self.max_files]
         file_contexts = []
+        remaining_text = 16000
         for path in selected:
             try:
-                file_contexts.append(self._file_context(canonical, path))
+                item = self._file_context(canonical, path)
+                excerpt = item.text_excerpt
+                if excerpt:
+                    excerpt = excerpt[:remaining_text] or None
+                    remaining_text -= len(excerpt or "")
+                file_contexts.append(item.model_copy(update={"text_excerpt": excerpt}))
             except FileNotFoundError:
                 # Temporary outputs may disappear between inventory and hashing.
                 continue
@@ -102,8 +108,21 @@ class WorkspaceContextCollector:
         digest: str | None = None
         if size <= self.hash_limit:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        excerpt = None
+        if path.suffix.casefold() in {".md", ".txt", ".rst"}:
+            from tcad_agent.agent.events import configured_secret_values, safe_event_text
+
+            with path.open("rb") as source:
+                raw = source.read(4000)
+            if b"\x00" not in raw:
+                excerpt = safe_event_text(
+                    raw.decode("utf-8", errors="replace"), configured_secret_values()
+                )[:4000]
         return WorkspaceFileContext(
-            path=path.relative_to(root).as_posix(), size=size, sha256=digest
+            path=path.relative_to(root).as_posix(),
+            size=size,
+            sha256=digest,
+            text_excerpt=excerpt,
         )
 
     @staticmethod

@@ -68,6 +68,9 @@ _SECRET_ENV_NAMES = (
 _CREDENTIAL_PATTERNS = (
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
     re.compile(r"(?i)\b(bearer|token|api[_-]?key|secret)\s*[:=]\s*[^\s,;]+"),
+    re.compile(
+        r"(?i)\b(?:AWS_BEARER_TOKEN_BEDROCK|AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY)\s*[:=]\s*[^\s,;]+"
+    ),
 )
 
 
@@ -188,6 +191,11 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
     return {"phase": phases.get(event.tool_name, "unknown")}
 
 
+def configured_secret_values() -> tuple[str, ...]:
+    """Known credentials to redact at outbound text boundaries."""
+    return tuple(value for name in _SECRET_ENV_NAMES if (value := os.getenv(name)))
+
+
 def safe_event_text(value: object, secrets: tuple[str, ...] = ()) -> str:
     """Clip and redact a value before it crosses the product event boundary."""
 
@@ -228,9 +236,7 @@ class AgentEventBridge:
         raw_grants.clear()
         raw_grants.update(normalized_grants)
         self.permission_grants = cast(set[PermissionCategory], raw_grants)
-        self.secret_values = secret_values or tuple(
-            value for name in _SECRET_ENV_NAMES if (value := os.getenv(name)) is not None
-        )
+        self.secret_values = secret_values or configured_secret_values()
         self._approval_actions: set[str] = set()
         self._action_baselines: dict[str, WorkspaceBaseline] = {}
         self._action_metadata: dict[str, dict[str, JsonValue]] = {}

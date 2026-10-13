@@ -859,15 +859,41 @@ class AgentSupervisor:
                 except IDEStoreError:
                     prepared_plan = None
                 outcome = self.services.store.find_run_outcome(run_id)
-                if prepared_plan is not None and (
-                    outcome is None
-                    or outcome.overall_state != "completed"
-                    or prepared_plan.status != "consumed"
+                try:
+                    preparation = self.services.store.get_prompt_preparation(run_id)
+                    intent = preparation.decision.intent if preparation.decision else None
+                except IDEStoreError:
+                    intent = None
+                requires_scientific_result = bool(
+                    intent
+                    and (
+                        intent.task_kind == "simulation"
+                        or (
+                            intent.task_kind == "mixed"
+                            and (
+                                any(
+                                    capability.startswith("study.")
+                                    for capability in intent.selected_capabilities
+                                )
+                                or any(field.path.startswith("study.") for field in intent.fields)
+                            )
+                        )
+                    )
+                )
+                if (requires_scientific_result and outcome is None) or (
+                    prepared_plan is not None
+                    and (
+                        outcome is None
+                        or outcome.overall_state != "completed"
+                        or prepared_plan.status != "consumed"
+                    )
                 ):
                     final = self._transition(run_id, RunState.BLOCKED)
                     kind = "run_blocked"
                     terminal_detail = (
-                        "The agent stopped before producing a verified experiment outcome."
+                        "No verified experiment outcome or simulation result was produced. "
+                        "Review the scientific input "
+                        "or backend limitation reported above."
                         if outcome is None
                         else (
                             "The experiment finished, but validation, reporting, or "

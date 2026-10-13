@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import statistics
+import math
 
 from tcad_agent.results.datasets import AxisKind, Dataset
 from tcad_agent.results.models import CanonicalResult
@@ -301,7 +301,16 @@ def sweep_continuity_checks(
     *,
     maximum_slope_outlier_ratio: float = 1000.0,
 ) -> tuple[ValidationCheck, ...]:
-    """Detect isolated numerical outliers without assuming monotonic device response."""
+    """Screen locally isolated secant peaks, not physical validity of the response.
+
+    Compare a one- or two-secant peak with both immediate flanking secants
+    in a contiguous, valid, strictly monotone bias segment. The smaller
+    interior slope divided by the larger flank measures whether the entire
+    short peak is isolated; a globally rising exponential therefore does not
+    become an outlier merely because it spans many decades. Both flanks must
+    be nonzero: an exactly flat reference needs an observable-specific noise
+    floor, which this generic dimensionless diagnostic does not have.
+    """
 
     candidates = [
         dataset
@@ -321,39 +330,51 @@ def sweep_continuity_checks(
                 evidence_paths=("result.datasets",),
             ),
         )
-    worst_ratio = 0.0
+    worst_ratio: float | None = None
     worst_dataset = ""
     for dataset in candidates:
         axis = result.axes[dataset.axes[0]]
         validity = dataset.validity or (True,) * len(dataset.values)
-        slopes: list[float] = []
+        slopes: list[tuple[float, float] | None] = []
         for left, right in zip(
             range(len(dataset.values) - 1),
             range(1, len(dataset.values)),
             strict=True,
         ):
             if not (validity[left] and validity[right]):
+                slopes.append(None)
                 continue
             step = axis.values[right] - axis.values[left]
             if step == 0:
+                slopes.append(None)
                 continue
-            slopes.append(abs((dataset.values[right] - dataset.values[left]) / step))
-        positive = sorted(value for value in slopes if value > 0)
-        if len(positive) < 3:
-            continue
-        baseline_count = max(1, len(positive) // 2)
-        baseline = statistics.median(positive[:baseline_count])
-        ratio = max(positive) / baseline
-        if ratio > worst_ratio:
-            worst_ratio = ratio
-            worst_dataset = dataset.id
-    if not worst_dataset:
+            slope = abs((dataset.values[right] - dataset.values[left]) / step)
+            slopes.append((step, slope) if math.isfinite(slope) else None)
+        for width in (3, 4):
+            for start in range(len(slopes) - width + 1):
+                window = slopes[start : start + width]
+                if any(item is None for item in window):
+                    continue
+                valid_window = [item for item in window if item is not None]
+                if any((step > 0) != (valid_window[0][0] > 0) for step, _ in valid_window):
+                    continue
+                magnitudes = [slope for _, slope in valid_window]
+                if magnitudes[0] == 0 or magnitudes[-1] == 0:
+                    continue
+                ratio = min(magnitudes[1:-1]) / max(magnitudes[0], magnitudes[-1])
+                if worst_ratio is None or ratio > worst_ratio:
+                    worst_ratio = ratio
+                    worst_dataset = dataset.id
+    if worst_ratio is None:
         return (
             ValidationCheck(
                 id="sweep-continuity",
                 level="numerical",
                 status="not_applicable",
-                message="Eligible sweeps contain too few valid nonzero secant slopes.",
+                message=(
+                    "No contiguous valid monotone bias segment has a local secant window "
+                    "with two nonzero flanks; flat references need a specified noise floor."
+                ),
                 evidence_paths=("result.datasets",),
             ),
         )
@@ -364,9 +385,12 @@ def sweep_continuity_checks(
             status="passed" if worst_ratio <= maximum_slope_outlier_ratio else "failed",
             measured_value=worst_ratio,
             limit=maximum_slope_outlier_ratio,
+            unit="1",
             message=(
-                "No isolated bias-sweep secant slope may exceed the reviewed robust "
-                f"outlier ratio; worst dataset: {worst_dataset}."
+                "The local one- or two-secant peak to immediate flanking slope ratio "
+                "must not exceed the configured bound; this is a numerical screen, "
+                "not a physical validity test; "
+                f"worst dataset: {worst_dataset}."
             ),
             evidence_origin="derived",
             evidence_paths=(f"result.datasets.{worst_dataset}",),

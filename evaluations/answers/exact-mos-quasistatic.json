@@ -1,0 +1,12 @@
+{
+  "cv_measurement_type": "Quasi-static C-V, capacitance per unit area, not AC.",
+  "measurement": "Quasi-static C-V, capacitance per unit area.",
+  "study": "Quasi-static gate sweep -5 to +5 V in 0.1 V steps, not a finite-frequency measurement.",
+  "physics.temperature": "300 K",
+  "temperature": "300 K",
+  "contacts.area": "Capacitance per unit area in F/m^2. Do not report absolute farads or assume a physical area.",
+  "contacts": "4.1 eV ideal metal gate on the oxide. Ohmic silicon back contact grounded at 0 V.",
+  "interfaces": "Ideal interface with zero fixed charge and no traps.",
+  "profile_sampling": "Profiles at -5, 0 and +5 V.",
+  "physics": "Poisson and electron/hole continuity, classical statistics, reviewed mobility and SRH with 1 us lifetimes. No interface traps."
+}

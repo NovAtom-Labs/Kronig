@@ -1,0 +1,13 @@
+{
+  "regions": "p-Si from 0 to 1 um, n-Si from 1 to 2 um.",
+  "region_lengths": "1 um per silicon region.",
+  "device_dimensions": "1 um of p-Si followed by 1 um of n-Si.",
+  "contacts": "Use ideal ohmic ends with Fermi statistics for this reference. Explicitly record that the Al 4.10 eV value is descriptive only and Schottky barriers are not simulated.",
+  "physics": "300 K; Fermi statistics, SRH lifetimes 1 us each, Auger and Slotboom BGN. Retain requested mobility outputs. No avalanche, heating or tunnelling.",
+  "physics.temperature": "300 K",
+  "study": "Drive the left p-side contact at exactly 0, +2 and -2 V. Ground the right contact. Adaptive intermediate convergence steps are allowed, not a dense requested sweep.",
+  "driven_contact": "Left p-side driven, right n-side grounded.",
+  "profile_sampling": "Full spatial profiles at 0, +2 and -2 V.",
+  "outputs": "All original spatial outputs, both quasi-Fermi levels under bias and current densities per unit area, not absolute amperes.",
+  "prior_parameters": "Read RESEARCH_CONTEXT.md for the original parameters. Use 1 um per silicon region and an explicitly authorized ideal ohmic reference with Fermi statistics."
+}

@@ -13,6 +13,16 @@ from tcad_agent.domain.errors import CapabilityError
 from tcad_agent.domain.models import ExperimentSpec
 
 
+@pytest.mark.parametrize("precision", ["standard", "extended"])
+def test_explicit_unmapped_numerical_precision_is_not_silently_ignored(tmp_path, precision):
+    spec = equilibrium_spec()
+    spec = spec.model_copy(
+        update={"solver": spec.solver.model_copy(update={"precision": precision})}
+    )
+    with pytest.raises(CapabilityError, match="precision"):
+        SentaurusAdapter.from_defaults().compile(spec, tmp_path / "unmapped-precision")
+
+
 def equilibrium_spec() -> ExperimentSpec:
     return ExperimentSpec.model_validate(
         {
@@ -100,9 +110,7 @@ def test_compile_equilibrium_matches_reviewed_fixture(tmp_path: Path) -> None:
     job = SentaurusAdapter.from_defaults().compile(equilibrium_spec(), tmp_path / "job")
 
     generated = (tmp_path / "job" / "sdevice.cmd").read_text()
-    expected = Path(
-        "tests/fixtures/sentaurus/equilibrium_1d/expected_sdevice.cmd"
-    ).read_text()
+    expected = Path("tests/fixtures/sentaurus/equilibrium_1d/expected_sdevice.cmd").read_text()
     assert generated == expected
     assert job.entrypoint.name == "sdevice.cmd"
     assert job.arguments == ()
@@ -118,9 +126,7 @@ def test_compile_equilibrium_matches_reviewed_fixture(tmp_path: Path) -> None:
         "sdevice.plt",
         "sdevice.tdr",
     ]
-    assert manifest["inputs"]["sdevice.cmd"] == hashlib.sha256(
-        generated.encode()
-    ).hexdigest()
+    assert manifest["inputs"]["sdevice.cmd"] == hashlib.sha256(generated.encode()).hexdigest()
     assert manifest["source_map"]["contacts[0]"]["file"] == "sdevice.cmd"
 
 
@@ -145,9 +151,7 @@ def test_unsafe_identifier_is_rejected(tmp_path: Path, unsafe_name: str) -> None
 
 def test_unsupported_model_is_refused(tmp_path: Path) -> None:
     spec = equilibrium_spec()
-    physics = spec.physics.model_copy(
-        update={"models": (*spec.physics.models, "hydrodynamic")}
-    )
+    physics = spec.physics.model_copy(update={"models": (*spec.physics.models, "hydrodynamic")})
     spec = spec.model_copy(update={"physics": physics})
     with pytest.raises(CapabilityError, match="hydrodynamic"):
         SentaurusAdapter.from_defaults().compile(spec, tmp_path / "job")
@@ -156,11 +160,7 @@ def test_unsupported_model_is_refused(tmp_path: Path) -> None:
 def test_unsupported_observable_is_refused(tmp_path: Path) -> None:
     manifest = CapabilityManifest.from_backend("sentaurus")
     manifest = manifest.model_copy(
-        update={
-            "observables": tuple(
-                item for item in manifest.observables if item != "potential"
-            )
-        }
+        update={"observables": tuple(item for item in manifest.observables if item != "potential")}
     )
     with pytest.raises(CapabilityError, match="potential"):
         SentaurusAdapter(manifest).compile(equilibrium_spec(), tmp_path / "job")

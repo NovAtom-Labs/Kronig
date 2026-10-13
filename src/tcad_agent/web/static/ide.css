@@ -998,7 +998,9 @@ textarea { resize: none; padding: 9px; line-height: 1.45; }
 .plan-review-card > header { flex: 0 0 auto; padding: 14px 14px 10px; }
 .plan-review-scroll { flex: 1 1 auto; min-height: 0; padding: 0 14px 14px; overflow-y: auto; overscroll-behavior: contain; }
 .plan-review-card > .plan-review-actions { flex: 0 0 auto; padding: 10px 12px; border-top: 1px solid var(--border); }
-.plan-review-card > .plan-revision-form { flex: 0 0 auto; margin: 0; padding: 12px; }
+.plan-review-card > .plan-revision-form { flex: 1 1 auto; min-height: 0; margin: 0; padding: 12px; overflow-y: auto; overscroll-behavior: contain; }
+.plan-review-card:has(.plan-revision-form:not(.hidden)) > .plan-review-scroll,
+.plan-review-card:has(.plan-revision-form:not(.hidden)) > .plan-review-actions { display: none; }
 .agent-chat.has-plan-review .message-form { display: none; }
 .plan-review-card.hidden { display: none; }
 .plan-review-card header > span { color: #8fa9c6; font: 0.52rem var(--font-mono); letter-spacing: 0.08em; }

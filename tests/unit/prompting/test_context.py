@@ -5,6 +5,39 @@ from pathlib import Path
 from tcad_agent.prompting.context import LocalEvidenceCollector, WorkspaceContextCollector
 
 
+def test_reference_excerpts_redact_configured_and_conventional_credentials(tmp_path, monkeypatch):
+    import hashlib
+
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "synthetic-secret-value")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-openai-value")
+    text = (
+        "Study at 300 K\nAWS_BEARER_TOKEN_BEDROCK=synthetic-secret-value\n"
+        "OPENAI_API_KEY=synthetic-openai-value\nAWS_SECRET_ACCESS_KEY=other-secret\n"
+    )
+    (tmp_path / "reference.md").write_text(text)
+    item = WorkspaceContextCollector().collect(tmp_path).files[0]
+    assert "synthetic-secret-value" not in item.text_excerpt
+    assert "synthetic-openai-value" not in item.text_excerpt
+    assert "other-secret" not in item.text_excerpt
+    assert "300 K" in item.text_excerpt
+    assert item.sha256 == hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_workspace_reference_document_is_available_as_bounded_data(tmp_path):
+    (tmp_path / "reference.md").write_text("Original silicon study at 300 K, boron 1e17 cm^-3.")
+    context = WorkspaceContextCollector().collect(tmp_path)
+    assert "300 K" in context.files[0].text_excerpt
+    assert context.files[0].sha256
+
+
+def test_workspace_excerpts_have_a_shared_budget_and_do_not_read_symlinks(tmp_path):
+    for index in range(8):
+        (tmp_path / f"notes-{index}.md").write_text("research " * 3000)
+    context = WorkspaceContextCollector().collect(tmp_path)
+    assert 0 < sum(len(item.text_excerpt or "") for item in context.files) <= 16000
+    assert all(len(item.text_excerpt or "") <= 4000 for item in context.files)
+
+
 def test_workspace_context_is_bounded_and_excludes_credentials(
     tmp_path: Path,
 ) -> None:

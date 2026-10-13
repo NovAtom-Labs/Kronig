@@ -1,0 +1,1 @@
+Repeat the same PN Junction parameters given by himanshu and extract all the graphs as in equilibrium but under forward bias and reverse bias of 2V

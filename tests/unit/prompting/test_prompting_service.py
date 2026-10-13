@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tcad_agent.prompting.compiler import PromptCompiler
 from tcad_agent.prompting.context import LocalEvidenceCollector, WorkspaceContextCollector
 from tcad_agent.prompting.models import (
@@ -19,6 +21,256 @@ class EmptyKnowledgeIndex:
     def search(self, query: str, filters=None, limit: int = 5):
         del query, filters, limit
         return ()
+
+
+def test_researcher_changed_analysis_does_not_resurrect_old_study(tmp_path):
+    previous = PreparationDecision(
+        status="clarification",
+        summary="Need frequency",
+        questions=(
+            ClarificationQuestion(
+                id="frequency",
+                field_path="study.frequency",
+                prompt="Frequency?",
+                reason="Controls AC",
+            ),
+        ),
+        unresolved_critical=("study.frequency",),
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Capacitance",
+            selected_capabilities=("study.ac",),
+            fields=(IntentField(path="study.kind", value="ac", origin="researcher"),),
+        ),
+    )
+    resolved = PreparationDecision(
+        status="ready",
+        summary="Researcher chose quasi-static",
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Quasi-static charge response",
+            selected_capabilities=("study.dc",),
+            fields=(IntentField(path="study.kind", value="dc", origin="researcher"),),
+        ),
+    )
+    service = PromptPreparationService(
+        model=ScriptedPreparationModel([resolved]),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={},
+    )
+    outcome = service.prepare(
+        root=tmp_path,
+        original_prompt="Extract capacitance",
+        previous_decision=previous,
+        answers=(
+            ClarificationAnswer(
+                question_id="frequency", answer="Quasi-static charge response instead of AC"
+            ),
+        ),
+    )
+    assert outcome.decision.intent.selected_capabilities == ("study.dc",)
+    assert next(f.value for f in outcome.decision.intent.fields if f.path == "study.kind") == "dc"
+
+
+@pytest.mark.parametrize("origin", ["researcher", "repository"])
+def test_contact_answer_preserves_confirmed_models(tmp_path, origin):
+    (tmp_path / "reference.md").write_text("Use Fermi statistics and SRH recombination.")
+    previous = PreparationDecision(
+        status="clarification",
+        summary="Choose contact",
+        unresolved_critical=("contacts.kind",),
+        questions=(
+            ClarificationQuestion(
+                id="contact",
+                field_path="contacts.kind",
+                prompt="Contact?",
+                reason="Boundary condition",
+            ),
+        ),
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Transport",
+            selected_capabilities=("model.fermi", "model.srh"),
+            fields=(
+                IntentField(
+                    path="physics.models",
+                    value=["fermi", "srh"],
+                    origin=origin,
+                    source_reference="reference.md" if origin == "repository" else None,
+                ),
+            ),
+        ),
+    )
+    current = PreparationDecision(
+        status="ready",
+        summary="Contact selected",
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Transport",
+            selected_capabilities=("model.boltzmann",),
+            fields=(IntentField(path="physics.models", value=["boltzmann"], origin="researcher"),),
+        ),
+    )
+    service = PromptPreparationService(
+        model=ScriptedPreparationModel([current]),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={},
+    )
+    result = service.prepare(
+        root=tmp_path,
+        original_prompt="Transport",
+        previous_decision=previous,
+        answers=(ClarificationAnswer(question_id="contact", answer="Use ohmic contacts"),),
+    )
+    intent = result.decision.intent
+    assert next(f.value for f in intent.fields if f.path == "physics.models") == ["fermi", "srh"]
+    assert "model.fermi" in intent.selected_capabilities
+    assert "model.srh" in intent.selected_capabilities
+    assert "model.boltzmann" not in intent.selected_capabilities
+
+
+def test_geometry_answer_preserves_all_confirmed_analyses(tmp_path):
+    previous = PreparationDecision(
+        status="clarification",
+        summary="Length needed",
+        unresolved_critical=("regions.length",),
+        questions=(
+            ClarificationQuestion(
+                id="length", field_path="regions.length", prompt="Length?", reason="Geometry"
+            ),
+        ),
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Equilibrium and AC",
+            selected_capabilities=("study.equilibrium", "study.ac"),
+        ),
+    )
+    current = PreparationDecision(
+        status="ready",
+        summary="Length supplied",
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Equilibrium and AC",
+            selected_capabilities=("study.ac",),
+        ),
+    )
+    service = PromptPreparationService(
+        model=ScriptedPreparationModel([current]),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={},
+    )
+    result = service.prepare(
+        root=tmp_path,
+        original_prompt="Equilibrium and AC",
+        previous_decision=previous,
+        answers=(ClarificationAnswer(question_id="length", answer="1 um"),),
+    )
+    assert set(result.decision.intent.selected_capabilities) == {"study.equilibrium", "study.ac"}
+
+
+def test_frequency_answer_is_not_an_analysis_replacement(tmp_path):
+    previous = PreparationDecision(
+        status="clarification",
+        summary="Frequency needed",
+        unresolved_critical=("study.frequency",),
+        questions=(
+            ClarificationQuestion(
+                id="freq",
+                field_path="study.frequency",
+                prompt="Frequency?",
+                reason="Measurement condition",
+            ),
+        ),
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Equilibrium and AC",
+            selected_capabilities=("study.equilibrium", "study.ac"),
+        ),
+    )
+    current = PreparationDecision(
+        status="ready",
+        summary="Frequency selected",
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Equilibrium and AC",
+            selected_capabilities=("study.ac",),
+            fields=(IntentField(path="study.kind", value="ac", origin="researcher"),),
+        ),
+    )
+    service = PromptPreparationService(
+        model=ScriptedPreparationModel([current]),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={},
+    )
+    result = service.prepare(
+        root=tmp_path,
+        original_prompt="Equilibrium and AC",
+        previous_decision=previous,
+        answers=(ClarificationAnswer(question_id="freq", answer="1 MHz"),),
+    )
+    assert set(result.decision.intent.selected_capabilities) == {"study.equilibrium", "study.ac"}
+
+
+def test_answered_statistics_choice_updates_models_without_losing_original_geometry(tmp_path):
+    previous = PreparationDecision(
+        status="clarification",
+        summary="Choose statistics",
+        questions=(
+            ClarificationQuestion(
+                id="statistics",
+                field_path="physics.statistics",
+                prompt="Carrier statistics?",
+                reason="Controls populations",
+            ),
+        ),
+        unresolved_critical=("physics.statistics",),
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Transport",
+            selected_capabilities=("model.boltzmann",),
+            fields=(
+                IntentField(path="physics.models", value=["boltzmann", "srh"], origin="researcher"),
+                IntentField(path="regions.length", value="2 um", origin="researcher"),
+            ),
+        ),
+    )
+    new = PreparationDecision(
+        status="ready",
+        summary="Fermi selected",
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Transport",
+            selected_capabilities=("model.fermi", "model.srh"),
+            fields=(
+                IntentField(path="physics.models", value=["fermi", "srh"], origin="researcher"),
+            ),
+        ),
+    )
+    service = PromptPreparationService(
+        model=ScriptedPreparationModel([new]),
+        workspace_collector=WorkspaceContextCollector(),
+        evidence_collector=LocalEvidenceCollector(EmptyKnowledgeIndex()),
+        compiler=PromptCompiler(),
+        capability_hashes={},
+    )
+    outcome = service.prepare(
+        root=tmp_path,
+        original_prompt="Transport",
+        previous_decision=previous,
+        answers=(ClarificationAnswer(question_id="statistics", answer="Fermi statistics"),),
+    )
+    fields = {field.path: field.value for field in outcome.decision.intent.fields}
+    assert fields["physics.models"] == ["fermi", "srh"]
+    assert fields["regions.length"] == "2 um"
+    assert "model.boltzmann" not in outcome.decision.intent.selected_capabilities
 
 
 def test_heartbeat_does_not_replace_a_streaming_stage(monkeypatch, tmp_path: Path):
