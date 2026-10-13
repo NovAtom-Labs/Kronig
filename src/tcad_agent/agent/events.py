@@ -82,6 +82,7 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "run_experiment": "execute",
             "validate_result": "validate",
             "search_knowledge": "inspect",
+            "read_ssh_audit": "inspect",
             "build_report": "report",
         }
         metadata: dict[str, JsonValue] = {

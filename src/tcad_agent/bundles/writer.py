@@ -22,6 +22,15 @@ class BundleWriter:
         self.root = root
 
     def write(self, inputs: BundleInputs) -> ExperimentBundle:
+        # Validate declared audit artifacts before creating a staging directory.
+        # A missing audit trail must not leave a half-built bundle behind.
+        for source, description in (
+            (inputs.native.audit_json_path, "SSH JSON audit trail"),
+            (inputs.native.audit_log_path, "SSH text audit log"),
+        ):
+            if source is not None and not source.is_file():
+                raise FileNotFoundError(f"{description} does not exist: {source}")
+
         self.root.mkdir(parents=True, exist_ok=True)
         final = self.root / inputs.run_id
         staging = self.root / f".{inputs.run_id}.staging"
@@ -34,6 +43,16 @@ class BundleWriter:
             shutil.copy2(source, staging / "compiled" / source.name)
         shutil.copy2(inputs.native.stdout_path, staging / "logs" / "stdout.log")
         shutil.copy2(inputs.native.stderr_path, staging / "logs" / "stderr.log")
+        self._copy_optional_audit(
+            inputs.native.audit_json_path,
+            staging / "logs" / "ssh-audit.json",
+            "SSH JSON audit trail",
+        )
+        self._copy_optional_audit(
+            inputs.native.audit_log_path,
+            staging / "logs" / "ssh-audit.log",
+            "SSH text audit log",
+        )
         if inputs.native.result_path is not None and inputs.native.result_path.exists():
             shutil.copy2(inputs.native.result_path, staging / "native" / "native_result.json")
         self._write_json(
@@ -71,6 +90,18 @@ class BundleWriter:
         self._write_json(staging / "manifest.json", manifest.model_dump_json(indent=2))
         staging.replace(final)
         return ExperimentBundle(run_id=inputs.run_id, state=state, root=final)
+
+    @staticmethod
+    def _copy_optional_audit(
+        source: Path | None,
+        destination: Path,
+        description: str,
+    ) -> None:
+        if source is None:
+            return
+        if not source.is_file():
+            raise FileNotFoundError(f"{description} does not exist: {source}")
+        shutil.copy2(source, destination)
 
     @staticmethod
     def _write_json(path: Path, content: str) -> None:

@@ -40,19 +40,15 @@ def test_devsim_backend_defaults_to_active_python_without_machine_local_paths(
     assert binding.runner.devsim_python == Path(sys.executable).absolute()
 
 
-def test_sentaurus_binding_is_installed_but_execution_is_unconfigured(
+def test_sentaurus_backend_uses_ssh_runner_when_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in (
-        "TCAD_SENTAURUS_ENDPOINT",
-        "TCAD_SENTAURUS_SIGNING_PRIVATE_KEY",
-        "TCAD_SENTAURUS_TRUSTED_PUBLIC_KEY",
-        "TCAD_SENTAURUS_VERSION",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TCAD_SENTAURUS_RUNNER", "ssh")
+
     binding = get_backend("sentaurus")
+
     assert binding.adapter.manifest.backend == "sentaurus"
-    assert not binding.runner.config.configured
+    assert type(binding.runner).__name__ == "SSHSentaurusRunner"
 
 
 def test_unknown_backend_refuses_explicitly() -> None:
