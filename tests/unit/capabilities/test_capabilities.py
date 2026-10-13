@@ -113,12 +113,8 @@ def test_ohmic_contact_on_dielectric_is_refused_before_compilation(
 def test_gate_contact_on_semiconductor_is_refused_before_compilation(
     valid_spec: ExperimentSpec, devsim_manifest: CapabilityManifest
 ) -> None:
-    contact = Contact.model_validate(
-        {"id": "anode", "location": "x_min", "kind": "ideal_gate"}
-    )
-    requested = valid_spec.model_copy(
-        update={"contacts": (contact, *valid_spec.contacts[1:])}
-    )
+    contact = Contact.model_validate({"id": "anode", "location": "x_min", "kind": "ideal_gate"})
+    requested = valid_spec.model_copy(update={"contacts": (contact, *valid_spec.contacts[1:])})
 
     decision = CapabilityService().check(requested, devsim_manifest)
 
@@ -200,7 +196,7 @@ def test_schottky_contact_requires_coupled_carrier_transport(
     assert set(issue.supported) == {"electron_continuity", "hole_continuity"}
 
 
-def test_schottky_contact_refuses_unbenchmarked_fermi_injection(
+def test_schottky_contact_supports_statistics_consistent_fermi_injection(
     valid_spec: ExperimentSpec, devsim_manifest: CapabilityManifest
 ) -> None:
     contact = Contact.model_validate(
@@ -212,8 +208,7 @@ def test_schottky_contact_refuses_unbenchmarked_fermi_injection(
         }
     )
     models = tuple(
-        "fermi" if model == "boltzmann" else model
-        for model in valid_spec.physics.models
+        "fermi" if model == "boltzmann" else model for model in valid_spec.physics.models
     )
     requested = valid_spec.model_copy(
         update={
@@ -224,5 +219,43 @@ def test_schottky_contact_refuses_unbenchmarked_fermi_injection(
 
     decision = CapabilityService().check(requested, devsim_manifest)
 
-    issue = next(item for item in decision.issues if item.code == "incompatible_contact_model")
-    assert issue.supported == ("boltzmann",)
+    assert decision.status is CapabilityStatus.SUPPORTED
+    assert not decision.issues
+
+
+def test_fermi_schottky_dynamic_combo_requires_its_own_reference_benchmark(
+    valid_spec, devsim_manifest
+):
+    from tcad_agent.domain.studies import ACStudy
+
+    requested = valid_spec.model_copy(
+        update={
+            "contacts": (
+                Contact.model_validate(
+                    {
+                        "id": "anode",
+                        "location": "x_min",
+                        "kind": "metal_work_function",
+                        "work_function": "4.1 eV",
+                    }
+                ),
+                valid_spec.contacts[1],
+            ),
+            "physics": valid_spec.physics.model_copy(
+                update={
+                    "models": tuple(
+                        "fermi" if str(m) == "boltzmann" else m for m in valid_spec.physics.models
+                    )
+                }
+            ),
+            "study": ACStudy.model_validate(
+                {"kind": "ac", "contact": "anode", "frequency": "1e3 Hz", "amplitude": "0.01 V"}
+            ),
+        }
+    )
+    decision = CapabilityService().check(requested, devsim_manifest)
+    assert any(issue.code == "unbenchmarked_contact_statistics_study" for issue in decision.issues)
+    # A DEVSIM implementation gate is not a universal physics restriction.
+    other_manifest = devsim_manifest.model_copy(update={"backend": "sentaurus"})
+    other = CapabilityService().check(requested, other_manifest)
+    assert not any(issue.code == "unbenchmarked_contact_statistics_study" for issue in other.issues)

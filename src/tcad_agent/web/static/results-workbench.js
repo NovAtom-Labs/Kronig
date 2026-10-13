@@ -582,12 +582,11 @@
     let useLog = scaleMode === "log";
     const useSignedLog = scaleMode === "signed_log";
     if (useLog && points.some((point) => point.valid && point.value <= 0)) useLog = false;
+    const effectiveScale = useLog ? "log" : useSignedLog ? "signed_log" : "linear";
+    const chart = globalThis.AgentKronigScientificChart;
     const plotted = points.map((point) => ({
       ...point,
-      plotted: useLog ? Math.log10(point.value)
-        : useSignedLog
-          ? Math.sign(point.value) * Math.log10(1 + Math.abs(point.value))
-          : point.value,
+      plotted: chart.valueForScale(point.value, effectiveScale),
     }));
     const overlayPoints = overlays.flatMap((overlay) => overlay.positions.map((position, index) => {
       const value = overlay.values[index];
@@ -595,10 +594,7 @@
         position,
         value,
         valid: overlay.validity ? Boolean(overlay.validity[index]) : true,
-        plotted: useLog ? Math.log10(value)
-          : useSignedLog
-            ? Math.sign(value) * Math.log10(1 + Math.abs(value))
-            : value,
+        plotted: chart.valueForScale(value, effectiveScale),
       };
     }));
     const validPlotted = plotted.filter((point) => point.valid);
@@ -644,7 +640,7 @@
         svgNode("line", {x1: xCoordinate, y1: dimensions.top, x2: xCoordinate, y2: dimensions.top + dimensions.height, class: "result-chart-grid"}),
         svgNode("line", {x1: dimensions.left, y1: yCoordinate, x2: dimensions.left + dimensions.width, y2: yCoordinate, class: "result-chart-grid"}),
         svgNode("text", {x: xCoordinate, y: dimensions.top + dimensions.height + 25, class: "result-chart-tick", "text-anchor": "middle"}, axisValueLabel(xMinimum + (xMaximum - xMinimum) * fraction, field.axis)),
-        svgNode("text", {x: dimensions.left - 12, y: yCoordinate + 4, class: "result-chart-tick", "text-anchor": "end"}, formatNumber(yMinimum + (yMaximum - yMinimum) * fraction)),
+        svgNode("text", {x: dimensions.left - 12, y: yCoordinate + 4, class: "result-chart-tick", "text-anchor": "end"}, formatNumber(chart.tickValueForScale(yMinimum + (yMaximum - yMinimum) * fraction, effectiveScale))),
       );
     }
     const segments = globalThis.AgentKronigScientificChart?.segmentSeries(

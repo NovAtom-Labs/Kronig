@@ -8,6 +8,8 @@ The surface recombination rate is evaluated as a sheet rate:
 
 with `n_1 = n_i exp(E_t/V_t)` and `p_1 = n_i exp(-E_t/V_t)`. The researcher supplies both positive capture velocities. The sheet rate is coupled into both carrier equations through the exact boundary control volume.
 
+For BGN, use the local effective intrinsic density. For Fermi statistics, replace the classical mass-action driving term with the statistics-consistent quasi-Fermi affinity, and multiply electron/hole emission densities by the corresponding degeneracy factors `exp(log(carrier/DOS)-InvFermi(carrier/DOS))`. This restores equilibrium detailed balance and gives the emission densities used by the charged-trap occupancy below. Provenance for the changed Fermi branch is `novatom.surface-fermi-detailed-balance.2026-10-13.v1`; it is distinct from the older Boltzmann branch. This does not add trap distributions, tunneling or frequency dispersion.
+
 For a configured single-level trap, steady occupancy is:
 
 `f_t = (S_n n + S_p p_1) / (S_n(n+n_1) + S_p(p+p_1))`

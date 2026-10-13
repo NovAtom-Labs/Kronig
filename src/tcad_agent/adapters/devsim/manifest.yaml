@@ -1,6 +1,6 @@
 schema_version: "1.0"
 backend: devsim
-adapter_version: "0.2.0"
+adapter_version: "0.2.2"
 execution_state: configured
 dimensions: [1]
 equations: [poisson, electron_continuity, hole_continuity]

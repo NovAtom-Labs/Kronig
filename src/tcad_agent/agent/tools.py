@@ -345,7 +345,10 @@ class DomainTools:
             if digest_value is None:
                 raise KeyError("approved_plan_digest")
             approved_plan_digest = str(digest_value)
-            timeout_value = request.get("timeout_seconds", 120)
+            # A bounded five-minute default accommodates nonlinear native
+            # studies. Explicit caller budgets still win and are recorded by
+            # the engine ledger; timeout never substitutes scientific output.
+            timeout_value = request.get("timeout_seconds", 300)
             if not isinstance(timeout_value, (str, int, float)):
                 raise TypeError("timeout_seconds must be numeric")
             budget = RunBudget(seconds=float(timeout_value))

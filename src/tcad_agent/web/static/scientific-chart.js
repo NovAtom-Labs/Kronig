@@ -39,9 +39,21 @@
     return {
       accepted: true,
       values: numbers.map((value) => (
-        value === 0 ? 0 : Math.sign(value) * Math.log10(1 + Math.abs(value))
+        valueForScale(value, "signed_log")
       )),
     };
+  }
+
+  function valueForScale(value, scale) {
+    if (scale === "log") return Math.log10(value);
+    if (scale === "signed_log") return Math.sign(value) * Math.log1p(Math.abs(value)) / Math.LN10;
+    return value;
+  }
+
+  function tickValueForScale(value, scale) {
+    if (scale === "log") return 10 ** value;
+    if (scale === "signed_log") return Math.sign(value) * Math.expm1(Math.abs(value) * Math.LN10);
+    return value;
   }
 
   function complexResponse(realValues, imaginaryValues) {
@@ -128,6 +140,8 @@
     panViewport,
     segmentSeries,
     signedLogTransform,
+    valueForScale,
+    tickValueForScale,
     toCsv,
     viewportForAction,
     zoomViewport,

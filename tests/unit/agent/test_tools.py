@@ -391,6 +391,33 @@ def test_execute_experiment_keeps_runtime_bundle_outside_workspace(
     assert response.data["bundle"]["validation_state"] == "passed"
 
 
+def test_native_agent_execution_has_bounded_default_budget_and_honors_explicit_budget(
+    tmp_path, monkeypatch
+):
+    from tcad_agent.experiments.errors import ExperimentExecutionError
+
+    class RecordingEngine:
+        def prepare(self, spec, backend, *, warnings=()):
+            return ExperimentEngine().prepare(spec, backend, warnings=warnings)
+
+        def execute(self, prepared, *, approved_plan_digest, output_root, budget, run_id=None):
+            self.seconds = budget.seconds
+            raise ExperimentExecutionError("recorded execution budget")
+
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "app-data"))
+    engine = RecordingEngine()
+    tools = DomainTools(tmp_path, experiment_engine=engine)
+    prepared = tools.prepare_experiment(valid_spec_payload(), backend="devsim").data["prepared"]
+    request = {"prepared": prepared, "plan_digest": prepared["plan_digest"]}
+    assert tools.execute_experiment(request).code == "experiment_execution_failed"
+    assert engine.seconds == 300
+    assert (
+        tools.execute_experiment({**request, "timeout_seconds": 30}).code
+        == "experiment_execution_failed"
+    )
+    assert engine.seconds == 30
+
+
 def test_execute_approved_plan_loads_exact_repository_artifact_by_digest(
     tmp_path: Path, monkeypatch
 ) -> None:

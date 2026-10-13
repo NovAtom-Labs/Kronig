@@ -224,8 +224,8 @@ def test_advanced_capability_catalog_exposes_cross_capability_constraints() -> N
     catalog = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend("devsim"))
     by_id = {item.id: item for item in catalog.descriptors}
 
-    assert "contact.metal_work_function" in by_id["model.fermi"].conflicts
-    assert "model.fermi" in by_id["contact.metal_work_function"].conflicts
+    assert "contact.metal_work_function" not in by_id["model.fermi"].conflicts
+    assert "model.fermi" not in by_id["contact.metal_work_function"].conflicts
 
     temperature = by_id["profile.prescribed_temperature"]
     assert temperature.supported_materials == ("silicon",)

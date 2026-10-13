@@ -350,13 +350,11 @@ def _legacy_conflicts(backend: str, category: CapabilityCategory, value: str) ->
         return ()
     conflicts: dict[tuple[CapabilityCategory, str], tuple[str, ...]] = {
         ("model", "fermi"): (
-            "contact.metal_work_function",
             "profile.prescribed_temperature",
         ),
         ("model", "klaassen_mobility"): ("profile.prescribed_temperature",),
         ("model", "high_field_saturation"): ("profile.prescribed_temperature",),
         ("contact", "metal_work_function"): (
-            "model.fermi",
             "profile.prescribed_temperature",
         ),
         ("study", "ac"): ("profile.prescribed_temperature",),

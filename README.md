@@ -128,7 +128,7 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Material | Silicon, silicon dioxide, and generic dielectric with explicit permittivity | Silicon |
 | Regions | Up to 32 ordered regions | Up to 32 ordered regions |
 | Contacts | Semiconductor ohmic, dielectric ideal-gate or work-function boundaries, reviewed silicon Schottky thermionic boundaries, insulating boundaries, offsets, optional area, and optional Richardson constants | Endpoint ohmic or explicit metal-work-function contacts |
-| Statistics | Boltzmann and reviewed Fermi transport with statistics-consistent ohmic initialization | Boltzmann or Fermi |
+| Statistics | Boltzmann and reviewed Fermi transport with statistics-consistent ohmic initialization and metal thermionic reservoirs in equilibrium/DC | Boltzmann or Fermi |
 | Mobility | Constant, Klaassen, and reviewed one-dimensional high-field saturation | Constant and reviewed Sentaurus mappings |
 | Recombination | Bulk SRH, Auger, surface SRH, and single-level charged interface traps | SRH and Auger |
 | Band-gap narrowing | Reviewed Slotboom implementation | Supported by the adapter contract |
@@ -190,8 +190,9 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 - No arbitrary model-written simulator syntax.
 - No process simulation, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or arbitrary circuit co-simulation.
 - No automated calibration against fabrication measurements.
-- Fermi transport is limited to its reviewed one-dimensional silicon, ohmic-contact benchmark envelope. The current verified upper benchmark is `5e19 cm^-3`; Fermi Schottky injection and Fermi drift/diffusion decomposition remain refused.
-- Silicon Schottky contacts use the reviewed Boltzmann thermionic-emission boundary. Image-force lowering, tunneling, distributed interface states at the contact, and Fermi-statistics injection are not silently added.
+- Fermi transport includes reviewed one-dimensional silicon ohmic and Schottky equilibrium/DC benchmarks. The ohmic high-doping reference remains `5e19 cm^-3`; this is a benchmark, not a blanket convergence guarantee. Fermi drift/diffusion decomposition and combined Fermi/Schottky AC, frequency and transient response remain refused.
+- Silicon Schottky contacts use statistics-consistent Boltzmann or Fermi thermionic reservoirs with the actual local band gap, DOS and BGN reference. Benchmarks include both-metal equilibrium, current conservation, contact passivity, temperature variation and the original Al/p-Si/n-Si/Al study at `0,+2,-2 V`. Image-force lowering, tunneling and distributed contact states are not silently added.
+- Agent-driven simulator execution has a bounded five-minute default budget. An explicit caller timeout takes precedence and is recorded in execution provenance. A timeout or failed solve stays visible; it is not an accepted result.
 - Surface physics supports surface SRH and one charged single-level donor or acceptor trap. Trap distributions, tunneling, frequency dispersion, and Philips-style surface mobility remain outside the reviewed one-dimensional boundary.
 - Prescribed spatial temperature supports positive constant, linear, piecewise-constant, or tabulated silicon profiles with reviewed local material and transport terms under equilibrium or DC. It is not a heat-flow or self-heating solve, and unbenchmarked model and study combinations are refused.
 - Drift and diffusion current components are explicit continuum diagnostics for Boltzmann transport. The native Scharfetter-Gummel total and their reconciliation residual remain visible; the diagnostic is not presented as native solver state.

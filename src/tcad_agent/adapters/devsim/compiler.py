@@ -51,7 +51,7 @@ from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
 
 class DevsimAdapter:
-    compiler_version = "0.2.1"
+    compiler_version = "0.2.2"
 
     def __init__(self, manifest: CapabilityManifest) -> None:
         self._manifest = manifest
@@ -244,6 +244,14 @@ class DevsimAdapter:
             {key: value for key, value in overrides.items() if value is not None}
         )
         parameter_sources = dict(SILICON_PARAMETER_SOURCES)
+        if "fermi" in spec.physics.models or "slotboom_bgn" in spec.physics.models:
+            parameter_sources["generation_recombination"] = {
+                "source": (
+                    "Effective-gap mass action with Fermi degeneracy-corrected detailed "
+                    "balance, midgap SRH emission, and empirical Auger coefficients"
+                ),
+                "version": "novatom.recombination-detailed-balance.2026-10-13.v1",
+            }
         if "fermi" in spec.physics.models:
             parameter_sources["carrier_statistics"] = {
                 "source": (
@@ -262,8 +270,16 @@ class DevsimAdapter:
                     "Agent Kronig reviewed thermionic-emission boundary with "
                     "metal-work-function barrier"
                 ),
-                "version": "novatom.schottky-thermionic.2026-09-29.v1",
+                "version": "novatom.schottky-thermionic.2026-10-13.v2",
             }
+            if "fermi" in spec.physics.models:
+                parameter_sources["schottky_transport"] = {
+                    "source": (
+                        "Fermi-Dirac parabolic-band thermionic supply with native F1 "
+                        "series, local band/DOS reservoirs, and analytical F0 Jacobian"
+                    ),
+                    "version": "novatom.schottky-fermi-supply.2026-10-13.v1",
+                }
         if any(
             interface.surface_electron_velocity is not None or interface.trap_density is not None
             for interface in spec.interfaces
@@ -274,6 +290,14 @@ class DevsimAdapter:
                 ),
                 "version": "novatom.surface-physics.2026-09-29.v1",
             }
+            if "fermi" in spec.physics.models:
+                parameter_sources["surface_physics"] = {
+                    "source": (
+                        "Surface SRH and single-level traps with Fermi degeneracy-corrected "
+                        "emission densities and detailed-balance recombination affinity"
+                    ),
+                    "version": "novatom.surface-fermi-detailed-balance.2026-10-13.v1",
+                }
         if spec.physics.temperature_profiles:
             parameter_sources["prescribed_spatial_temperature"] = {
                 "source": (

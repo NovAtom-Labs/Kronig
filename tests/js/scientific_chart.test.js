@@ -22,6 +22,17 @@ assertEqual(signed.accepted, true, "signed-log accepts bipolar and zero-valued d
 assertEqual(Math.round(signed.values[0]), -2, "signed-log preserves negative sign");
 assertEqual(signed.values[2], 0, "signed-log preserves zero");
 assertEqual(Math.round(signed.values[4]), 2, "signed-log preserves positive sign");
+const tinySigned = chart.signedLogTransform([-1e-23, 0, 1e-23]);
+assertEqual(tinySigned.values[0] < 0, true, "signed-log must not erase tiny negative currents");
+assertEqual(tinySigned.values[2] > 0, true, "signed-log must not erase tiny positive currents");
+for (const scale of ["linear", "log", "signed_log"]) {
+  const values = scale === "log" ? [1e-23, 1, 1e23] : [-1e23, -1e-23, 0, 1e-23, 1e23];
+  for (const value of values) {
+    const restored = chart.tickValueForScale(chart.valueForScale(value, scale), scale);
+    const relative = Math.abs(restored - value) / Math.max(Math.abs(value), Number.MIN_VALUE);
+    assertEqual(relative < 1e-12, true, "plot tick labels must show original scientific units");
+  }
+}
 
 const complex = chart.complexResponse([3, 0], [4, 1]);
 assertEqual(complex.magnitude[0], 5, "complex magnitude is derived generically");

@@ -23,7 +23,7 @@ This gate is closed for explicit surface SRH and a single-level acceptor or dono
 
 ## Direct metal-semiconductor Schottky transport
 
-This gate is closed for the reviewed one-dimensional Boltzmann thermionic-emission envelope. Equations, parameter defaults, explicit exclusions, provenance, and benchmark coverage are recorded in `devsim-schottky-transport.md`. Fermi-statistics Schottky injection remains refused rather than approximated.
+This gate is resolved for the reviewed one-dimensional Boltzmann boundary and Fermi thermionic equilibrium/DC envelope. Equations, parameter defaults, explicit exclusions, provenance, and benchmark coverage are recorded in `devsim-schottky-transport.md`. The combined Fermi/Schottky AC, frequency and transient gate remains closed pending reference benchmarks; it is not silently approximated.
 
 ## Spatial temperature profiles
 

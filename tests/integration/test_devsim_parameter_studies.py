@@ -91,6 +91,7 @@ def test_registered_physics_parameter_study_is_generic_and_axis_aware(
         }
     ]
     payload["physics"]["models"].append("slotboom_bgn")
+    payload["observables"].extend(["band_gap_narrowing", "valence_band"])
     payload["study"] = {
         "kind": "parameter",
         "parameter_path": "physics.parameters.bgn_reference_energy",
@@ -111,4 +112,13 @@ def test_registered_physics_parameter_study_is_generic_and_axis_aware(
     assert bands.axes[0] == "parameter"
     node_count = bands.shape[1]
     samples = tuple(bands.values[index * node_count] for index in range(3))
-    assert len(set(samples)) == 3
+    # At a charge-neutral ohmic n-type endpoint, EF=0 and fixed majority n
+    # pin Ec=-Vt*log(n/Nc). Changing BGN shifts Ev/gap and the potential
+    # reference, not that pinned Ec. Test the actual varied physics.
+    assert samples == pytest.approx((samples[0],) * 3, abs=1e-8)
+    narrowing = result.datasets["band_gap_narrowing"]
+    shifts = tuple(narrowing.values[index * node_count] for index in range(3))
+    assert shifts[0] < shifts[1] < shifts[2]
+    valence = result.datasets["valence_band"]
+    edges = tuple(valence.values[index * node_count] for index in range(3))
+    assert edges[0] < edges[1] < edges[2]

@@ -21,6 +21,18 @@ class TransientRecoveryExhausted(RuntimeError):
     """Raised when a transient step cannot be reduced within reviewed bounds."""
 
 
+def _initial_dc_bias(
+    current: float, target: float, temperature: float, study: dict[str, Any]
+) -> float:
+    """Avoid a doomed full Newton jump when adaptive continuation is requested."""
+    if study.get("strategy") != "adaptive":
+        return target
+    step = max(4 * 8.617333262145e-5 * temperature, study.get("minimum_step_v", 0.0))
+    if abs(target - current) <= step:
+        return target
+    return current + math.copysign(step, target - current)
+
+
 def configure_numerical_precision(backend: Any, solver: dict[str, Any]) -> dict[str, Any]:
     """Select arithmetic before creating models; unsupported requests fail closed."""
     resolved = solver["precision"]
@@ -194,6 +206,50 @@ def _fermi_contact_state(
     )
     potential = energy_offset + thermal_voltage_v * eta_n
     return electrons, holes, potential
+
+
+def _fermi_one_models(prefix: str, eta_expression: str) -> dict[str, str]:
+    """Native order-one supply and smooth derivative; no Python callbacks.
+
+    DLMF25.12 dilogarithm identities transform to z<=1/2. The96-term
+    positive series tail is bounded by2^-96/97^2 (<1.4e-33). Keep its
+    rational coefficients in the native expression evaluator. The analytic
+    F0 derivative avoids a spurious kink from abs(eta) at eta=0.
+    """
+    eta = f"{prefix}_eta"
+    x = f"{prefix}_x"
+    z = f"{prefix}_z"
+    logarithm = f"{prefix}_log"
+    negative = f"{prefix}_negative"
+    models = {
+        eta: eta_expression,
+        x: f"exp(-abs({eta}))",
+        z: f"{x}/(1+{x})",
+    }
+    # Bound expression nesting to the native parser's stack rather than
+    # reducing the series accuracy. Each model continues the same Horner sum.
+    for label, power, count in (("log", 1, 112), ("li2", 2, 96)):
+        previous = "0"
+        for block, upper in enumerate(range(count, 0, -8)):
+            poly = previous
+            for index in range(upper, upper - 8, -1):
+                poly = f"1/{index**power}+{z}*({poly})"
+            previous = f"{prefix}_{label}_poly_{block}"
+            models[previous] = poly
+        # -log(1-z)=log(1+x), but the series also resolves exp(-500)
+        # without rounding1+x to1, even in extended native arithmetic.
+        models[f"{prefix}_{label}"] = f"{z}*{previous}"
+    models.update(
+        {
+            negative: f"{prefix}_li2+0.5*{logarithm}^2",
+            f"{prefix}_supply": (
+                f"ifelse({eta}>0,0.5*{eta}^2+"
+                f"1.6449340668482264364724151666460252-{negative},{negative})"
+            ),
+            f"{prefix}_derivative": f"ifelse({eta}>0,{eta}+{logarithm},{logarithm})",
+        }
+    )
+    return models
 
 
 NATIVE_MODEL_NAMES = {
@@ -575,6 +631,7 @@ def main() -> int:
         CreateContinuousInterfaceModel,
         CreateEdgeModel,
         CreateEdgeModelDerivatives,
+        CreateInterfaceModel,
         CreateNodeModel,
         CreateNodeModelDerivative,
         CreateSolution,
@@ -1095,6 +1152,20 @@ def main() -> int:
                     backend_contact,
                     is_circuit=circuit_driven,
                 )
+                if "slotboom_bgn" in selected_models:
+                    majority_n = (
+                        "0.5*(NetDoping+pow(NetDoping^2+4*EffectiveIntrinsicDensity^2,0.5))"
+                    )
+                    majority_p = (
+                        "0.5*(-NetDoping+pow(NetDoping^2+4*EffectiveIntrinsicDensity^2,0.5))"
+                    )
+                    model_name = GetContactNodeModelName(backend_contact)
+                    model = (
+                        f"Potential-{GetContactBiasName(backend_contact)}+"
+                        f"ifelse(NetDoping>0,-V_t*log(({majority_n})/EffectiveIntrinsicDensity),"
+                        f"V_t*log(({majority_p})/EffectiveIntrinsicDensity))"
+                    )
+                    CreateContactNodeModel(device, backend_contact, model_name, model)
         elif region["material"] == "silicon" and contact["kind"] == "metal_work_function":
             region_name = region["id"]
             if not InEdgeModelList(device, region_name, "contactcharge_edge"):
@@ -1125,6 +1196,36 @@ def main() -> int:
             offset = intrinsic_work_function - contact["work_function_ev"]
             model_name = GetContactNodeModelName(backend_contact)
             model = f"Potential-{GetContactBiasName(backend_contact)}-{offset:.17g}"
+            if contact["kind"] == "metal_work_function":
+                # Pin Ec-EFm to Phi_m-chi using the same local effective gap
+                # and DOS as the carrier population model, including BGN/T.
+                model = (
+                    f"Potential-{GetContactBiasName(backend_contact)}-(ElectronAffinity+"
+                    "0.5*EffectiveBandGap+0.5*V_t*log(EffectiveDensityConduction/"
+                    f"EffectiveDensityValence)-{contact['work_function_ev']:.17g})"
+                )
+                endpoint = 0 if contact["location"] == "x_min" else -1
+                effective_gap = get_node_model_values(
+                    device=device, region=region_name, name="EffectiveBandGap"
+                )[endpoint]
+                offset = (
+                    float(payload["physics"]["electron_affinity_ev"])
+                    + 0.5 * effective_gap
+                    + 0.5
+                    * thermal_voltage
+                    * math.log(
+                        get_parameter(
+                            device=device, region=region_name, name="EffectiveDensityConduction"
+                        )
+                        / get_parameter(
+                            device=device, region=region_name, name="EffectiveDensityValence"
+                        )
+                    )
+                    - contact["work_function_ev"]
+                )
+                contact_equilibrium_potentials[contact["location"]] = (
+                    offset + contact_offsets[contact["id"]]
+                )
             CreateContactNodeModel(device, backend_contact, model_name, model)
             CreateContactNodeModel(device, backend_contact, f"{model_name}:Potential", "1")
             if circuit_driven:
@@ -1466,6 +1567,42 @@ def main() -> int:
                 electron_mobility_model,
                 hole_mobility_model,
             )
+            # Use the same statistics and effective gap in transport and
+            # recombination. Classical n*p-ni^2 violates detailed balance
+            # for degenerate populations, including unbiased metal contacts.
+            if fermi_statistics:
+                recombination_models = {
+                    "CarrierAffinity": (
+                        "InvFermi(Electrons/EffectiveDensityConduction)+"
+                        "InvFermi(Holes/EffectiveDensityValence)+EffectiveBandGap/V_t"
+                    ),
+                    "ElectronDegeneracy": (
+                        "exp(log(Electrons/EffectiveDensityConduction)-"
+                        "InvFermi(Electrons/EffectiveDensityConduction))"
+                    ),
+                    "HoleDegeneracy": (
+                        "exp(log(Holes/EffectiveDensityValence)-"
+                        "InvFermi(Holes/EffectiveDensityValence))"
+                    ),
+                    "RecombinationDriving": ("Electrons*Holes*CarrierAffinity/B(-CarrierAffinity)"),
+                }
+            else:
+                recombination_models = {
+                    "ElectronDegeneracy": "1",
+                    "HoleDegeneracy": "1",
+                    "RecombinationDriving": "Electrons*Holes-EffectiveIntrinsicDensity^2",
+                }
+            for model_id, expression in recombination_models.items():
+                CreateNodeModel(device, name, model_id, expression)
+                CreateNodeModelDerivative(device, name, model_id, expression, "Electrons", "Holes")
+            srh = (
+                "RecombinationDriving/(taup*(Electrons+ElectronDegeneracy*"
+                "EffectiveIntrinsicDensity)+taun*(Holes+HoleDegeneracy*EffectiveIntrinsicDensity))"
+                if "srh" in selected_models
+                else "0"
+            )
+            CreateNodeModel(device, name, "USRH", srh)
+            CreateNodeModelDerivative(device, name, "USRH", srh, "Electrons", "Holes")
             if name in temperature_profiles:
                 local_vdiff = "(Potential@n0-Potential@n1)/LocalThermalVoltage"
                 CreateEdgeModel(device, name, "vdiff", local_vdiff)
@@ -1529,14 +1666,18 @@ def main() -> int:
                 trap_energy = float(record.get("trap_energy_ev") or 0.0)
                 electron_capture = float(record.get("surface_electron_velocity_cm_s") or 1.0)
                 hole_capture = float(record.get("surface_hole_velocity_cm_s") or 1.0)
-                electron_trap_density = f"EffectiveIntrinsicDensity*exp({trap_energy:.17e}/V_t)"
-                hole_trap_density = f"EffectiveIntrinsicDensity*exp(-{trap_energy:.17e}/V_t)"
+                electron_trap_density = (
+                    f"ElectronDegeneracy*EffectiveIntrinsicDensity*exp({trap_energy:.17e}/V_t)"
+                )
+                hole_trap_density = (
+                    f"HoleDegeneracy*EffectiveIntrinsicDensity*exp(-{trap_energy:.17e}/V_t)"
+                )
                 denominator = (
                     f"(Electrons+({electron_trap_density}))/{hole_capture:.17e}+"
                     f"(Holes+({hole_trap_density}))/{electron_capture:.17e}"
                 )
                 sheet_name = f"SurfaceRecombinationSheet_{interface_name}"
-                sheet_expression = f"(Electrons*Holes-EffectiveIntrinsicDensity^2)/({denominator})"
+                sheet_expression = f"RecombinationDriving/({denominator})"
                 CreateNodeModel(device, name, sheet_name, sheet_expression)
                 CreateNodeModelDerivative(
                     device,
@@ -1632,10 +1773,7 @@ def main() -> int:
                 )
             auger_expression = "0"
             if "auger" in selected_models:
-                auger_expression = (
-                    "(AugerElectron*Electrons+AugerHole*Holes)*"
-                    "(Electrons*Holes-EffectiveIntrinsicDensity^2)"
-                )
+                auger_expression = "(AugerElectron*Electrons+AugerHole*Holes)*RecombinationDriving"
             CreateNodeModel(device, name, "UAuger", auger_expression)
             CreateNodeModelDerivative(
                 device, name, "UAuger", auger_expression, "Electrons", "Holes"
@@ -1681,8 +1819,15 @@ def main() -> int:
                 "0.5*V_t*log(EffectiveDensityConduction/EffectiveDensityValence)"
             )
             CreateNodeModel(device, name, "IntrinsicEnergy", intrinsic_energy)
+            CreateNodeModelDerivative(
+                device, name, "IntrinsicEnergy", intrinsic_energy, "Potential"
+            )
             CreateNodeModel(device, name, "ConductionBandEnergy", conduction_band)
+            CreateNodeModelDerivative(
+                device, name, "ConductionBandEnergy", conduction_band, "Potential"
+            )
             CreateNodeModel(device, name, "ValenceBandEnergy", valence_band)
+            CreateNodeModelDerivative(device, name, "ValenceBandEnergy", valence_band, "Potential")
             electron_quasi_fermi = (
                 "ConductionBandEnergy+V_t*InvFermi(Electrons/EffectiveDensityConduction)"
                 if fermi_statistics
@@ -1706,6 +1851,7 @@ def main() -> int:
                 electron_quasi_fermi,
                 "Potential",
                 "Electrons",
+                "Holes",
             )
             CreateNodeModel(
                 device,
@@ -1720,6 +1866,7 @@ def main() -> int:
                 hole_quasi_fermi,
                 "Potential",
                 "Holes",
+                "Electrons",
             )
             CreateNodeModel(
                 device,
@@ -1851,54 +1998,133 @@ def main() -> int:
                         _backend_contact_id(contact),
                         is_circuit=(is_circuit_study and contact["id"] == study["contact"]),
                     )
+                    if "slotboom_bgn" in selected_models:
+                        backend_contact = _backend_contact_id(contact)
+                        majority_n = (
+                            "0.5*(NetDoping+pow(NetDoping^2+4*EffectiveIntrinsicDensity^2,0.5))"
+                        )
+                        majority_p = (
+                            "0.5*(-NetDoping+pow(NetDoping^2+4*EffectiveIntrinsicDensity^2,0.5))"
+                        )
+                        for variable, suffix, target in (
+                            (
+                                "Electrons",
+                                "nodeelectrons",
+                                f"ifelse(NetDoping>0,{majority_n},"
+                                f"EffectiveIntrinsicDensity^2/({majority_p}))",
+                            ),
+                            (
+                                "Holes",
+                                "nodeholes",
+                                f"ifelse(NetDoping<0,{majority_p},"
+                                f"EffectiveIntrinsicDensity^2/({majority_n}))",
+                            ),
+                        ):
+                            CreateContactNodeModel(
+                                device,
+                                backend_contact,
+                                f"{backend_contact}{suffix}",
+                                f"{variable}-({target})",
+                            )
             elif region["material"] == "silicon" and contact["kind"] == "metal_work_function":
                 backend_contact = _backend_contact_id(contact)
                 region_name = region["id"]
-                electron_affinity = float(payload["physics"]["electron_affinity_ev"])
-                band_gap = float(payload["physics"]["band_gap_ev"])
-                work_function = float(contact["work_function_ev"])
-                conduction_density = float(payload["physics"]["effective_density_conduction_cm3"])
-                valence_density = float(payload["physics"]["effective_density_valence_cm3"])
-                electron_target = conduction_density * math.exp(
-                    -(work_function - electron_affinity) / (8.617333262145e-5 * temperature)
-                )
-                hole_target = valence_density * math.exp(
-                    -(electron_affinity + band_gap - work_function)
-                    / (8.617333262145e-5 * temperature)
+                edge_from_node_model(
+                    device=device, region=region_name, node_model="BandGapNarrowing"
                 )
                 electron_richardson = float(contact.get("electron_richardson_a_cm2_k2") or 112.0)
                 hole_richardson = float(contact.get("hole_richardson_a_cm2_k2") or 32.0)
-                elementary_charge = 1.602176634e-19
-                electron_velocity = (
-                    electron_richardson * temperature**2 / (elementary_charge * conduction_density)
-                )
-                hole_velocity = (
-                    hole_richardson * temperature**2 / (elementary_charge * valence_density)
-                )
                 contact_endpoint = "n0" if contact["location"] == "x_min" else "n1"
-                for variable, equation_name, target, velocity, current_model in (
+                for variable, equation_name, current_model in (
                     (
                         "Electrons",
                         "ElectronContinuityEquation",
-                        electron_target,
-                        electron_velocity,
                         "ElectronCurrent",
                     ),
                     (
                         "Holes",
                         "HoleContinuityEquation",
-                        hole_target,
-                        hole_velocity,
                         "HoleCurrent",
                     ),
                 ):
                     flux_name = f"{backend_contact}_{variable.lower()}_thermionic"
-                    flux = (
-                        f"ElectronCharge*{velocity:.17e}*"
-                        f"({variable}@{contact_endpoint}-{target:.17e})"
+                    # Contact edge terms are added to the region balance with
+                    # +n0/-n1 signs. Outward conventional emission is negative
+                    # for electrons and positive for holes at either endpoint.
+                    normal_sign = (-1 if contact["location"] == "x_min" else 1) * (
+                        1 if variable == "Electrons" else -1
                     )
-                    CreateEdgeModel(device, region_name, flux_name, flux)
-                    CreateEdgeModelDerivatives(device, region_name, flux_name, flux, variable)
+                    density = (
+                        "EffectiveDensityConduction"
+                        if variable == "Electrons"
+                        else "EffectiveDensityValence"
+                    )
+                    bias_name = GetContactBiasName(backend_contact)
+                    gap = f"(BandGap-BandGapNarrowing@{contact_endpoint})"
+                    dos_offset = "0.5*V_t*log(EffectiveDensityConduction/EffectiveDensityValence)"
+                    eta_metal = (
+                        f"(Potential@{contact_endpoint}-{bias_name}-0.5*{gap}-{dos_offset})/V_t"
+                        if variable == "Electrons"
+                        else (
+                            f"(-Potential@{contact_endpoint}+{bias_name}-0.5*{gap}+"
+                            f"{dos_offset})/V_t"
+                        )
+                    )
+                    richardson = electron_richardson if variable == "Electrons" else hole_richardson
+                    coefficient = f"{normal_sign}*{richardson:.17g}*{temperature:.17g}^2"
+                    flux = (
+                        f"{coefficient}*({variable}@{contact_endpoint}/{density}-exp({eta_metal}))"
+                    )
+                    if fermi_statistics:
+                        surface = f"{flux_name}_surface"
+                        metal = f"{flux_name}_metal"
+                        for prefix, eta in (
+                            (surface, f"InvFermi({variable}@{contact_endpoint}/{density})"),
+                            (metal, eta_metal),
+                        ):
+                            for model_id, expression in _fermi_one_models(prefix, eta).items():
+                                CreateEdgeModel(device, region_name, model_id, expression)
+                            for differentiated in ("Potential", "Electrons", "Holes"):
+                                CreateEdgeModelDerivatives(
+                                    device, region_name, f"{prefix}_eta", eta, differentiated
+                                )
+                        flux = f"{coefficient}*({surface}_supply-{metal}_supply)"
+                        CreateEdgeModel(device, region_name, flux_name, flux)
+                        for differentiated in ("Potential", "Electrons", "Holes"):
+                            for endpoint_name in ("n0", "n1"):
+                                derivative = (
+                                    f"{coefficient}*({surface}_derivative*"
+                                    f"{surface}_eta:{differentiated}@{endpoint_name}-"
+                                    f"{metal}_derivative*{metal}_eta:{differentiated}@{endpoint_name})"
+                                )
+                                CreateEdgeModel(
+                                    device,
+                                    region_name,
+                                    f"{flux_name}:{differentiated}@{endpoint_name}",
+                                    derivative,
+                                )
+                        if is_circuit_study and contact["id"] == study["contact"]:
+                            sign = "1" if variable == "Electrons" else "-1"
+                            CreateEdgeModel(
+                                device,
+                                region_name,
+                                f"{flux_name}:{bias_name}",
+                                f"{sign}*{coefficient}*{metal}_derivative/V_t",
+                            )
+                    else:
+                        CreateEdgeModel(device, region_name, flux_name, flux)
+                        for differentiated in ("Potential", "Electrons", "Holes"):
+                            CreateEdgeModelDerivatives(
+                                device, region_name, flux_name, flux, differentiated
+                            )
+                        if is_circuit_study and contact["id"] == study["contact"]:
+                            sign = "1" if variable == "Electrons" else "-1"
+                            CreateEdgeModel(
+                                device,
+                                region_name,
+                                f"{flux_name}:{bias_name}",
+                                f"{sign}*{coefficient}*exp({eta_metal})/V_t",
+                            )
                     schottky_options: dict[str, Any] = {
                         "device": device,
                         "contact": backend_contact,
@@ -1915,7 +2141,29 @@ def main() -> int:
                     ("Electrons", "ElectronContinuityEquation"),
                     ("Holes", "HoleContinuityEquation"),
                 ):
-                    model = CreateContinuousInterfaceModel(device, interface, variable)
+                    if fermi_statistics or "slotboom_bgn" in selected_models:
+                        # A doping-dependent band step does not permit imposing
+                        # equal densities across the interface. Match chemical
+                        # potential and conserve flux instead, including its
+                        # cross-variable Jacobian in the continuity equation.
+                        quasi_fermi = (
+                            "ElectronQuasiFermiEnergy"
+                            if variable == "Electrons"
+                            else "HoleQuasiFermiEnergy"
+                        )
+                        model = f"{variable}_chemical_continuity"
+                        expression = f"{quasi_fermi}@r0-{quasi_fermi}@r1"
+                        CreateInterfaceModel(device, interface, model, expression)
+                        for differentiated in ("Potential", "Electrons", "Holes"):
+                            for side in ("r0", "r1"):
+                                CreateInterfaceModel(
+                                    device,
+                                    interface,
+                                    f"{model}:{differentiated}@{side}",
+                                    f"diff({expression},{differentiated}@{side})",
+                                )
+                    else:
+                        model = CreateContinuousInterfaceModel(device, interface, variable)
                     interface_equation(
                         device=device,
                         interface=interface,
@@ -2400,9 +2648,18 @@ def main() -> int:
             assert study_backend_contact is not None
             checkpoint_state("Previous")
             checkpoint_state("Recovery")
-            set_dc_bias(bias)
+            study = payload["study"]
+            first_bias = (
+                bias
+                if equilibrium_predictor
+                else _initial_dc_bias(current_bias, bias, temperature, study)
+            )
+            set_dc_bias(first_bias)
+            left = current_bias
+            step = (first_bias - current_bias) / 2
+            failed_initial_attempt = False
             try:
-                predict_stationary_equilibrium(bias)
+                predict_stationary_equilibrium(first_bias)
                 solve(
                     type="dc",
                     absolute_error=dc_absolute_error,
@@ -2411,35 +2668,68 @@ def main() -> int:
                 )
                 solver_events.append(
                     {
-                        "phase": "requested_operating_point",
+                        "phase": (
+                            "requested_operating_point"
+                            if first_bias == requested_bias
+                            else "initial_continuation_step"
+                        ),
                         "requested_bias_v": requested_bias,
-                        "attempted_bias_v": bias,
+                        "attempted_bias_v": first_bias,
                         "attempt": attempts,
                         "outcome": "converged",
                     }
                 )
+                converged = first_bias == requested_bias
+                if not converged:
+                    left = first_bias
+                    step = (first_bias - current_bias) * 1.5
+                    checkpoint_state("Recovery")
             except Exception:
+                failed_initial_attempt = True
                 solver_events.append(
                     {
                         "phase": "requested_operating_point",
                         "requested_bias_v": requested_bias,
-                        "attempted_bias_v": bias,
+                        "attempted_bias_v": first_bias,
                         "attempt": attempts,
                         "outcome": "failed",
                     }
                 )
                 converged = False
-                study = payload["study"]
+            if not converged:
                 if study.get("strategy") == "adaptive":
-                    left = current_bias
-                    step = (requested_bias - left) / 2
-                    for _retry in range(study.get("maximum_retries", 0)):
+                    minimum = max(float(study.get("minimum_step_v", 0.0)), 1e-12)
+                    maximum = max(minimum, 8 * 8.617333262145e-5 * temperature)
+                    controller = AdaptiveStepController(
+                        initial_step=min(
+                            max(
+                                abs(first_bias - current_bias)
+                                if failed_initial_attempt
+                                else abs(step),
+                                minimum,
+                            ),
+                            maximum,
+                        ),
+                        minimum_step=minimum,
+                        maximum_step=maximum,
+                        maximum_retries=study.get("maximum_retries", 0),
+                    )
+                    continue_allowed = True
+                    if failed_initial_attempt:
+                        try:
+                            controller.failed()
+                        except TransientRecoveryExhausted:
+                            continue_allowed = False
+                    # Successful continuation points are not failed retries.
+                    # Bound total work separately from consecutive failures;
+                    # the runner's elapsed-time budget is authoritative too.
+                    for _advance in range(10000 if continue_allowed else 0):
                         remaining = requested_bias - left
-                        candidate = left + math.copysign(min(abs(step), abs(remaining)), remaining)
-                        if abs(candidate - left) < study.get("minimum_step_v", 0.0):
-                            break
+                        candidate = left + math.copysign(
+                            controller.candidate(abs(remaining)), remaining
+                        )
                         checkpoint_state("Recovery", restore=True)
-                        print(f"Recovery operating point: {candidate:.17g} V", flush=True)
+                        print(f"Continuation operating point: {candidate:.17g} V", flush=True)
                         set_dc_bias(candidate)
                         attempts += 1
                         try:
@@ -2460,11 +2750,18 @@ def main() -> int:
                                     "outcome": "failed",
                                 }
                             )
-                            step /= 2
+                            try:
+                                controller.failed()
+                            except TransientRecoveryExhausted:
+                                break
                             continue
                         solver_events.append(
                             {
-                                "phase": "recovery_midpoint",
+                                "phase": (
+                                    "requested_operating_point"
+                                    if candidate == requested_bias
+                                    else "recovery_midpoint"
+                                ),
                                 "requested_bias_v": requested_bias,
                                 "attempted_bias_v": candidate,
                                 "attempt": attempts,
@@ -2476,7 +2773,7 @@ def main() -> int:
                         if candidate == requested_bias:
                             converged = True
                             break
-                        step *= 1.5
+                        controller.succeeded()
                 if not converged:
                     message = "nonlinear solve did not converge"
                     checkpoint_state("Previous", restore=True)

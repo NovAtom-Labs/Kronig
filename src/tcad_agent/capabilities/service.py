@@ -308,6 +308,21 @@ class CapabilityService:
                     )
                 )
             if kind == "metal_work_function" and adjacent.material == "silicon":
+                if "fermi" in statistics_models and isinstance(
+                    spec.study, (ACStudy, FrequencyStudy, TransientStudy)
+                ):
+                    issues.append(
+                        CapabilityIssue(
+                            path="study.kind",
+                            code="unbenchmarked_contact_statistics_study",
+                            message=(
+                                "Fermi thermionic silicon contacts are benchmarked for "
+                                "equilibrium and DC, not AC, frequency or transient response"
+                            ),
+                            requested=f"fermi:metal_work_function:{spec.study.kind}",
+                            supported=("equilibrium", "dc", "dc_points"),
+                        )
+                    )
                 equations = {str(value) for value in spec.physics.equations}
                 if not {"electron_continuity", "hole_continuity"}.issubset(equations):
                     issues.append(
@@ -320,19 +335,6 @@ class CapabilityService:
                             ),
                             requested="metal_work_function:silicon",
                             supported=("electron_continuity", "hole_continuity"),
-                        )
-                    )
-                if "fermi" in spec.physics.models:
-                    issues.append(
-                        CapabilityIssue(
-                            path=f"contacts[{index}]",
-                            code="incompatible_contact_model",
-                            message=(
-                                "Schottky transport is currently benchmarked with "
-                                "Boltzmann carrier statistics"
-                            ),
-                            requested="metal_work_function:fermi",
-                            supported=("boltzmann",),
                         )
                     )
         self._check_one(issues, "study.kind", spec.study.kind, manifest.studies)
