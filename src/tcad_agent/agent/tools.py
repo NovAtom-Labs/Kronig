@@ -813,6 +813,161 @@ class DomainTools:
             data={"evidence": evidence.model_dump(mode="json")},
         )
 
+    def read_ssh_audit(self, run_id: str | None = None) -> ToolResponse:
+        """List available SSH audits or read one by experiment bundle run ID."""
+        configured_root = os.getenv("TCAD_WORKSPACE")
+        workspace_root = Path(
+            configured_root or (Path.cwd() / ".tcad-agent")
+        ).expanduser().resolve()
+        bundles_root = (workspace_root / "bundles").resolve()
+
+        if run_id is None or not run_id.strip():
+            if not bundles_root.is_dir():
+                return ToolResponse(
+                    status="refused",
+                    code="ssh_audit_not_found",
+                    message=(
+                        "No experiment bundle directory is available to search "
+                        "for SSH audits."
+                    ),
+                    data={"bundle_root": str(bundles_root)},
+                )
+            available: list[tuple[float, dict[str, object]]] = []
+            try:
+                candidates = list(bundles_root.iterdir())
+            except OSError as exc:
+                return ToolResponse(
+                    status="error",
+                    code="ssh_audit_index_unreadable",
+                    message=(
+                        "The experiment bundle directory could not be listed "
+                        f"({type(exc).__name__})."
+                    ),
+                    data={"bundle_root": str(bundles_root)},
+                )
+            for candidate in candidates:
+                if not candidate.is_dir():
+                    continue
+                candidate_root = candidate.resolve()
+                if not candidate_root.is_relative_to(bundles_root):
+                    continue
+                candidate_audit = (
+                    candidate_root / "logs" / "ssh-audit.json"
+                ).resolve()
+                if (
+                    not candidate_audit.is_relative_to(candidate_root)
+                    or not candidate_audit.is_file()
+                ):
+                    continue
+                try:
+                    candidate_document = json.loads(
+                        candidate_audit.read_text(encoding="utf-8")
+                    )
+                    modified_at = candidate_audit.stat().st_mtime
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(candidate_document, dict):
+                    continue
+                events = candidate_document.get("events")
+                if not isinstance(events, list):
+                    continue
+                available.append(
+                    (
+                        modified_at,
+                        {
+                            "bundle_run_id": candidate.name,
+                            "audit_run_id": candidate_document.get("run_id"),
+                            "event_count": len(events),
+                            "updated_at": candidate_document.get("updated_at"),
+                        },
+                    )
+                )
+            available.sort(key=lambda item: item[0], reverse=True)
+            runs = [item for _, item in available[:10]]
+            if not runs:
+                return ToolResponse(
+                    status="refused",
+                    code="ssh_audit_not_found",
+                    message="No readable SSH audit trails were found in experiment bundles.",
+                    data={"bundle_root": str(bundles_root)},
+                )
+            return ToolResponse(
+                status="ok",
+                code="ssh_audit_index",
+                message=(
+                    f"Found {len(runs)} SSH audit bundle(s). Call read_ssh_audit again "
+                    "with a bundle_run_id to inspect its complete structured event history."
+                ),
+                data={"runs": runs},
+            )
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", run_id):
+            return ToolResponse(
+                status="refused",
+                code="invalid_run_id",
+                message="The run identifier contains unsupported characters.",
+            )
+
+        bundle_root = (bundles_root / run_id).resolve()
+        if not bundle_root.is_relative_to(bundles_root):
+            return ToolResponse(
+                status="refused",
+                code="invalid_run_id",
+                message="The run identifier does not resolve to a bundle directory.",
+            )
+        audit_path = (bundle_root / "logs" / "ssh-audit.json").resolve()
+        log_path = (bundle_root / "logs" / "ssh-audit.log").resolve()
+        if (
+            not audit_path.is_relative_to(bundle_root)
+            or not log_path.is_relative_to(bundle_root)
+        ):
+            return ToolResponse(
+                status="refused",
+                code="invalid_audit_path",
+                message="SSH audit artifacts must remain inside the experiment bundle.",
+            )
+        if not audit_path.is_file():
+            return ToolResponse(
+                status="refused",
+                code="ssh_audit_not_found",
+                message=(
+                    "No SSH audit JSON was found for that run in the configured "
+                    "experiment bundle directory. Only Sentaurus SSH runs "
+                    "include this audit."
+                ),
+                data={"bundle_path": str(bundle_root)},
+            )
+
+        try:
+            audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            if not isinstance(audit, dict) or not isinstance(audit.get("events"), list):
+                raise ValueError("audit document must contain an events array")
+            text_log = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            return ToolResponse(
+                status="error",
+                code="ssh_audit_unreadable",
+                message=f"The SSH audit artifacts could not be read ({type(exc).__name__}).",
+                data={"bundle_path": str(bundle_root)},
+            )
+
+        return ToolResponse(
+            status="ok",
+            code="ssh_audit_read",
+            message=(
+                f"Read {len(audit['events'])} structured SSH audit events "
+                f"for bundle {run_id}. The JSON is authoritative; the text log "
+                "is included for quick human-readable review."
+            ),
+            data={
+                "bundle_run_id": run_id,
+                "audit": audit,
+                "text_log": text_log,
+                "json_path": str(audit_path),
+                "log_path": str(log_path) if log_path.is_file() else None,
+            },
+        )
+
     def build_report(self, payload: dict[str, object]) -> ToolResponse:
         from tcad_agent.reporting.markdown import MarkdownReport
         from tcad_agent.results.models import CanonicalResult
@@ -854,6 +1009,7 @@ class TcadDomainAction(Action):
         "open_saved_result",
         "read_canonical_summary",
         "validate_bundle",
+        "read_ssh_audit",
         "search_knowledge",
         "search_web",
         "fetch_source",
@@ -916,6 +1072,11 @@ class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
                 str(action.payload.get("query", "")),
                 action.payload.get("filters", {}),
                 int(action.payload.get("limit", 5)),
+            )
+        elif action.operation == "read_ssh_audit":
+            raw_run_id = action.payload.get("run_id")
+            response = self.tools.read_ssh_audit(
+                str(raw_run_id) if raw_run_id is not None else None
             )
         elif action.operation == "search_web":
             domains = action.payload.get("preferred_domains", ())

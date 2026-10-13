@@ -1,10 +1,14 @@
-"""SSH runner for executing Sentaurus on the HPSC machine."""
+"""SSH runner for executing Sentaurus remotely with a persisted audit trail."""
 
 from __future__ import annotations
 
 import getpass
+import json
 import os
+import shlex
 import time
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,8 +21,12 @@ class SSHRunnerError(RuntimeError):
     """Raised when the SSH-based Sentaurus runner fails."""
 
 
+class SSHAuditError(OSError):
+    """Raised when the SSH audit trail cannot be initialized or persisted."""
+
+
 class SSHSentaurusRunner:
-    """Run Sentaurus remotely on HPSC using SSH and SFTP."""
+    """Run Sentaurus remotely on HPSC using SSH/SFTP and record every action."""
 
     def __init__(
         self,
@@ -34,8 +42,113 @@ class SSHSentaurusRunner:
             "TCAD_HPSC_REMOTE_ROOT",
             "~/novatom-labs/runs",
         )
-
         self._password: str | None = os.getenv("TCAD_HPSC_PASSWORD")
+
+        self._audit_events: list[dict[str, object]] = []
+        self._audit_json_path: Path | None = None
+        self._audit_log_path: Path | None = None
+        self._run_id: str | None = None
+        self._started_at: str | None = None
+
+    @staticmethod
+    def _timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _safe_text(self, value: object) -> str:
+        """Convert a value to text while redacting the configured SSH password."""
+        if isinstance(value, bytes):
+            text = value.decode("utf-8", errors="replace")
+        elif isinstance(value, BaseException):
+            text = str(value)
+        else:
+            text = str(value)
+        if self._password:
+            text = text.replace(self._password, "[REDACTED]")
+        return text
+
+    def _sanitize(self, value: object) -> object:
+        """Recursively make event details JSON-safe and redact secrets."""
+        if isinstance(value, Mapping):
+            return {
+                self._safe_text(key): self._sanitize(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return [self._sanitize(item) for item in value]
+        if isinstance(value, (str, bytes, BaseException, Path)):
+            return self._safe_text(value)
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        return self._safe_text(value)
+
+    def _record(
+        self,
+        action: str,
+        status: str,
+        **details: object,
+    ) -> None:
+        """Persist a structured event and a human-readable log entry.
+
+        Audit persistence errors are raised instead of ignored: continuing remote
+        execution after losing the audit trail would violate the runner's contract.
+        """
+        sanitized_details = self._sanitize(details)
+        if not isinstance(sanitized_details, dict):
+            raise SSHAuditError("Could not serialize SSH audit event details")
+        event: dict[str, object] = {
+            "timestamp": self._timestamp(),
+            "run_id": self._run_id,
+            "action": action,
+            "status": status,
+            "details": sanitized_details,
+        }
+        self._audit_events.append(event)
+
+        try:
+            if self._audit_json_path is not None:
+                document = {
+                    "schema_version": 1,
+                    "run_id": self._run_id,
+                    "started_at": self._started_at,
+                    "updated_at": self._timestamp(),
+                    "events": self._audit_events,
+                }
+                temporary_path = self._audit_json_path.with_suffix(".json.tmp")
+                temporary_path.write_text(
+                    json.dumps(document, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                temporary_path.replace(self._audit_json_path)
+
+            if self._audit_log_path is not None:
+                details_text = json.dumps(
+                    sanitized_details,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                )
+                line = (
+                    f"{event['timestamp']} [{status.upper()}] {action}"
+                    f"{' | ' + details_text if details_text != '{}' else ''}\n"
+                )
+                with self._audit_log_path.open("a", encoding="utf-8") as log_file:
+                    log_file.write(line)
+        except OSError as exc:
+            raise SSHAuditError(
+                f"Could not persist SSH audit trail ({type(exc).__name__})"
+            ) from exc
+
+    def _initialize_audit(self, output_dir: Path) -> None:
+        """Start clean per-run audit files and prevent stale events being reused."""
+        self._audit_json_path = output_dir / "ssh-audit.json"
+        self._audit_log_path = output_dir / "ssh-audit.log"
+        try:
+            self._audit_json_path.unlink(missing_ok=True)
+            self._audit_json_path.with_suffix(".json.tmp").unlink(missing_ok=True)
+            self._audit_log_path.write_text("", encoding="utf-8")
+        except OSError as exc:
+            raise SSHAuditError(
+                f"Could not initialize SSH audit files ({type(exc).__name__})"
+            ) from exc
 
     def _get_password(self) -> str:
         if not self._password:
@@ -44,10 +157,10 @@ class SSHSentaurusRunner:
                     "TCAD_HPSC_HOST and TCAD_HPSC_USER must be configured"
                 )
 
-        self._password = getpass.getpass(
-            f"HPSC password for {self.user}@{self.host}: "
-        )
-        os.environ["TCAD_HPSC_PASSWORD"] = self._password
+            self._password = getpass.getpass(
+                f"HPSC password for {self.user}@{self.host}: "
+            )
+            os.environ["TCAD_HPSC_PASSWORD"] = self._password
 
         return self._password
 
@@ -57,20 +170,227 @@ class SSHSentaurusRunner:
                 "TCAD_HPSC_HOST and TCAD_HPSC_USER must be configured"
             )
 
+        self._record(
+            "ssh.connect",
+            "started",
+            host=self.host,
+            port=self.port,
+            user=self.user,
+        )
+
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        client.connect(
-            hostname=self.host,
-            port=self.port,
-            username=self.user,
-            password=self._get_password(),
-            timeout=15,
-            banner_timeout=15,
-            auth_timeout=15,
+        try:
+            client.connect(
+                hostname=self.host,
+                port=self.port,
+                username=self.user,
+                password=self._get_password(),
+                timeout=15,
+                banner_timeout=15,
+                auth_timeout=15,
+            )
+        except Exception as exc:
+            try:
+                self._record(
+                    "ssh.connect",
+                    "failed",
+                    error=self._safe_text(exc),
+                )
+            finally:
+                try:
+                    client.close()
+                except Exception as close_exc:
+                    try:
+                        self._record(
+                            "ssh.client_close",
+                            "failed",
+                            error=self._safe_text(close_exc),
+                        )
+                    except SSHAuditError:
+                        # Preserve the original connection/audit failure after cleanup.
+                        pass
+            raise
+
+        try:
+            self._record("ssh.connect", "succeeded")
+        except SSHAuditError:
+            # The connection is live, but we must not use it without a durable audit.
+            try:
+                client.close()
+            except Exception:
+                pass
+            raise
+        return client
+
+    def _exec(
+        self,
+        client: paramiko.SSHClient,
+        command: str,
+        action: str,
+    ) -> tuple[int, str, str]:
+        """Execute and audit one remote command, including its exit status."""
+        self._record(
+            action,
+            "started",
+            command=command,
         )
 
-        return client
+        try:
+            _stdin, stdout, stderr = client.exec_command(command)
+            stdout_text = stdout.read().decode(errors="replace")
+            stderr_text = stderr.read().decode(errors="replace")
+            exit_code = stdout.channel.recv_exit_status()
+
+            self._record(
+                action,
+                "succeeded" if exit_code == 0 else "failed",
+                exit_code=exit_code,
+                stdout_bytes=len(stdout_text.encode()),
+                stderr_bytes=len(stderr_text.encode()),
+                stderr=self._safe_text(stderr_text[-2000:])
+                if stderr_text.strip()
+                else "",
+            )
+            return exit_code, stdout_text, stderr_text
+        except Exception as exc:
+            self._record(
+                action,
+                "failed",
+                error=self._safe_text(exc),
+            )
+            raise
+
+    def _upload_files(
+        self,
+        client: paramiko.SSHClient,
+        job: CompiledJob,
+        remote_dir: str,
+    ) -> None:
+        sftp = None
+        try:
+            self._record("sftp.open_upload", "started")
+            try:
+                sftp = client.open_sftp()
+            except Exception as exc:
+                self._record(
+                    "sftp.open_upload",
+                    "failed",
+                    error=self._safe_text(exc),
+                )
+                raise
+            self._record("sftp.open_upload", "succeeded")
+
+            for path in job.input_files:
+                local_path = path.resolve()
+                remote_path = f"{remote_dir}/{path.name}"
+
+                self._record(
+                    "sftp.upload",
+                    "started",
+                    filename=path.name,
+                    size_bytes=local_path.stat().st_size,
+                    remote_path=remote_path,
+                )
+                try:
+                    sftp.put(str(local_path), remote_path)
+                    self._record(
+                        "sftp.upload",
+                        "succeeded",
+                        filename=path.name,
+                        size_bytes=local_path.stat().st_size,
+                    )
+                except Exception as exc:
+                    self._record(
+                        "sftp.upload",
+                        "failed",
+                        filename=path.name,
+                        error=self._safe_text(exc),
+                    )
+                    raise
+        finally:
+            if sftp is not None:
+                try:
+                    sftp.close()
+                except Exception as exc:
+                    self._record(
+                        "sftp.close_upload",
+                        "failed",
+                        error=self._safe_text(exc),
+                    )
+                    raise
+                else:
+                    self._record("sftp.close_upload", "succeeded")
+
+    def _download_files(
+        self,
+        client: paramiko.SSHClient,
+        remote_dir: str,
+        output_dir: Path,
+        names: tuple[str, ...],
+    ) -> None:
+        sftp = None
+        try:
+            self._record("sftp.open_download", "started")
+            try:
+                sftp = client.open_sftp()
+            except Exception as exc:
+                self._record(
+                    "sftp.open_download",
+                    "failed",
+                    error=self._safe_text(exc),
+                )
+                raise
+            self._record("sftp.open_download", "succeeded")
+
+            for name in names:
+                remote_path = f"{remote_dir}/{name}"
+                local_path = output_dir / name
+
+                self._record(
+                    "sftp.download",
+                    "started",
+                    filename=name,
+                    remote_path=remote_path,
+                )
+                try:
+                    sftp.get(remote_path, str(local_path))
+                    self._record(
+                        "sftp.download",
+                        "succeeded",
+                        filename=name,
+                        size_bytes=local_path.stat().st_size,
+                    )
+                except FileNotFoundError as exc:
+                    # Missing result files can be normal when Sentaurus fails.
+                    self._record(
+                        "sftp.download",
+                        "unavailable",
+                        filename=name,
+                        error=self._safe_text(exc),
+                    )
+                except Exception as exc:
+                    self._record(
+                        "sftp.download",
+                        "failed",
+                        filename=name,
+                        error=self._safe_text(exc),
+                    )
+                    raise
+        finally:
+            if sftp is not None:
+                try:
+                    sftp.close()
+                except Exception as exc:
+                    self._record(
+                        "sftp.close_download",
+                        "failed",
+                        error=self._safe_text(exc),
+                    )
+                    raise
+                else:
+                    self._record("sftp.close_download", "succeeded")
 
     def run(
         self,
@@ -83,10 +403,16 @@ class SSHSentaurusRunner:
             )
 
         workspace = job.entrypoint.parent.resolve()
-        remote_job_id = str(uuid4())
+        self._run_id = str(uuid4())
+        self._started_at = self._timestamp()
+        self._audit_events = []
 
         output_dir = workspace / "ssh-result"
-        output_dir.mkdir(mode=0o700, exist_ok=True)
+        output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._initialize_audit(output_dir)
+        audit_json_path = self._audit_json_path
+        audit_log_path = self._audit_log_path
+        assert audit_json_path is not None and audit_log_path is not None
 
         stdout_path = output_dir / "runner.stdout.log"
         stderr_path = output_dir / "runner.stderr.log"
@@ -94,125 +420,116 @@ class SSHSentaurusRunner:
 
         start = time.monotonic()
         client: paramiko.SSHClient | None = None
+        status = "execution_failed"
+        return_code: int | None = None
+        error: str | None = None
+        result_path: Path | None = None
+        audit_failure: SSHAuditError | None = None
+
+        self._record(
+            "run.start",
+            "started",
+            backend=job.backend,
+            entrypoint=job.entrypoint.name,
+            input_files=[path.name for path in job.input_files],
+            budget_seconds=budget.seconds,
+            host=self.host,
+            port=self.port,
+            user=self.user,
+        )
 
         try:
             client = self._connect()
 
-            # Expand ~/novatom-labs/runs on the remote machine.
-            stdin, stdout, stderr = client.exec_command(
-                "printf '%s' \"$HOME\""
+            exit_code, home_output, _ = self._exec(
+                client,
+                'printf "%s" "$HOME"',
+                "remote.get_home",
             )
-            home = stdout.read().decode().strip()
-
-            if not home:
+            home = home_output.strip()
+            if exit_code != 0 or not home:
                 raise SSHRunnerError(
                     "Could not determine remote home directory"
                 )
 
             remote_root = self.remote_root
-
-            if remote_root.startswith("~/"):
+            if remote_root == "~":
+                remote_root = home
+            elif remote_root.startswith("~/"):
                 remote_root = f"{home}/{remote_root[2:]}"
 
-            remote_dir = f"{remote_root}/{remote_job_id}"
-
-            # 1. Create remote workspace.
-            stdin, stdout, stderr = client.exec_command(
-                f"mkdir -p '{remote_dir}'"
+            remote_dir = f"{remote_root.rstrip('/')}/{self._run_id}"
+            self._record(
+                "remote.workspace",
+                "started",
+                remote_dir=remote_dir,
             )
 
-            exit_code = stdout.channel.recv_exit_status()
-
+            mkdir_command = (
+                f"mkdir -p -- {shlex.quote(remote_dir)}"
+            )
+            exit_code, _, stderr_text = self._exec(
+                client,
+                mkdir_command,
+                "remote.mkdir",
+            )
             if exit_code != 0:
-                error = stderr.read().decode(errors="replace").strip()
                 raise SSHRunnerError(
-                    f"Could not create remote directory: {error}"
+                    f"Could not create remote directory: "
+                    f"{self._safe_text(stderr_text.strip())}"
                 )
-
-            # 2. Upload input files.
-            sftp = client.open_sftp()
-
-            try:
-                for path in job.input_files:
-                    local_path = path.resolve()
-                    remote_path = f"{remote_dir}/{path.name}"
-
-                    sftp.put(
-                        str(local_path),
-                        remote_path,
-                    )
-            finally:
-                sftp.close()
-
-            # 3. Run Sentaurus remotely.
-            command = (
-                f"cd '{remote_dir}' && "
-                f"timeout {int(budget.seconds)}s "
-                f"sdevice '{job.entrypoint.name}' "
-                f"> runner.stdout.log "
-                f"2> runner.stderr.log; "
-                f"echo $? > runner.return_code"
+            self._record(
+                "remote.workspace",
+                "succeeded",
+                remote_dir=remote_dir,
             )
 
-            stdin, stdout, stderr = client.exec_command(command)
+            self._upload_files(client, job, remote_dir)
 
-            execution_exit_code = stdout.channel.recv_exit_status()
+            command = (
+                f"cd {shlex.quote(remote_dir)} && "
+                f"timeout {int(budget.seconds)}s "
+                f"sdevice {shlex.quote(job.entrypoint.name)} "
+                f"> runner.stdout.log 2> runner.stderr.log; "
+                f"rc=$?; "
+                f"printf '%s\\n' \"$rc\" > runner.return_code; "
+                f"exit \"$rc\""
+            )
 
-            # 4. Download logs and result files.
-            sftp = client.open_sftp()
+            _exit_code, _stdout_text, _stderr_text = self._exec(
+                client,
+                command,
+                "sentaurus.execute",
+            )
 
-            try:
-                for remote_name, local_path in (
+            self._download_files(
+                client,
+                remote_dir,
+                output_dir,
                 (
                     "runner.stdout.log",
-                    stdout_path,
-                ),
-                (
                     "runner.stderr.log",
-                    stderr_path,
-                ),
-                (
                     "runner.return_code",
-                    return_code_path,
-                ),
-                (
                     "sdevice.log",
-                    output_dir / "sdevice.log",
-                ),
-            ):
-                    try:
-                        sftp.get(
-                            f"{remote_dir}/{remote_name}",
-                            str(local_path),
-                        )
-                    except FileNotFoundError:
-                        pass
-
-                for name in (
                     "sdevice.tdr",
                     "sdevice.plt",
                     "sentaurus-result.json",
-                ):
-                    try:
-                        sftp.get(
-                            f"{remote_dir}/{name}",
-                            str(output_dir / name),
-                        )
-                    except FileNotFoundError:
-                        pass
-            finally:
-                sftp.close()
+                ),
+            )
 
-            # 5. Determine actual Sentaurus return code.
             if return_code_path.exists():
                 try:
-                    return_code = int(
-                        return_code_path.read_text().strip()
-                    )
+                    return_code = int(return_code_path.read_text().strip())
                 except ValueError:
-                    return_code = execution_exit_code
-            else:
-                return_code = execution_exit_code
+                    self._record(
+                        "sentaurus.return_code",
+                        "invalid",
+                        file="runner.return_code",
+                    )
+
+            if return_code is None:
+                # The remote command's exit code also covers command failures.
+                return_code = _exit_code
 
             if return_code == 0:
                 status = "completed"
@@ -228,8 +545,6 @@ class SSHSentaurusRunner:
                     else "Sentaurus execution failed"
                 )
 
-            result_path = None
-
             for candidate in (
                 output_dir / "sentaurus-result.json",
                 output_dir / "sdevice.tdr",
@@ -238,32 +553,84 @@ class SSHSentaurusRunner:
                     result_path = candidate
                     break
 
-            return NativeRunResult(
-                backend="sentaurus",
-                status=status,
+            self._record(
+                "run.result",
+                status,
                 return_code=return_code,
-                stdout_path=stdout_path,
-                stderr_path=stderr_path,
-                result_path=result_path,
-                elapsed_seconds=time.monotonic() - start,
-                error=error,
+                result_file=result_path.name if result_path else None,
+                error=self._safe_text(error) if error else None,
             )
 
         except Exception as exc:
+            status = "execution_failed"
+            error = self._safe_text(exc)
+            try:
+                self._record(
+                    "run.error",
+                    "failed",
+                    error=error,
+                    exception_type=type(exc).__name__,
+                )
+            except SSHAuditError as audit_exc:
+                audit_failure = audit_exc
             stdout_path.touch(exist_ok=True)
             stderr_path.touch(exist_ok=True)
 
-            return NativeRunResult(
-                backend="sentaurus",
-                status="execution_failed",
-                return_code=None,
-                stdout_path=stdout_path,
-                stderr_path=stderr_path,
-                result_path=None,
-                elapsed_seconds=time.monotonic() - start,
-                error=str(exc),
-            )
+            if not stderr_path.stat().st_size and error:
+                stderr_path.write_text(error, encoding="utf-8")
 
         finally:
             if client is not None:
-                client.close()
+                if audit_failure is None:
+                    try:
+                        self._record("ssh.disconnect", "started")
+                    except SSHAuditError as audit_exc:
+                        audit_failure = audit_exc
+                try:
+                    client.close()
+                except Exception as exc:
+                    if audit_failure is None:
+                        try:
+                            self._record(
+                                "ssh.disconnect",
+                                "failed",
+                                error=self._safe_text(exc),
+                            )
+                        except SSHAuditError as audit_exc:
+                            audit_failure = audit_exc
+                else:
+                    if audit_failure is None:
+                        try:
+                            self._record("ssh.disconnect", "succeeded")
+                        except SSHAuditError as audit_exc:
+                            audit_failure = audit_exc
+
+            elapsed = time.monotonic() - start
+            if audit_failure is None:
+                try:
+                    self._record(
+                        "run.finish",
+                        status,
+                        elapsed_seconds=round(elapsed, 3),
+                        return_code=return_code,
+                        audit_json=audit_json_path.name,
+                        audit_log=audit_log_path.name,
+                    )
+                except SSHAuditError as audit_exc:
+                    audit_failure = audit_exc
+
+        if audit_failure is not None:
+            raise audit_failure
+
+        return NativeRunResult(
+            backend="sentaurus",
+            status=status,
+            return_code=return_code,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+            result_path=result_path,
+            elapsed_seconds=time.monotonic() - start,
+            error=error,
+            audit_json_path=audit_json_path,
+            audit_log_path=audit_log_path,
+        )

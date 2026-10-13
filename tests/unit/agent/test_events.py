@@ -758,3 +758,25 @@ def test_overlapping_mutating_actions_do_not_claim_each_others_files(
     assert len(completed) == 2
     assert all(event.payload["attribution_uncertain"] is True for event in completed)
     assert all("affected_paths" not in event.payload for event in completed)
+
+
+def test_ssh_audit_read_is_structured_as_inspection() -> None:
+    action = ActionEvent(
+        thought=[],
+        action=TcadDomainAction(
+            operation="read_ssh_audit",
+            payload={"run_id": "run-123"},
+        ),
+        tool_name="tcad_domain",
+        tool_call_id="audit-1",
+        tool_call=MessageToolCall(
+            id="audit-1",
+            name="tcad_domain",
+            arguments='{"operation":"read_ssh_audit"}',
+            origin="completion",
+        ),
+        llm_response_id="audit-response-1",
+        security_risk=SecurityRisk.LOW,
+    )
+
+    assert structured_action_metadata(action) == {"phase": "inspect"}
