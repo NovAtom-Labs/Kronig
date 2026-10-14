@@ -400,6 +400,57 @@ class CapabilityService:
             tuple(str(observable) for observable in spec.observables),
             manifest.observables,
         )
+        if "fermi_level" in spec.observables:
+            # Bias on a dielectric boundary is not a carrier electrochemical
+            # drive. Compare only injecting contacts, including their offsets.
+            # AC profile fields are DC operating-point fields; transient fields
+            # and prescribed thermal gradients do not imply thermal equilibrium.
+            injecting = {
+                contact.id: contact.voltage_offset.to("V")
+                for contact in spec.contacts
+                if contact.kind in {"ohmic", "metal_work_function"}
+                and spec.regions[0 if str(contact.location) == "x_min" else -1].material
+                == "silicon"
+            }
+            schedule = spec.study
+            if isinstance(schedule, ACStudy | FrequencyStudy):
+                schedule = schedule.bias_schedule
+            if isinstance(schedule, DCStudy):
+                biases = (schedule.start.to("V"), schedule.stop.to("V"))
+            elif isinstance(schedule, DCPointsStudy):
+                biases = tuple(point.to("V") for point in schedule.values)
+            else:
+                biases = (0.0,)
+            drive = getattr(spec.study, "contact", None)
+            split_contacts = any(
+                len(
+                    {
+                        offset + (bias if contact == drive else 0.0)
+                        for contact, offset in injecting.items()
+                    }
+                )
+                > 1
+                for bias in biases
+            )
+            if (
+                split_contacts
+                or isinstance(spec.study, TransientStudy)
+                or spec.physics.temperature_profiles
+            ):
+                issues.append(
+                    CapabilityIssue(
+                        path="observables",
+                        code="single_fermi_level_outside_equilibrium",
+                        requested="fermi_level",
+                        message=(
+                            "A single Fermi level is not defined for this nonequilibrium study. "
+                            "Use separate electron and hole quasi-Fermi levels; their midpoint "
+                            "is not a physical substitute. Preserve explicitly requested "
+                            "analyses and ask the researcher if a change is required."
+                        ),
+                        supported=("electron_quasi_fermi_level", "hole_quasi_fermi_level"),
+                    )
+                )
         if any(str(observable) == "absolute_terminal_current" for observable in spec.observables):
             missing_area = tuple(contact.id for contact in spec.contacts if contact.area is None)
             if missing_area:
@@ -423,19 +474,21 @@ class CapabilityService:
             "current_decomposition_residual",
         }
         if (
-            decomposition_outputs.intersection(str(observable) for observable in spec.observables)
+            manifest.backend == "devsim"
             and "fermi" in spec.physics.models
+            and isinstance(spec.study, ACStudy | FrequencyStudy | TransientStudy)
+            and decomposition_outputs.intersection(str(value) for value in spec.observables)
         ):
             issues.append(
                 CapabilityIssue(
                     path="observables",
-                    code="incompatible_observable_model",
+                    code="unbenchmarked_diagnostic_study",
                     message=(
-                        "drift-diffusion decomposition is currently benchmarked with "
-                        "Boltzmann carrier statistics"
+                        "Fermi current decomposition is not benchmarked for this dynamic study; "
+                        "the restriction applies to this adapter's diagnostic, not Fermi physics"
                     ),
-                    requested="current_decomposition:fermi",
-                    supported=("boltzmann",),
+                    requested=f"current_decomposition:fermi:{spec.study.kind}",
+                    supported=("equilibrium", "dc", "dc_points", "temperature", "parameter"),
                 )
             )
         self._check_limit(

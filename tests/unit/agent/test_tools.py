@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from tcad_agent.agent.tools import (
@@ -91,6 +92,228 @@ def test_preparation_refuses_unrequested_automatic_sampling(tmp_path):
 
 def valid_spec_payload() -> dict:
     return yaml.safe_load((ROOT / "examples" / "pn-junction.yaml").read_text())
+
+
+def test_preparation_refuses_invented_contact_area_and_can_retry_density_only(tmp_path):
+    from tcad_agent.prompting.models import ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute terminal current density",
+            selected_capabilities=("observable.terminal_current_density",),
+        ),
+    )
+    payload = valid_spec_payload()
+    for contact in payload["contacts"]:
+        contact["area"] = "1 cm^2"
+    response = tools.prepare_experiment(payload, backend="devsim")
+    assert response.status == "refused"
+    assert response.code == "scientific_input_authority_violation"
+    assert {issue["path"] for issue in response.data["issues"]} == {
+        "contacts.anode.area",
+        "contacts.cathode.area",
+    }
+    assert response.data["repair_action"] == "remove_unconfirmed_area_and_retry"
+    assert not (tmp_path / "experiments").exists()
+
+    for contact in payload["contacts"]:
+        del contact["area"]
+    response = tools.prepare_experiment(payload, backend="devsim")
+    assert response.status == "ok"
+    assert all(contact["area"] is None for contact in response.data["prepared"]["spec"]["contacts"])
+
+
+@pytest.mark.parametrize("origin", ["evidence", "platform_default"])
+def test_preparation_cannot_authorize_area_from_nonresearcher_sources(tmp_path, origin):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    evidence = {"rationale": "A published example uses this area", "evidence_refs": ("paper",)}
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute current density",
+            fields=(
+                IntentField(
+                    path="contacts.area",
+                    value="1 cm^2",
+                    origin=origin,
+                    **(evidence if origin == "evidence" else {}),
+                ),
+            ),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["contacts"][0]["area"] = "1 cm^2"
+    assert tools.prepare_experiment(payload, backend="devsim").code == (
+        "scientific_input_authority_violation"
+    )
+
+
+@pytest.mark.parametrize("supplied", ["2 cm^2", "1 cm", 1, None])
+def test_preparation_cannot_replace_confirmed_area_with_different_quantity(tmp_path, supplied):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute current density",
+            fields=(IntentField(path="contacts.area", value=supplied, origin="researcher"),),
+        ),
+    )
+    payload = valid_spec_payload()
+    for contact in payload["contacts"]:
+        contact["area"] = "1 cm^2"
+    assert tools.prepare_experiment(payload, backend="devsim").code == (
+        "scientific_input_authority_violation"
+    )
+
+
+def test_preparation_must_retain_confirmed_area_even_for_density_outputs(tmp_path):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute current density",
+            fields=(IntentField(path="contacts.anode.area", value="1 cm^2", origin="researcher"),),
+        ),
+    )
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+    assert response.code == "scientific_input_authority_violation"
+
+
+@pytest.mark.parametrize("origin", ["researcher", "repository"])
+@pytest.mark.parametrize(
+    "area_fields",
+    [
+        (("contacts.area", "1 cm^2"),),
+        (("contacts.area", {"anode": "1 cm^2", "cathode": "1 cm^2"}),),
+        (("contacts.anode.area", "1 cm^2"), ("contacts.cathode.area", "1 cm^2")),
+        (
+            (
+                "contacts.area",
+                {
+                    "magnitude_si": 0.0001,
+                    "si_unit": "meter ** 2",
+                    "dimensionality": "[length] ** 2",
+                },
+            ),
+        ),
+    ],
+)
+def test_preparation_preserves_explicit_area_for_absolute_current(tmp_path, origin, area_fields):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    source = {"source_reference": "experiment.yaml"} if origin == "repository" else {}
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute absolute terminal current",
+            selected_capabilities=("observable.absolute_terminal_current",),
+            fields=tuple(
+                IntentField(path=path, value=value, origin=origin, **source)
+                for path, value in area_fields
+            ),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["observables"].append("absolute_terminal_current")
+    for contact in payload["contacts"]:
+        contact["area"] = "100 mm^2"
+    response = tools.prepare_experiment(payload, backend="devsim")
+    assert response.status == "ok"
+    areas = [contact["area"] for contact in response.data["prepared"]["spec"]["contacts"]]
+    assert (
+        areas
+        == [{"magnitude_si": 0.0001, "si_unit": "meter ** 2", "dimensionality": "[length] ** 2"}]
+        * 2
+    )
+
+
+def test_preparation_keeps_role_mapped_areas_when_contact_labels_change(tmp_path):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute current density",
+            fields=(
+                IntentField(
+                    path="contacts.area",
+                    value={"left": "1 cm^2", "right": "2 cm^2"},
+                    origin="researcher",
+                ),
+            ),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["contacts"][0].update(id="input_terminal", area="1 cm^2")
+    payload["contacts"][1].update(id="return_terminal", area="2 cm^2")
+    payload["study"]["contact"] = "input_terminal"
+    assert tools.prepare_experiment(payload, backend="devsim").status == "ok"
+    payload["contacts"][0]["area"] = "2 cm^2"
+    payload["contacts"][1]["area"] = "1 cm^2"
+    assert tools.prepare_experiment(payload, backend="devsim").code == (
+        "scientific_input_authority_violation"
+    )
+
+
+def test_preparation_binds_area_to_explicit_boundary_location(tmp_path):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute current density",
+            fields=(
+                IntentField(path="contacts.injecting.location", value="x_min", origin="researcher"),
+                IntentField(path="contacts.injecting.area", value="1 cm^2", origin="researcher"),
+                IntentField(path="contacts.x_max.area", value="2 cm^2", origin="researcher"),
+            ),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["contacts"][0]["area"] = "1 cm^2"
+    payload["contacts"][1]["area"] = "2 cm^2"
+    assert tools.prepare_experiment(payload, backend="devsim").status == "ok"
+
+
+def test_preparation_cannot_copy_one_confirmed_terminal_area_to_another(tmp_path):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compute current density",
+            fields=(IntentField(path="contacts.anode.area", value="1 cm^2", origin="researcher"),),
+        ),
+    )
+    payload = valid_spec_payload()
+    payload["contacts"][0]["area"] = "1 cm^2"
+    assert tools.prepare_experiment(payload, backend="devsim").status == "ok"
+    payload["contacts"][1]["area"] = "1 cm^2"
+    response = tools.prepare_experiment(payload, backend="devsim")
+    assert response.code == "scientific_input_authority_violation"
+    assert response.data["issues"] == [
+        {"path": "contacts.cathode.area", "reason": "unconfirmed_area"}
+    ]
+
+
+def test_direct_preparation_without_research_intent_accepts_typed_area(tmp_path):
+    payload = valid_spec_payload()
+    payload["observables"].append("absolute_terminal_current")
+    for contact in payload["contacts"]:
+        contact["area"] = "1 cm^2"
+    assert DomainTools(tmp_path).prepare_experiment(payload, backend="devsim").status == "ok"
 
 
 def test_prepared_tool_text_is_bounded_while_typed_evidence_is_complete(tmp_path, monkeypatch):
@@ -410,7 +633,9 @@ def test_native_agent_execution_has_bounded_default_budget_and_honors_explicit_b
     prepared = tools.prepare_experiment(valid_spec_payload(), backend="devsim").data["prepared"]
     request = {"prepared": prepared, "plan_digest": prepared["plan_digest"]}
     assert tools.execute_experiment(request).code == "experiment_execution_failed"
-    assert engine.seconds == 300
+    # Refined nonlinear meshes must have a finite runtime allowance without
+    # changing the requested equations or the scientific acceptance policy.
+    assert engine.seconds == 600
     assert (
         tools.execute_experiment({**request, "timeout_seconds": 30}).code
         == "experiment_execution_failed"

@@ -117,3 +117,43 @@ def test_reader_allows_completed_execution_that_needs_validation_review(
 
     assert view.manifest.execution_state == "completed"
     assert view.manifest.validation_state == "needs_review"
+
+
+@pytest.mark.parametrize("status", ["execution_failed", "timed_out", "malformed_result"])
+def test_reader_opens_verified_failure_evidence_without_claiming_results(
+    tmp_path, result_bundle_factory, status
+):
+    import hashlib
+
+    bundle = result_bundle_factory(tmp_path)
+    canonical_path = bundle / "results/canonical.json"
+    canonical = json.loads(canonical_path.read_text())
+    canonical.update(status=status, fields={}, axes={}, datasets={}, bias_points=[],
+                     operating_points=[], error="The simulation did not finish.")
+    canonical_path.write_text(json.dumps(canonical))
+    raw = canonical_path.read_bytes()
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(state="failed", execution_state="failed", validation_state="failed")
+    manifest["artifacts"]["results/canonical.json"].update(
+        bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    view = WorkspaceResultReader().read_bundle(bundle)
+    assert view.result.status == status
+    assert view.manifest.execution_state == "failed"
+    assert view.result.error == "The simulation did not finish."
+    assert view.catalog == ()
+
+
+def test_reader_rejects_execution_state_conflicting_with_canonical_data(
+    tmp_path, result_bundle_factory
+):
+    bundle = result_bundle_factory(tmp_path)
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(state="failed", execution_state="failed", validation_state="failed")
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(WorkspaceResultError, match="execution state"):
+        WorkspaceResultReader().read_bundle(bundle)

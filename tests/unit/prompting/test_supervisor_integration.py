@@ -356,3 +356,14 @@ def test_http_clarification_lifecycle_resumes_the_same_run(tmp_path: Path) -> No
     assert answered.json()["id"] == str(run_id)
     supervisor.join(run_id, timeout=3)
     assert store.get_run(run_id).state is RunState.BLOCKED
+
+    duplicate = web.post(
+        f"/api/runs/{run_id}/clarifications",
+        json={
+            "expected_revision": pending["revision"],
+            "answers": [{"question_id": "temperature", "answer": "300 K"}],
+        },
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["code"] == "stale_revision"
+    assert "do not match" not in duplicate.json()["message"]

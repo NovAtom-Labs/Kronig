@@ -14,10 +14,7 @@ ROOT = Path(__file__).parents[2]
 
 
 def _with_statistics(spec: ExperimentSpec, statistics: str) -> ExperimentSpec:
-    models = tuple(
-        statistics if model == "boltzmann" else model
-        for model in spec.physics.models
-    )
+    models = tuple(statistics if model == "boltzmann" else model for model in spec.physics.models)
     return spec.model_copy(
         update={
             "physics": spec.physics.model_copy(update={"models": models}),
@@ -50,18 +47,17 @@ def test_fermi_statistics_match_boltzmann_in_non_degenerate_limit(
     valid_spec: ExperimentSpec, tmp_path: Path
 ) -> None:
     equilibrium = valid_spec.model_copy(update={"study": EquilibriumStudy(kind="equilibrium")})
-    boltzmann = _run(
-        _with_statistics(equilibrium, "boltzmann"), tmp_path / "boltzmann"
-    )
+    boltzmann = _run(_with_statistics(equilibrium, "boltzmann"), tmp_path / "boltzmann")
     fermi = _run(_with_statistics(equilibrium, "fermi"), tmp_path / "fermi")
 
     for field in ("potential", "electron_density", "hole_density"):
         reference = boltzmann.datasets[field].values
         candidate = fermi.datasets[field].values
         scale = max(max(abs(value) for value in reference), 1.0)
-        assert max(
-            abs(left - right) for left, right in zip(reference, candidate, strict=True)
-        ) / scale < 0.03
+        assert (
+            max(abs(left - right) for left, right in zip(reference, candidate, strict=True)) / scale
+            < 0.03
+        )
 
 
 @pytest.mark.integration
@@ -104,5 +100,5 @@ def test_fermi_biased_transport_conserves_current(
     assert max(result.datasets["electron_density"].values) > 0
     assert max(result.datasets["hole_density"].values) > 0
     statistics_source = result.metadata["parameter_sources"]["carrier_statistics"]
-    assert "DEVSIM 2.9.1" in statistics_source["source"]
-    assert "novatom.fermi-gradient" in statistics_source["version"]
+    assert "Joyce-Dixon/Sommerfeld" in statistics_source["source"]
+    assert "kronig.joyce-dixon.matched" in statistics_source["version"]

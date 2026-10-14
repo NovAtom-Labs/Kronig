@@ -181,9 +181,123 @@ class DomainTools:
             data={"spec": spec.normalized()},
         )
 
+    def _contact_area_authority_response(self, spec: ExperimentSpec) -> ToolResponse | None:
+        """Bind physical area to supplied intent, never evidence or solver defaults."""
+
+        if self.research_intent is None:
+            return None
+        supplied = [
+            field
+            for field in self.research_intent.fields
+            if field.origin in {"researcher", "repository"}
+        ]
+        # Names are API labels. Resolve boundary roles through geometry or an
+        # explicit supplied location, without interpreting a device name.
+        locations = {"left": "x_min", "right": "x_max"}
+        locations.update(
+            {
+                field.path.removeprefix("contacts.").removesuffix(".location"): field.value
+                for field in supplied
+                if field.path.startswith("contacts.")
+                and field.path.endswith(".location")
+                and isinstance(field.value, str)
+            }
+        )
+        declarations: dict[str, list[tuple[str, object]]] = {
+            contact.id: [] for contact in spec.contacts
+        }
+        issues: list[dict[str, object]] = []
+
+        def bind(selector: str, path: str, value: object) -> None:
+            matches = [
+                contact
+                for contact in spec.contacts
+                if selector in {contact.id, str(contact.location)}
+                or locations.get(selector) == str(contact.location)
+            ]
+            if len(matches) != 1:
+                issues.append({"path": path, "reason": "unresolved_area_contact"})
+                return
+            declarations[matches[0].id].append((path, value))
+
+        for field in supplied:
+            if field.path == "contacts.area":
+                if isinstance(field.value, dict) and "magnitude_si" not in field.value:
+                    for selector, value in field.value.items():
+                        bind(selector, f"contacts.{selector}.area", value)
+                else:
+                    for contact in spec.contacts:
+                        if contact.kind != "insulating":
+                            declarations[contact.id].append((field.path, field.value))
+            elif re.fullmatch(r"contacts\.[a-z][a-z0-9_-]*\.area", field.path):
+                bind(field.path.split(".")[1], field.path, field.value)
+
+        for contact in spec.contacts:
+            path = f"contacts.{contact.id}.area"
+            confirmed = declarations[contact.id]
+            if not confirmed and contact.area is not None:
+                issues.append({"path": path, "reason": "unconfirmed_area"})
+            for source_path, supplied_area in confirmed:
+                try:
+                    expected = QuantityValue.model_validate(supplied_area).require("m^2", "area")
+                    if expected.to("m^2") <= 0:
+                        raise ValueError("contact area must be positive")
+                except (ValidationError, ValueError):
+                    issues.append(
+                        {
+                            "path": path,
+                            "intent_path": source_path,
+                            "reason": "invalid_confirmed_area",
+                        }
+                    )
+                    continue
+                if contact.area is None or contact.area.to("m^2") != expected.to("m^2"):
+                    issues.append(
+                        {
+                            "path": path,
+                            "intent_path": source_path,
+                            "reason": (
+                                "missing_confirmed_area"
+                                if contact.area is None
+                                else "changed_confirmed_area"
+                            ),
+                            "expected": expected.model_dump(mode="json"),
+                        }
+                    )
+        if not issues:
+            return None
+        unconfirmed_only = all(issue["reason"] == "unconfirmed_area" for issue in issues)
+        return ToolResponse(
+            status="refused",
+            code="scientific_input_authority_violation",
+            message=(
+                "Physical contact area must match an explicit researcher or repository "
+                "intent quantity with area dimensions. "
+                + (
+                    "Remove the unconfirmed area fields and retry, retaining the requested "
+                    "current-density outputs. Current density does not require area; "
+                    "do not ask for area to produce density outputs."
+                    if unconfirmed_only
+                    else "Retain the supplied area at its confirmed contact and value; "
+                    "repair the reported conflicts before retrying."
+                )
+            ),
+            data={
+                "issues": issues,
+                "repair_action": (
+                    "remove_unconfirmed_area_and_retry"
+                    if unconfirmed_only
+                    else "retain_confirmed_area_and_retry"
+                ),
+            },
+        )
+
     def prepare_experiment(self, payload: dict[str, object], *, backend: str) -> ToolResponse:
         try:
             spec = ExperimentSpec.model_validate(payload)
+            area_refusal = self._contact_area_authority_response(spec)
+            if area_refusal is not None:
+                return area_refusal
             if self.research_intent:
                 actual = {
                     "study." + spec.study.kind,
@@ -345,10 +459,11 @@ class DomainTools:
             if digest_value is None:
                 raise KeyError("approved_plan_digest")
             approved_plan_digest = str(digest_value)
-            # A bounded five-minute default accommodates nonlinear native
-            # studies. Explicit caller budgets still win and are recorded by
-            # the engine ledger; timeout never substitutes scientific output.
-            timeout_value = request.get("timeout_seconds", 300)
+            # A bounded ten-minute default accommodates refined nonlinear
+            # studies. This is a resource allowance, not scientific acceptance.
+            # Explicit caller budgets still win and are recorded by the engine
+            # ledger; timeout never substitutes scientific output.
+            timeout_value = request.get("timeout_seconds", 600)
             if not isinstance(timeout_value, (str, int, float)):
                 raise TypeError("timeout_seconds must be numeric")
             budget = RunBudget(seconds=float(timeout_value))

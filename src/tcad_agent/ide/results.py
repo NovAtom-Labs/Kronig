@@ -111,8 +111,6 @@ class WorkspaceResultReader:
         except ValidationError as exc:
             raise WorkspaceResultError("result manifest is malformed") from exc
         execution_state = manifest.execution_state or manifest.state
-        if execution_state != "completed":
-            raise WorkspaceResultError("result execution is not completed")
 
         artifacts_to_verify = set(self.required_artifacts) | set(manifest.artifacts)
         for artifact in artifacts_to_verify:
@@ -161,8 +159,8 @@ class WorkspaceResultReader:
         except ValidationError as exc:
             raise WorkspaceResultError("result bundle schema is malformed") from exc
 
-        if result.status != "completed":
-            raise WorkspaceResultError("canonical result is not completed")
+        if (result.status == "completed") != (execution_state == "completed"):
+            raise WorkspaceResultError("canonical execution state does not match the manifest")
         if result.backend != manifest.backend:
             raise WorkspaceResultError(
                 "canonical result backend does not match the manifest backend"

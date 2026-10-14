@@ -8,7 +8,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
-from tcad_agent.adapters.devsim import runtime
+from tcad_agent.adapters.devsim import density_solver, runtime, statistics
 from tcad_agent.adapters.devsim.extract import normalize_native_field
 from tcad_agent.adapters.devsim.models.materials import (
     SILICON_PARAMETER_SET_ID,
@@ -51,7 +51,7 @@ from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
 
 class DevsimAdapter:
-    compiler_version = "0.2.2"
+    compiler_version = "0.2.4"
 
     def __init__(self, manifest: CapabilityManifest) -> None:
         self._manifest = manifest
@@ -74,19 +74,32 @@ class DevsimAdapter:
         input_bytes = (payload.model_dump_json(indent=2) + "\n").encode()
         runtime_path = Path(runtime.__file__)
         runtime_bytes = runtime_path.read_bytes()
+        statistics_bytes = Path(statistics.__file__).read_bytes()
+        density_solver_bytes = Path(density_solver.__file__).read_bytes()
         workspace.mkdir(parents=True, exist_ok=False)
         input_path = workspace / "input.json"
         entrypoint = workspace / "run_devsim.py"
         input_path.write_bytes(input_bytes)
         entrypoint.write_bytes(runtime_bytes)
+        statistics_path = workspace / "devsim_statistics.py"
+        statistics_path.write_bytes(statistics_bytes)
+        density_solver_path = workspace / "devsim_density_solver.py"
+        density_solver_path.write_bytes(density_solver_bytes)
         return CompiledJob(
             backend="devsim",
             entrypoint=entrypoint,
             arguments=(str(input_path.name),),
             environment={},
-            input_files=(input_path, entrypoint),
+            input_files=(input_path, entrypoint, statistics_path, density_solver_path),
             input_digest=hashlib.sha256(input_bytes).hexdigest(),
-            runtime_digest=hashlib.sha256(runtime_bytes).hexdigest(),
+            runtime_digest=hashlib.sha256(
+                b"run_devsim.py\0"
+                + runtime_bytes
+                + b"\0devsim_statistics.py\0"
+                + statistics_bytes
+                + b"\0devsim_density_solver.py\0"
+                + density_solver_bytes
+            ).hexdigest(),
             compiler_version=self.compiler_version,
         )
 
@@ -255,10 +268,19 @@ class DevsimAdapter:
         if "fermi" in spec.physics.models:
             parameter_sources["carrier_statistics"] = {
                 "source": (
-                    "DEVSIM 2.9.1 Fermi/InvFermi primitives and Agent Kronig "
-                    "reviewed quasi-Fermi-gradient discretization"
+                    "Adapter-owned matched Joyce-Dixon/Sommerfeld approximation "
+                    "of normalized F_(1/2), positive inverse/forward consistency, "
+                    "and reviewed quasi-Fermi-gradient discretization; sampled "
+                    "independent density error below 0.22 percent, derivative below 0.62 percent"
                 ),
-                "version": "devsim-43b41ca+novatom.fermi-gradient.2026-09-29.v1",
+                "version": statistics.VERSION,
+            }
+            parameter_sources["current_decomposition"] = {
+                "source": (
+                    "Native quasi-Fermi-gradient edge current split into electrostatic "
+                    "drift and thermodynamic diffusion including local BGN band-gradient shift"
+                ),
+                "version": "novatom.fermi-current-decomposition.2026-10-14.v1",
             }
         if any(
             str(contact.kind) == "metal_work_function"
@@ -335,8 +357,7 @@ class DevsimAdapter:
                 "schema_version": "2.0",
                 "experiment_name": spec.name,
                 "profile_bias_values_v": (
-                    list(spec.profile_bias_values_v())
-                    if spec.profile_sampling else None
+                    list(spec.profile_bias_values_v()) if spec.profile_sampling else None
                 ),
                 "profile_sampling_provenance": (
                     spec.profile_sampling.model_dump(mode="json") if spec.profile_sampling else None
@@ -361,7 +382,8 @@ class DevsimAdapter:
                     "requested_precision": spec.solver.precision,
                     "precision": (
                         "extended"
-                        if spec.solver.precision == "backend_default" else spec.solver.precision
+                        if spec.solver.precision == "backend_default"
+                        else spec.solver.precision
                     ),
                 },
                 "study": study,
@@ -599,6 +621,14 @@ class DevsimAdapter:
         fields: dict[str, FieldSeries] = {}
         axes: dict[str, ScientificAxis] = {}
         datasets: dict[str, Dataset] = {}
+        fermi_decomposition = "current_decomposition" in data.get("parameter_sources", {})
+        component_names = {
+            "electron_drift_current_density",
+            "electron_diffusion_current_density",
+            "hole_drift_current_density",
+            "hole_diffusion_current_density",
+            "current_decomposition_residual",
+        }
         for name, field in data["fields"].items():
             positions, values, unit = normalize_native_field(field)
             fields[name] = FieldSeries(
@@ -614,22 +644,42 @@ class DevsimAdapter:
                 unit="m",
                 values=positions,
             )
+            metadata: dict[str, str] = {}
+            label = name.replace("_", " ").title()
+            if fermi_decomposition and name in component_names:
+                metadata = {
+                    "discretization": "native quasi-Fermi-gradient edge diagnostic",
+                    "reference_current": "native solved carrier current",
+                    "residual_definition": (
+                        "algebraic component reconciliation; not a continuity residual"
+                    ),
+                    "carrier_statistics": "fermi",
+                    "drift_definition": "electrostatic field times arithmetic edge carrier density",
+                    "diffusion_definition": (
+                        "thermodynamic diffusion including BGN band-gradient correction"
+                    ),
+                    "statistics_primitive": statistics.VERSION,
+                    "decomposition_version": "novatom.fermi-current-decomposition.2026-10-14.v1",
+                }
+                if "diffusion" in name:
+                    label = (
+                        f"{name.split('_')[0].title()} thermodynamic diffusion current density "
+                        "(includes band-gradient correction)"
+                    )
+            elif name == "current_decomposition_residual":
+                metadata = {
+                    "discretization": "continuum edge-centered diagnostic",
+                    "reference_current": "native solved carrier current",
+                }
             datasets[name] = Dataset(
                 id=name,
-                label=name.replace("_", " ").title(),
+                label=label,
                 unit=unit,
                 axes=(axis_id,),
                 shape=(len(values),),
                 centering=DatasetCentering(field.get("centering", "node")),
                 values=values,
-                metadata=(
-                    {
-                        "discretization": "continuum edge-centered diagnostic",
-                        "reference_current": "native solved carrier current",
-                    }
-                    if name == "current_decomposition_residual"
-                    else {}
-                ),
+                metadata=metadata,
             )
         study_axis = data.get("study_axis")
         if study_axis is None:
@@ -906,13 +956,14 @@ class DevsimAdapter:
                         normalized_values.extend(values)
                     datasets[name] = Dataset(
                         id=name,
-                        label=name.replace("_", " ").title(),
+                        label=datasets[name].label,
                         unit=unit,
                         axes=(operating_axis_id, axis_id),
                         shape=(len(operating_points), position_count),
                         centering=DatasetCentering(sweep.get("centering", "node")),
                         values=tuple(normalized_values),
                         validity=tuple(bool(value) for value in sweep["validity"]),
+                        metadata=datasets[name].metadata,
                     )
         frequency_points = data.get("frequency_points", [])
         if frequency_points:

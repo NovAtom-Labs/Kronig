@@ -40,6 +40,7 @@ def test_initial_failed_dc_attempt_counts_toward_retry_budget(retries):
         "AdaptiveStepController": runtime.AdaptiveStepController,
         "TransientRecoveryExhausted": runtime.TransientRecoveryExhausted,
         "_initial_dc_bias": runtime._initial_dc_bias,
+        "_native_dc_starting_controls": runtime._native_dc_starting_controls,
         "_bias_points": lambda study: [1.0],
         "payload": {
             "study": {"strategy": "adaptive", "minimum_step_v": 0.001, "maximum_retries": retries}
@@ -49,6 +50,7 @@ def test_initial_failed_dc_attempt_counts_toward_retry_budget(retries):
         "temperature": 300,
         "current_bias": 0.0,
         "equilibrium_predictor": False,
+        "positive_density_solver": None,
         "solver_events": [],
         "dc_absolute_error": 1e-10,
         "solver": {"relative_error": 1e-5, "maximum_iterations": 20},

@@ -1405,6 +1405,13 @@
     });
     root.append(workbench);
     workbench.append(header, statusBanner);
+    if (payload.result?.error) {
+      const diagnostic = element("section", "result-section result-section-error");
+      diagnostic.setAttribute("role", "alert");
+      diagnostic.append(element("h2", "", "Simulation diagnostics"),
+        element("p", "", String(payload.result.error)));
+      workbench.append(diagnostic);
+    }
     const section = (name, renderer, parent = workbench) => {
       try { parent.append(renderer()); }
       catch (error) {

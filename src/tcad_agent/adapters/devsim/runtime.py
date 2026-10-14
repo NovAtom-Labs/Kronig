@@ -11,6 +11,7 @@ import math
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -19,6 +20,105 @@ from typing import Any, cast
 
 class TransientRecoveryExhausted(RuntimeError):
     """Raised when a transient step cannot be reduced within reviewed bounds."""
+
+
+def physical_density_update_certificate(
+    iteration: dict[str, Any],
+    states: dict[str, dict[str, float]],
+    *,
+    absolute_limit: float,
+    relative_limit: float,
+    potential_coupled: bool = False,
+    density_updates: dict[str, dict[str, dict[str, float]]] | None = None,
+) -> dict[str, Any]:
+    """Conservative original-unit Newton norms for thermal-scaled log densities.
+
+    For n = Nc*exp(u/Vt), |delta n|/n_new <= expm1(|delta u|/Vt).
+    Native post-damping equation update maxima therefore bound the original
+    density norms, without accepting a small update in different units instead.
+    Pinned native relative errors sum all equation/region maxima; absolute
+    errors take the maximum of each region's sum. Both limits are strict.
+    """
+
+    def number(value: Any, *, positive: bool = False) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("density update evidence must be numeric")
+        value = float(value)
+        if not math.isfinite(value) or (value <= 0 if positive else value < 0):
+            raise ValueError("density update evidence must be finite and valid")
+        return value
+
+    absolute_limit = number(absolute_limit, positive=True)
+    relative_limit = number(relative_limit, positive=True)
+    carrier_fields = {
+        "ElectronContinuityEquation": "electron_density_max",
+        "HoleContinuityEquation": "hole_density_max",
+    }
+    try:
+        devices = iteration["devices"]
+        if len(devices) != 1:
+            raise ValueError("density update evidence must identify one native device")
+        for state in states.values():
+            for key in ("thermal_voltage_min", *carrier_fields.values()):
+                number(state[key], positive=True)
+        seen_regions: set[str] = set()
+        relative_bounds: list[float] = []
+        region_absolute_bounds: list[float] = []
+        for region in devices[0]["regions"]:
+            region_name = region["name"]
+            if region_name in seen_regions:
+                raise ValueError("duplicate region in density update evidence")
+            seen_regions.add(region_name)
+            potential_absolute = 0.0
+            if potential_coupled:
+                potential_rows = [
+                    row for row in region["equations"] if row["name"] == "PotentialEquation"
+                ]
+                if len(potential_rows) != 1:
+                    raise ValueError("missing potential update for coupled density coordinates")
+                potential_absolute = number(potential_rows[0]["absolute_error"])
+            seen_equations: set[str] = set()
+            absolute_bounds: list[float] = []
+            for row in region["equations"]:
+                name = row["name"]
+                if name in seen_equations:
+                    raise ValueError("duplicate equation in density update evidence")
+                seen_equations.add(name)
+                absolute = number(row["absolute_error"])
+                relative = number(row["relative_error"])
+                if name in carrier_fields:
+                    state = states[region_name]
+                    if density_updates is not None:
+                        physical = density_updates[region_name][name]
+                        absolute = number(physical["absolute_error"])
+                        relative = number(physical["relative_error"])
+                    else:
+                        relative = math.expm1(
+                            (absolute + potential_absolute) / state["thermal_voltage_min"]
+                        )
+                        absolute = state[carrier_fields[name]] * relative
+                    number(relative)
+                    number(absolute)
+                absolute_bounds.append(absolute)
+                relative_bounds.append(relative)
+            if "PotentialEquation" not in seen_equations or (
+                region_name in states and not set(carrier_fields) <= seen_equations
+            ):
+                raise ValueError("missing equation in density update evidence")
+            region_absolute_bounds.append(math.fsum(absolute_bounds))
+        if not set(states) <= seen_regions or not region_absolute_bounds:
+            raise ValueError("missing region in density update evidence")
+        absolute_bound = number(max(region_absolute_bounds))
+        relative_bound = number(math.fsum(relative_bounds))
+    except (KeyError, TypeError, OverflowError) as error:
+        raise ValueError("incomplete or invalid density update evidence") from error
+    return {
+        "absolute_error_bound": absolute_bound,
+        "relative_error_bound": relative_bound,
+        "absolute_limit": absolute_limit,
+        "relative_limit": relative_limit,
+        "passed": absolute_bound < absolute_limit and relative_bound < relative_limit,
+    }
 
 
 def _initial_dc_bias(
@@ -31,6 +131,27 @@ def _initial_dc_bias(
     if abs(target - current) <= step:
         return target
     return current + math.copysign(step, target - current)
+
+
+def _native_dc_starting_controls(
+    study: dict[str, Any], temperature: float, positive_density: bool
+) -> dict[str, Any]:
+    """Condition native Newton starts without changing the reported study grid.
+
+    Fixed requested operating points are still fixed output points. An internal
+    voltage homotopy is a numerical starting-state construction, not an added
+    experiment or a relaxation of the final physical acceptance. Explicit
+    adaptive controls and retry allowances remain authoritative.
+    """
+    controls = dict(study)
+    if positive_density and study.get("strategy") == "fixed":
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError("Invalid temperature for native DC conditioning")
+        controls.update(
+            strategy="adaptive",
+            minimum_step_v=8.617333262145e-5 * temperature / 128,
+        )
+    return controls
 
 
 def configure_numerical_precision(backend: Any, solver: dict[str, Any]) -> dict[str, Any]:
@@ -101,6 +222,42 @@ class AdaptiveStepController:
         self._step = min(self.maximum_step, self._step * self.growth_factor)
 
 
+def advance_fermi_blend(
+    apply_blend: Callable[[float], None],
+    try_solve: Callable[[], bool],
+    events: list[dict[str, Any]],
+) -> int:
+    """Adaptive starting-state homotopy, ending only at full Fermi statistics."""
+    controller = AdaptiveStepController(
+        initial_step=1.0, minimum_step=1 / 1024, maximum_step=1.0, maximum_retries=12
+    )
+    current = 0.0
+    for attempt in range(1, 257):
+        candidate = min(1.0, current + controller.candidate(1.0 - current))
+        apply_blend(candidate)
+        converged = try_solve()
+        if not isinstance(converged, bool):
+            raise ValueError("Native statistics initialization requires convergence evidence")
+        events.append(
+            {
+                "phase": "fermi_statistics_continuation",
+                "attempt": attempt,
+                "blend": candidate,
+                "outcome": "converged" if converged else "failed",
+            }
+        )
+        if not converged:
+            # Native info=False-convergence restores the previous solve state;
+            # the next trial applies its own complete model blend parameter.
+            controller.failed()
+        else:
+            current = candidate
+            if current == 1.0:
+                return attempt
+            controller.succeeded()
+    raise TransientRecoveryExhausted("Full Fermi statistics initialization did not converge")
+
+
 def waveform_voltage(study: dict[str, Any], time_s: float) -> float:
     """Evaluate an explicit transient waveform without simulator-specific state."""
 
@@ -134,43 +291,29 @@ def waveform_voltage(study: dict[str, Any], time_s: float) -> float:
 
 
 def _inverse_fermi_ratio(ratio: float) -> float:
-    """Pinned Joyce-Dixon inverse used by DEVSIM 2.9.1's native InvFermi."""
-
-    if ratio <= 0:
-        raise ValueError("Fermi carrier ratio must be positive")
-    breakpoint = 8.46296036621705
-    if ratio < breakpoint:
-        return (
-            math.log(ratio)
-            + 0.5 / math.sqrt(math.pi) * ratio
-            - 4.9500897298752622e-3 * ratio**2
-            + 1.4838577128872821e-4 * ratio**3
-            - 4.4256301190009895e-6 * ratio**4
-        )
-    return (
-        math.sqrt((0.75 * math.sqrt(math.pi) * ratio) ** (4.0 / 3.0) - math.pi**2 / 6.0)
-        - 0.0137050034663995
-    )
+    """Adapter-owned continuous approximation used consistently in native models."""
+    return _statistics_module().inverse_fermi(ratio)
 
 
 def _fermi_ratio(eta: float) -> float:
-    """Invert the pinned approximation with the same positive Newton update."""
+    """Positive inversion of the same approximation, with analytic derivative."""
+    return _statistics_module().fermi(eta)
 
-    ratio = max(math.exp(min(eta, 700.0)), 1e-300)
-    for _ in range(40):
-        value = _inverse_fermi_ratio(ratio) - eta
-        epsilon = max(ratio * 1e-7, 1e-12)
-        derivative = (
-            _inverse_fermi_ratio(ratio + epsilon)
-            - _inverse_fermi_ratio(max(ratio - epsilon, ratio * 0.5))
-        ) / (epsilon + min(epsilon, ratio * 0.5))
-        update = -value / derivative
-        while ratio + update <= 0:
-            update *= 0.5
-        ratio += update
-        if abs(update) <= 1e-13 * max(abs(ratio), 1.0):
-            break
-    return ratio
+
+def _statistics_module() -> Any:
+    if __package__:
+        from tcad_agent.adapters.devsim import statistics
+    else:
+        import devsim_statistics as statistics
+    return statistics
+
+
+def _density_solver_module() -> Any:
+    if __package__:
+        from tcad_agent.adapters.devsim import density_solver
+    else:
+        import devsim_density_solver as density_solver
+    return density_solver
 
 
 def _fermi_contact_state(
@@ -773,7 +916,80 @@ def main() -> int:
         profile["region"]: profile for profile in payload["physics"].get("temperature_profiles", [])
     }
     fermi_statistics = "fermi" in selected_models
+    positive_density_solver = None
+    native_solve = solve
+
+    def solve(**arguments: Any) -> Any:
+        if (
+            positive_density_solver is not None
+            and arguments.get("type") == "dc"
+            and positive_density_solver.carriers_active()
+        ):
+            result = positive_density_solver.solve(**arguments)
+            solver_events.append(
+                {
+                    "phase": "physical_density_newton_certificate",
+                    "outcome": "converged",
+                    **positive_density_solver.last_certificate,
+                }
+            )
+            return result
+        return native_solve(**arguments)
+
     if fermi_statistics:
+        statistics = _statistics_module()
+        statistical_models = statistics.NativeStatistics(devsim)
+        native_node_creator = CreateNodeModel
+        native_edge_creator = CreateEdgeModel
+        native_contact_creator = CreateContactNodeModel
+
+        def CreateNodeModel(device: str, region: str, model: str, expression: str) -> None:
+            native_node_creator(
+                device,
+                region,
+                model,
+                statistical_models.node_expression(device, region, expression),
+            )
+
+        def CreateNodeModelDerivative(
+            device: str, region: str, model: str, expression: str, *variables: str
+        ) -> None:
+            for variable in variables:
+                statistical_models.create_derivative(
+                    "node", {"device": device, "region": region}, model, expression, variable
+                )
+
+        def CreateEdgeModel(device: str, region: str, model: str, expression: str) -> None:
+            native_edge_creator(device, region, model, statistics.rewrite_inverse(expression))
+
+        def CreateEdgeModelDerivatives(
+            device: str, region: str, model: str, expression: str, variable: str
+        ) -> None:
+            for endpoint in ("n0", "n1"):
+                statistical_models.create_derivative(
+                    "edge",
+                    {"device": device, "region": region},
+                    model,
+                    expression,
+                    f"{variable}@{endpoint}",
+                )
+
+        def CreateContactNodeModel(device: str, contact: str, model: str, expression: str) -> None:
+            region = devsim.get_region_list(device=device, contact=contact)[0]
+            native_contact_creator(
+                device,
+                contact,
+                model,
+                statistical_models.node_expression(device, region, expression),
+            )
+
+        def CreateContactNodeModelDerivative(
+            device: str, contact: str, model: str, expression: str, variable: str
+        ) -> None:
+            statistical_models.create_derivative(
+                "contact_node", {"device": device, "contact": contact}, model, expression, variable
+            )
+
         set_parameter(device=device, name="FermiBlend", value=0.0)
     by_region: dict[str, list[dict[str, Any]]] = {region["id"]: [] for region in regions}
     for profile in payload["profiles"]:
@@ -1392,23 +1608,24 @@ def main() -> int:
     )
     solver_events.append({"phase": "poisson_initialization", "outcome": "converged", "attempt": 1})
     if fermi_statistics:
-        for continuation_step in range(1, 50):
-            blend = continuation_step / 50.0
+
+        def apply_statistics_blend(blend: float) -> None:
             set_parameter(device=device, name="FermiBlend", value=blend)
-            solve(
-                type="dc",
-                absolute_error=float(solver["electrostatic_absolute_error"]),
-                relative_error=float(solver["relative_error"]),
-                maximum_iterations=int(solver["maximum_iterations"]),
+
+        def solve_statistics_blend() -> bool:
+            return bool(
+                native_solve(
+                    type="dc",
+                    absolute_error=float(solver["electrostatic_absolute_error"]),
+                    relative_error=float(solver["relative_error"]),
+                    maximum_iterations=int(solver["maximum_iterations"]),
+                    info=True,
+                )["converged"]
             )
-            solver_events.append(
-                {
-                    "phase": "fermi_statistics_continuation",
-                    "outcome": "converged",
-                    "attempt": continuation_step,
-                    "blend": blend,
-                }
-            )
+
+        statistics_attempts = advance_fermi_blend(
+            apply_statistics_blend, solve_statistics_blend, solver_events
+        )
         for region in regions:
             if region["material"] != "silicon":
                 continue
@@ -1470,7 +1687,7 @@ def main() -> int:
             {
                 "phase": "fermi_statistics_finalization",
                 "outcome": "converged",
-                "attempt": 50,
+                "attempt": statistics_attempts + 1,
                 "blend": 1.0,
             }
         )
@@ -1918,42 +2135,73 @@ def main() -> int:
                         hole_current_expression,
                         variable,
                     )
-            if not fermi_statistics:
-                edge_from_node_model(device=device, region=name, node_model="Electrons")
-                edge_from_node_model(device=device, region=name, node_model="Holes")
-                electron_drift = (
-                    f"ElectronCharge*{electron_mobility_model}*"
-                    "0.5*(Electrons@n0+Electrons@n1)*ElectricField"
-                )
+            edge_from_node_model(device=device, region=name, node_model="Electrons")
+            edge_from_node_model(device=device, region=name, node_model="Holes")
+            electron_drift = (
+                f"ElectronCharge*{electron_mobility_model}*"
+                "0.5*(Electrons@n0+Electrons@n1)*ElectricField"
+            )
+            hole_drift = (
+                f"ElectronCharge*{hole_mobility_model}*0.5*(Holes@n0+Holes@n1)*ElectricField"
+            )
+            if fermi_statistics:
+                # Split the SAME chemical potentials as the solved native current.
+                # Electrostatic drift is -grad(Potential); thermodynamic diffusion
+                # includes the statistical chemical potential and local BGN band shift.
+                # Keeping the latter separately named avoids calling it density diffusion.
+                for fermi_carrier, fermi_density, fermi_dos, fermi_mobility, fermi_sign in (
+                    (
+                        "Electron",
+                        "Electrons",
+                        "EffectiveDensityConduction",
+                        electron_mobility_model,
+                        1,
+                    ),
+                    ("Hole", "Holes", "EffectiveDensityValence", hole_mobility_model, -1),
+                ):
+                    prefactor = (
+                        f"ElectronCharge*{fermi_mobility}*"
+                        f"0.5*({fermi_density}@n0+{fermi_density}@n1)"
+                    )
+                    density_diffusion = (
+                        f"{fermi_sign}*{prefactor}*V_t*EdgeInverseLength*"
+                        f"(InvFermi({fermi_density}@n1/{fermi_dos})-"
+                        f"InvFermi({fermi_density}@n0/{fermi_dos}))"
+                    )
+                    band_gradient = (
+                        f"{-fermi_sign}*{prefactor}*0.5*EdgeInverseLength*"
+                        "(BandGapNarrowing@n1-BandGapNarrowing@n0)"
+                    )
+                    CreateEdgeModel(
+                        device, name, f"{fermi_carrier}DensityDiffusionCurrent", density_diffusion
+                    )
+                    CreateEdgeModel(
+                        device, name, f"{fermi_carrier}BandGradientCurrent", band_gradient
+                    )
+                electron_diffusion = "ElectronDensityDiffusionCurrent+ElectronBandGradientCurrent"
+                hole_diffusion = "HoleDensityDiffusionCurrent+HoleBandGradientCurrent"
+            else:
                 electron_diffusion = (
                     f"ElectronCharge*{electron_mobility_model}*{thermal_voltage_edge_model}*"
                     "(Electrons@n1-Electrons@n0)*EdgeInverseLength"
-                )
-                hole_drift = (
-                    f"ElectronCharge*{hole_mobility_model}*0.5*(Holes@n0+Holes@n1)*ElectricField"
                 )
                 hole_diffusion = (
                     f"-ElectronCharge*{hole_mobility_model}*{thermal_voltage_edge_model}*"
                     "(Holes@n1-Holes@n0)*EdgeInverseLength"
                 )
-                for model_name, model_expression in (
-                    ("ElectronDriftCurrent", electron_drift),
-                    ("ElectronDiffusionCurrent", electron_diffusion),
-                    ("HoleDriftCurrent", hole_drift),
-                    ("HoleDiffusionCurrent", hole_diffusion),
-                ):
-                    CreateEdgeModel(device, name, model_name, model_expression)
-                decomposition_residual = (
-                    "ElectronCurrent+HoleCurrent-ElectronDriftCurrent-"
-                    "ElectronDiffusionCurrent-HoleDriftCurrent-"
-                    "HoleDiffusionCurrent"
-                )
-                CreateEdgeModel(
-                    device,
-                    name,
-                    "CurrentDecompositionResidual",
-                    decomposition_residual,
-                )
+            for model_name, model_expression in (
+                ("ElectronDriftCurrent", electron_drift),
+                ("ElectronDiffusionCurrent", electron_diffusion),
+                ("HoleDriftCurrent", hole_drift),
+                ("HoleDiffusionCurrent", hole_diffusion),
+            ):
+                CreateEdgeModel(device, name, model_name, model_expression)
+            decomposition_residual = (
+                "ElectronCurrent+HoleCurrent-ElectronDriftCurrent-"
+                "ElectronDiffusionCurrent-HoleDriftCurrent-"
+                "HoleDiffusionCurrent"
+            )
+            CreateEdgeModel(device, name, "CurrentDecompositionResidual", decomposition_residual)
         for contact in payload["contacts"]:
             if contact["kind"] == "insulating":
                 continue
@@ -1962,7 +2210,7 @@ def main() -> int:
                 if fermi_statistics:
                     backend_contact = _backend_contact_id(contact)
                     electrons, holes = carrier_contact_targets[contact["id"]]
-                    for variable, equation_name, target in (
+                    for variable, equation_name, carrier_target in (
                         (
                             "Electrons",
                             "ElectronContinuityEquation",
@@ -1971,7 +2219,7 @@ def main() -> int:
                         ("Holes", "HoleContinuityEquation", holes),
                     ):
                         model_name = f"{backend_contact}_{variable.lower()}_fermi"
-                        model = f"{variable}-{target:.17e}"
+                        model = f"{variable}-{carrier_target:.17e}"
                         CreateContactNodeModel(device, backend_contact, model_name, model)
                         CreateContactNodeModel(
                             device,
@@ -2054,7 +2302,7 @@ def main() -> int:
                     normal_sign = (-1 if contact["location"] == "x_min" else 1) * (
                         1 if variable == "Electrons" else -1
                     )
-                    density = (
+                    contact_density_model = (
                         "EffectiveDensityConduction"
                         if variable == "Electrons"
                         else "EffectiveDensityValence"
@@ -2073,13 +2321,17 @@ def main() -> int:
                     richardson = electron_richardson if variable == "Electrons" else hole_richardson
                     coefficient = f"{normal_sign}*{richardson:.17g}*{temperature:.17g}^2"
                     flux = (
-                        f"{coefficient}*({variable}@{contact_endpoint}/{density}-exp({eta_metal}))"
+                        f"{coefficient}*({variable}@{contact_endpoint}/"
+                        f"{contact_density_model}-exp({eta_metal}))"
                     )
                     if fermi_statistics:
                         surface = f"{flux_name}_surface"
                         metal = f"{flux_name}_metal"
                         for prefix, eta in (
-                            (surface, f"InvFermi({variable}@{contact_endpoint}/{density})"),
+                            (
+                                surface,
+                                f"InvFermi({variable}@{contact_endpoint}/{contact_density_model})",
+                            ),
                             (metal, eta_metal),
                         ):
                             for model_id, expression in _fermi_one_models(prefix, eta).items():
@@ -2172,6 +2424,17 @@ def main() -> int:
                         type="continuous",
                     )
         apply_fixed_interface_charge(coupled_transport=True)
+        if fermi_statistics and not is_circuit_study:
+            positive_density_solver = _density_solver_module().NativeDensitySolver(
+                devsim, device, payload, physical_density_update_certificate
+            )
+            positive_density_solver.prepare()
+            numerical_precision["dc_carrier_solver"] = {
+                "version": _density_solver_module().VERSION,
+                "coordinates": "thermal_scaled_log_density",
+                "physical_convergence_limits_unchanged": True,
+                "conservative_rows": bool(positive_density_solver.eligible),
+            }
         solve(
             type="dc",
             absolute_error=float(solver["carrier_absolute_error"]),
@@ -2524,6 +2787,11 @@ def main() -> int:
             else ("Potential",)
         )
     ]
+    if positive_density_solver is not None:
+        coordinates = _density_solver_module().COORDINATES
+        state_variables = [
+            (region, coordinates.get(variable, variable)) for region, variable in state_variables
+        ]
     for region_name, variable in state_variables:
         for checkpoint in ("Previous", "Recovery"):
             node_solution(device=device, region=region_name, name=f"{checkpoint}{variable}")
@@ -2613,15 +2881,18 @@ def main() -> int:
                 relative_error=float(solver["relative_error"]),
                 maximum_iterations=int(solver["maximum_iterations"]),
             )
-            for region in regions:
-                if region["material"] == "silicon":
-                    for variable in ("Electrons", "Holes"):
-                        set_node_values(
-                            device=device,
-                            region=region["id"],
-                            name=variable,
-                            init_from=f"Intrinsic{variable}",
-                        )
+            if positive_density_solver is not None:
+                positive_density_solver.reset_equilibrium_densities()
+            else:
+                for region in regions:
+                    if region["material"] == "silicon":
+                        for variable in ("Electrons", "Holes"):
+                            set_node_values(
+                                device=device,
+                                region=region["id"],
+                                name=variable,
+                                init_from=f"Intrinsic{variable}",
+                            )
             solver_events.append(
                 {
                     "phase": "stationary_equilibrium_predictor",
@@ -2648,7 +2919,22 @@ def main() -> int:
             assert study_backend_contact is not None
             checkpoint_state("Previous")
             checkpoint_state("Recovery")
-            study = payload["study"]
+            study = _native_dc_starting_controls(
+                payload["study"],
+                temperature,
+                positive_density_solver is not None and not equilibrium_predictor,
+            )
+            if study.get("strategy") != payload["study"].get("strategy"):
+                solver_events.append(
+                    {
+                        "phase": "native_fixed_grid_starting_state",
+                        "requested_bias_v": requested_bias,
+                        "reported_grid_strategy": payload["study"]["strategy"],
+                        "native_initialization_strategy": study["strategy"],
+                        "minimum_step_v": study["minimum_step_v"],
+                        "requested_points_preserved": True,
+                    }
+                )
             first_bias = (
                 bias
                 if equilibrium_predictor
@@ -2660,6 +2946,10 @@ def main() -> int:
             failed_initial_attempt = False
             try:
                 predict_stationary_equilibrium(first_bias)
+                if positive_density_solver is not None and not equilibrium_predictor:
+                    positive_density_solver.predict_voltage(
+                        first_bias - current_bias, driven_contact["location"]
+                    )
                 solve(
                     type="dc",
                     absolute_error=dc_absolute_error,
@@ -2734,6 +3024,10 @@ def main() -> int:
                         attempts += 1
                         try:
                             predict_stationary_equilibrium(candidate)
+                            if positive_density_solver is not None and not equilibrium_predictor:
+                                positive_density_solver.predict_voltage(
+                                    candidate - left, driven_contact["location"]
+                                )
                             solve(
                                 type="dc",
                                 absolute_error=dc_absolute_error,

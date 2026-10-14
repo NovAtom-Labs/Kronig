@@ -154,14 +154,28 @@ the full requested equations before extracting DC or AC results. Interface trap 
 surface kinetics do not use that predictor. Numerical initialization does not substitute
 for the carrier continuity equations, alter physical inputs, or relax validation limits.
 
+Fixed reported DC points can use internal voltage continuation to construct a
+convergent native starting state. The point list and order remain unchanged;
+internal points are recorded as numerical initialization, not additional
+reported measurements. The positive-density path retains original retry
+allowances and final physical acceptance limits.
+
+Biased carrier transport reports separate electron and hole quasi-Fermi levels.
+A single Fermi-level request is refused when conducting reservoirs have different
+voltages or the study is nonequilibrium, rather than presenting their average as a
+physical Fermi level. Stationary dielectric gating with a common carrier reservoir
+is distinguished by boundary semantics, not by device name.
+
 The agent-facing quantity schema accepts explicit unit strings such as `4.1 eV` and
 `0.1 V`; conversion is deterministic and work function remains an energy, not a voltage.
 Compiled plans stay complete in repository artifacts and internal records. Conversational
 tool responses reference those artifacts without copying large native meshes into the
 model's context. Follow-up answers preserve unrelated confirmed physics and analyses.
 
-See the [live researcher verification report](docs/verification/2026-10-13-exact-researcher-workflows.md)
-for the tested conditions, timing measurements, and the original junction contact limitation.
+See the [current Schottky/Fermi/Klaassen verification](docs/verification/2026-10-14-fermi-klaassen-convergence.md)
+for convergence, approximation accuracy, live workflow timing and interactive-result
+evidence. The [earlier researcher workflow report](docs/verification/2026-10-13-exact-researcher-workflows.md)
+records historical behavior and the contact limitation that this work addressed.
 
 ### Adaptive scientific research
 
@@ -190,12 +204,13 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 - No arbitrary model-written simulator syntax.
 - No process simulation, noise, optical, thermal, mechanical, quantum, hydrodynamic, ballistic, or arbitrary circuit co-simulation.
 - No automated calibration against fabrication measurements.
-- Fermi transport includes reviewed one-dimensional silicon ohmic and Schottky equilibrium/DC benchmarks. The ohmic high-doping reference remains `5e19 cm^-3`; this is a benchmark, not a blanket convergence guarantee. Fermi drift/diffusion decomposition and combined Fermi/Schottky AC, frequency and transient response remain refused.
+- Fermi transport includes reviewed one-dimensional silicon ohmic and Schottky equilibrium/DC benchmarks. The ohmic high-doping reference remains `5e19 cm^-3`; this is a benchmark, not a blanket convergence guarantee. Fermi drift/diffusion decomposition is supported using the same native quasi-Fermi-gradient equations, including band-gap-narrowing gradients. Combined Fermi/Schottky AC, frequency and transient response remain refused.
 - Silicon Schottky contacts use statistics-consistent Boltzmann or Fermi thermionic reservoirs with the actual local band gap, DOS and BGN reference. Benchmarks include both-metal equilibrium, current conservation, contact passivity, temperature variation and the original Al/p-Si/n-Si/Al study at `0,+2,-2 V`. Image-force lowering, tunneling and distributed contact states are not silently added.
-- Agent-driven simulator execution has a bounded five-minute default budget. An explicit caller timeout takes precedence and is recorded in execution provenance. A timeout or failed solve stays visible; it is not an accepted result.
+- Agent-driven simulator execution has a bounded ten-minute default budget, allowing refined nonlinear meshes to finish without weakening scientific acceptance. An explicit caller timeout takes precedence and is recorded in execution provenance. The budget is a maximum, not a mandatory wait. A timeout or failed solve stays visible; it is not an accepted result.
 - Surface physics supports surface SRH and one charged single-level donor or acceptor trap. Trap distributions, tunneling, frequency dispersion, and Philips-style surface mobility remain outside the reviewed one-dimensional boundary.
 - Prescribed spatial temperature supports positive constant, linear, piecewise-constant, or tabulated silicon profiles with reviewed local material and transport terms under equilibrium or DC. It is not a heat-flow or self-heating solve, and unbenchmarked model and study combinations are refused.
-- Drift and diffusion current components are explicit continuum diagnostics for Boltzmann transport. The native Scharfetter-Gummel total and their reconciliation residual remain visible; the diagnostic is not presented as native solver state.
+- Boltzmann drift and diffusion components are continuum diagnostics compared with the native Scharfetter-Gummel current. Fermi components split the native quasi-Fermi-gradient current into electrostatic drift and thermodynamic diffusion, explicitly including band-gradient corrections. The reconciliation residual is calculated from actual currents; it is not a continuity-equation residual or independent proof of physical accuracy. Definitions and references are in [current decomposition guidance](knowledge-sources/curated/devsim-current-decomposition.md).
+- Fermi density transport uses an adapter-owned matched Joyce-Dixon/Sommerfeld approximation, correcting native branch and derivative inconsistencies. Independent integral benchmarks show sampled density error below 0.22 percent and derivative error below 0.62 percent; this is not exact quadrature. DC solves use positive density coordinates and conservative matrix conditioning without dropping models or relaxing physical acceptance. The uniform `5 nm`, two-Schottky, Fermi/Klaassen/SRH `1 us`/Auger/Slotboom reference completed `-2,0,+2 V` in 238 seconds with all 12 applicable checks passed. Other meshes, doping and voltages still require their own convergence and scientific checks.
 - Parameter studies are restricted to the registered model-parameter paths. Arbitrary runtime paths and arbitrary material values are rejected.
 - DC sweeps retain every requested terminal operating point plus bias-indexed spatial profiles. Failed solves remain explicit and are masked as gaps in the scientific viewer.
 - Licensed Sentaurus execution remains unavailable until a separate host, exact simulator version, extractor, signing keys, quotas, and conformance cases are configured and verified.
@@ -234,7 +249,9 @@ Completed managed experiment bundles open in the center pane as a Results Workbe
 
 When a foreground agent run registers a hash-verified canonical result, Agent Kronig opens the workbench automatically for both passed and needs-review validation outcomes. Three separate assessments describe execution, scientific checks, and requested output coverage. A solver can finish and deliver the requested plots while a physical consistency check still needs review. Missing evidence is not treated as a passing check. Ordinary JSON files continue to use the generic file viewer.
 
-Saved Results in the repository pane reopens verified scientific bundles after an app restart, without restoring repository chat memory. File sizes, hashes, bundle identity, and workspace scope are checked before plotting. Recalculate prepares a fresh plan and waits for review rather than silently running the old request. Eligible numerical recovery actions likewise produce a separate reviewed plan, preserve the original result, and record the changed numerical settings and both bundle identities. Scientific inputs and acceptance limits remain unchanged. A finer mesh is not a guarantee that a scientific warning will disappear.
+The repository pane has one compact **Browse saved results** entry and a count, not a growing list of run cards. It opens a searchable library in the central workspace, newest first, with 20 studies per page. Results, original plans, reports, and reviewed recalculation remain accessible there. Browsing does not delete saved evidence or discard an unsaved file edit.
+
+Saved results reopen verified scientific bundles after an app restart, without restoring repository chat memory. File sizes, hashes, bundle identity, and workspace scope are checked before plotting. Recalculate prepares a fresh plan and waits for review rather than silently running the old request. Eligible numerical recovery actions likewise produce a separate reviewed plan, preserve the original result, and record the changed numerical settings and both bundle identities. Scientific inputs and acceptance limits remain unchanged. A finer mesh is not a guarantee that a scientific warning will disappear.
 
 The workbench distinguishes bias operating points from AC frequency samples, highlights requested profile points while retaining all computed points, and shows units, residuals, scales, tolerances, and applicability for checks. The plan input ledger separates researcher-reviewed inputs, derived values, expert settings, platform settings, and simulator implementation details. These categories describe review responsibility, not proof of who originally supplied each value.
 

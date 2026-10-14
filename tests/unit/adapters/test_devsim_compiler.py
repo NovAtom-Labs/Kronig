@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 
 import pytest
 
@@ -8,9 +10,32 @@ from tcad_agent.domain.models import ExperimentSpec, Observable
 from tcad_agent.domain.profiles import GaussianProfile
 
 
-def test_compiler_is_deterministic_and_name_agnostic(
-    valid_spec: ExperimentSpec, tmp_path
-) -> None:
+def test_compiled_workspace_carries_its_statistical_kernel_without_project_install(
+    valid_spec, tmp_path
+):
+    job = DevsimAdapter.from_defaults().compile(valid_spec, tmp_path / "standalone")
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            (
+                "import sys,runpy;sys.path.insert(0,sys.argv[1]);"
+                "m=runpy.run_path(sys.argv[1]+'/run_devsim.py');"
+                "print(m['_fermi_ratio'](0))"
+            ),
+            str(job.entrypoint.parent),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert float(completed.stdout) == pytest.approx(0.765162841, rel=0.001)
+    assert "devsim_statistics.py" in {path.name for path in job.input_files}
+
+
+def test_compiler_is_deterministic_and_name_agnostic(valid_spec: ExperimentSpec, tmp_path) -> None:
     adapter = DevsimAdapter.from_defaults()
     first = adapter.compile(valid_spec, tmp_path / "first")
     renamed = valid_spec.model_copy(update={"name": "arbitrary-research-structure"})
@@ -19,9 +44,7 @@ def test_compiler_is_deterministic_and_name_agnostic(
     assert first.input_digest != second.input_digest
     assert first.entrypoint.name == "run_devsim.py"
     compiled_input = json.loads(first.input_files[0].read_text())
-    assert compiled_input["sign_convention"]["terminal_current"] == (
-        "positive_into_device"
-    )
+    assert compiled_input["sign_convention"]["terminal_current"] == ("positive_into_device")
     assert compiled_input["solver"] == {
         "precision": "extended",
         "requested_precision": "backend_default",
@@ -34,18 +57,14 @@ def test_compiler_is_deterministic_and_name_agnostic(
     }
 
 
-def test_compiler_rejects_without_writing_files(
-    unsupported_spec: ExperimentSpec, tmp_path
-) -> None:
+def test_compiler_rejects_without_writing_files(unsupported_spec: ExperimentSpec, tmp_path) -> None:
     workspace = tmp_path / "rejected"
     with pytest.raises(CapabilityError):
         DevsimAdapter.from_defaults().compile(unsupported_spec, workspace)
     assert not workspace.exists()
 
 
-def test_compiler_accepts_reviewed_band_observable(
-    valid_spec: ExperimentSpec, tmp_path
-) -> None:
+def test_compiler_accepts_reviewed_band_observable(valid_spec: ExperimentSpec, tmp_path) -> None:
     workspace = tmp_path / "band-observable"
     spec = valid_spec.model_copy(
         update={"observables": (*valid_spec.observables, Observable.CONDUCTION_BAND)}

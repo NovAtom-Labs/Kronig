@@ -12,6 +12,16 @@ from pydantic import Field, model_validator
 from tcad_agent.capabilities.models import CapabilityManifest
 from tcad_agent.domain.models import StrictModel
 
+_CURRENT_DECOMPOSITION_OBSERVABLES = frozenset(
+    {
+        "electron_drift_current_density",
+        "electron_diffusion_current_density",
+        "hole_drift_current_density",
+        "hole_diffusion_current_density",
+        "current_decomposition_residual",
+    }
+)
+
 
 class CapabilityMaturity(StrEnum):
     REVIEWED = "reviewed"
@@ -234,6 +244,15 @@ class CapabilityCatalog(StrictModel):
                                 if category == "study"
                                 and value in {"ac", "frequency"}
                                 and manifest.backend == "devsim"
+                                else ""
+                            )
+                            + (
+                                "; with Fermi statistics, current decomposition is supported for "
+                                "equilibrium, DC, temperature and parameter studies; AC, frequency "
+                                "and transient diagnostics require separate benchmarks"
+                                if manifest.backend == "devsim"
+                                and category == "observable"
+                                and value in _CURRENT_DECOMPOSITION_OBSERVABLES
                                 else ""
                             )
                         ),
@@ -599,6 +618,8 @@ def _legacy_evidence_refs(
     base = (f"adapter-manifest:{backend}:{adapter_version}",)
     if backend != "devsim":
         return base
+    if category == "observable" and value in _CURRENT_DECOMPOSITION_OBSERVABLES:
+        return (*base, "knowledge-sources/curated/devsim-current-decomposition.md")
     curated = {
         ("model", "fermi"): "knowledge-sources/curated/devsim-fermi-transport.md",
         ("contact", "metal_work_function"): (

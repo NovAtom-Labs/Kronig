@@ -222,6 +222,11 @@ def test_original_aluminum_structure_with_fermi_executes_both_bias_polarities(va
                 "auger_recombination_rate",
                 "total_recombination_rate",
                 "band_gap_narrowing",
+                "electron_drift_current_density",
+                "electron_diffusion_current_density",
+                "hole_drift_current_density",
+                "hole_diffusion_current_density",
+                "current_decomposition_residual",
             ),
         }
     )
@@ -250,6 +255,35 @@ def test_original_aluminum_structure_with_fermi_executes_both_bias_polarities(va
     currents = [point.terminal_currents_a_per_m2["anode"] for point in result.bias_points]
     assert currents[1] * currents[2] < 0
     assert max(abs(v) for v in result.bias_points[0].terminal_currents_a_per_m2.values()) < 1e-3
+    components = (
+        "electron_drift_current_density",
+        "electron_diffusion_current_density",
+        "hole_drift_current_density",
+        "hole_diffusion_current_density",
+    )
+    scale = max(abs(v) for name in components for v in result.datasets[name].values)
+    residual = result.datasets["current_decomposition_residual"]
+    assert max(abs(v) for v in residual.values) < max(1e-7, scale * 1e-12)
+    assert residual.metadata["discretization"] == "native quasi-Fermi-gradient edge diagnostic"
+    assert residual.metadata["carrier_statistics"] == "fermi"
+    assert "band-gradient" in result.datasets["electron_diffusion_current_density"].label
+    assert "band-gradient" in result.datasets["hole_diffusion_current_density"].label
+    assert "current_decomposition" in result.metadata["parameter_sources"]
+    for name in (*components, "current_decomposition_residual"):
+        dataset = result.datasets[name]
+        assert dataset.unit == "A/m^2"
+        assert dataset.centering == "edge"
+        assert dataset.axes[0] == "bias" and dataset.shape[0] == 3
+    edge_count = result.datasets[components[0]].shape[1]
+    equilibrium_scale = max(
+        abs(v) for name in components for v in result.datasets[name].values[:edge_count]
+    )
+    for carrier in ("electron", "hole"):
+        drift = result.datasets[f"{carrier}_drift_current_density"].values[:edge_count]
+        diffusion = result.datasets[f"{carrier}_diffusion_current_density"].values[:edge_count]
+        assert max(abs(d + f) for d, f in zip(drift, diffusion, strict=True)) < max(
+            1e-3, equilibrium_scale * 1e-10
+        )
     for point in result.bias_points:
         values = tuple(point.terminal_currents_a_per_m2.values())
         assert abs(sum(values)) <= 1e-6 + 0.005 * max(abs(v) for v in values)
@@ -490,3 +524,240 @@ def test_biased_fermi_schottky_current_converges_under_mesh_refinement(valid_spe
         values = tuple(result.bias_points[-1].terminal_currents_a_per_m2.values())
         assert abs(sum(values)) < 1e-6 + 0.005 * max(abs(value) for value in values)
     assert currents[0] == pytest.approx(currents[1], rel=0.02)
+
+
+@pytest.mark.integration
+def test_native_fermi_klaassen_current_jacobians_match_both_carriers(valid_spec, tmp_path):
+    base = _metal_fermi(valid_spec, both=True, bgn=True)
+    spec = base.model_copy(
+        update={
+            "physics": base.physics.model_copy(
+                update={
+                    "models": tuple(
+                        "klaassen_mobility" if str(m) == "constant_mobility" else m
+                        for m in base.physics.models
+                    )
+                }
+            )
+        }
+    )
+    job = DevsimAdapter.from_defaults().compile(
+        ExperimentSpec.model_validate(spec.model_dump(warnings=False)), tmp_path / "native"
+    )
+    program = """
+import json,sys,runpy,devsim as d
+sys.argv=['run_devsim.py','input.json'];ns=runpy.run_path('run_devsim.py');assert ns['main']()==0
+device='novatom_device';out=[]
+for region in d.get_region_list(device=device):
+ kw={'device':device,'region':region}
+ xs=list(d.get_node_model_values(**kw,name='x'))
+ d.set_node_values(**kw,name='Electrons',values=[1e17]*len(xs))
+ d.set_node_values(**kw,name='Holes',values=[1e17]*len(xs))
+ d.set_node_values(**kw,name='Potential',values=[100*x for x in xs])
+ for current in ('ElectronCurrent','HoleCurrent'):
+  for variable in ('Potential','Electrons','Holes'):
+   original=list(d.get_node_model_values(**kw,name=variable))
+   for index in (0,1):
+    endpoint='n0' if index==0 else 'n1'
+    expected=d.get_edge_model_values(**kw,name=f'{current}:{variable}@{endpoint}')[0]
+    h=1e-7 if variable=='Potential' else 1e13
+    evaluated=[]
+    for sign in (1,-1):
+     changed=original.copy();changed[index]+=sign*h
+     d.set_node_values(**kw,name=variable,values=changed)
+     evaluated.append(d.get_edge_model_values(**kw,name=current)[0])
+    d.set_node_values(**kw,name=variable,values=original)
+    measured=(evaluated[0]-evaluated[1])/(2*h)
+    out.append([region,current,variable,endpoint,measured,expected])
+print('JACOBIAN_JSON='+json.dumps(out))
+"""
+    completed = subprocess.run(
+        [str(resolve_devsim_python(ROOT)), "-c", program],
+        cwd=job.entrypoint.parent,
+        text=True,
+        capture_output=True,
+        timeout=90,
+    )
+    assert completed.returncode == 0, completed.stderr[-6000:]
+    rows = json.loads(completed.stdout.split("JACOBIAN_JSON=")[-1])
+    assert len(rows) == 24
+    for region, current, variable, endpoint, measured, expected in rows:
+        assert measured == pytest.approx(expected, rel=2e-5, abs=1e-30), (
+            region,
+            current,
+            variable,
+            endpoint,
+            measured,
+            expected,
+        )
+
+
+def _fine_fermi_klaassen_spec(valid_spec):
+    base = _metal_fermi(valid_spec, both=True, bgn=True)
+    spec = base.model_copy(
+        update={
+            "regions": tuple(
+                region.model_copy(
+                    update={
+                        "x0": QuantityValue.model_validate(f"{index} um"),
+                        "x1": QuantityValue.model_validate(f"{index + 1} um"),
+                        "mesh_spacing": QuantityValue.model_validate("5 nm"),
+                    }
+                )
+                for index, region in enumerate(base.regions)
+            ),
+            "profiles": tuple(
+                p.model_copy(update={"value": QuantityValue.model_validate("1e17 cm^-3")})
+                for p in base.profiles
+            ),
+            "physics": base.physics.model_copy(
+                update={
+                    "models": tuple(
+                        "klaassen_mobility" if str(m) == "constant_mobility" else m
+                        for m in base.physics.models
+                    ),
+                    "parameters": base.physics.parameters.model_copy(
+                        update={
+                            "electron_lifetime": QuantityValue.model_validate("1 us"),
+                            "hole_lifetime": QuantityValue.model_validate("1 us"),
+                        }
+                    ),
+                }
+            ),
+            "study": DCPointsStudy.model_validate(
+                {
+                    "kind": "dc_points",
+                    "contact": "anode",
+                    "values": ["0 V", "-0.01 V"],
+                    "strategy": "adaptive",
+                    "minimum_step": "0.001 V",
+                    "maximum_retries": 12,
+                }
+            ),
+        }
+    )
+    return ExperimentSpec.model_validate(spec.model_dump(warnings=False))
+
+
+@pytest.mark.integration
+def test_fermi_klaassen_metal_current_converges_on_uniform_fine_mesh(valid_spec, tmp_path):
+    spec = _fine_fermi_klaassen_spec(valid_spec)
+    result = _run(spec, tmp_path / "native")
+    assert all(point.converged for point in result.bias_points), result.bias_points
+
+
+@pytest.mark.integration
+def test_fermi_klaassen_handles_asymmetric_inputs_without_device_name_rules(valid_spec, tmp_path):
+    payload = _fine_fermi_klaassen_spec(valid_spec).model_dump(mode="json")
+    payload["name"] = "arbitrary-asymmetric-conducting-stack"
+    for region, start, stop in zip(
+        payload["regions"], ("0 um", "0.7 um"), ("0.7 um", "2 um"), strict=True
+    ):
+        region.update(x0=start, x1=stop, mesh_spacing="10 nm")
+    for profile, value in zip(payload["profiles"], ("7e16 cm^-3", "3e17 cm^-3"), strict=True):
+        profile["value"] = value
+    for contact, work_function in zip(payload["contacts"], ("4.25 eV", "4.40 eV"), strict=True):
+        contact["work_function"] = work_function
+    payload["physics"]["temperature"] = "315 K"
+    payload["study"] = {
+        "kind": "dc_points",
+        "contact": "cathode",
+        "strategy": "fixed",
+        "values": ["0 V", "-0.04 V", "0.03 V"],
+    }
+    spec = ExperimentSpec.model_validate(payload)
+    result = _run(spec, tmp_path / "native")
+    assert [point.bias_v for point in result.bias_points] == [0, -0.04, 0.03]
+    assert all(point.converged for point in result.bias_points)
+    assert ValidationEngine().validate(result, spec=spec).overall == "passed"
+
+
+@pytest.mark.integration
+def test_fermi_klaassen_full_bias_convergence_diagnostic(valid_spec, tmp_path):
+    spec = _fine_fermi_klaassen_spec(valid_spec)
+    spec = spec.model_copy(
+        update={
+            "study": DCPointsStudy.model_validate(
+                {
+                    "kind": "dc_points",
+                    "contact": "anode",
+                    "values": ["-2 V", "0 V", "2 V"],
+                    "strategy": "fixed",
+                    "maximum_retries": 12,
+                }
+            )
+        }
+    )
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(
+            ExperimentSpec.model_validate(spec.model_dump(warnings=False)), tmp_path / "native"
+        ),
+        RunBudget(seconds=300),
+    )
+    result = adapter.normalize(native)
+    assert result.status == "completed", native.stderr_path.read_text()
+    assert [point.bias_v for point in result.bias_points] == [-2, 0, 2]
+    assert all(point.converged for point in result.bias_points), result.bias_points
+    assert ValidationEngine().validate(result, spec=spec).overall == "passed"
+    assert json.loads((tmp_path / "native/input.json").read_text())["study"]["strategy"] == "fixed"
+    starts = [
+        event
+        for event in result.metadata["solver_events"]
+        if event["phase"] == "native_fixed_grid_starting_state"
+    ]
+    assert len(starts) == 3 and all(event["requested_points_preserved"] for event in starts)
+
+
+@pytest.mark.integration
+def test_native_recovery_checkpoint_preserves_fermi_klaassen_newton_state(valid_spec, tmp_path):
+    spec = _fine_fermi_klaassen_spec(valid_spec)
+    spec = spec.model_copy(
+        update={
+            "study": DCPointsStudy.model_validate(
+                {"kind": "dc_points", "contact": "anode", "values": ["0 V"]}
+            )
+        }
+    )
+    job = DevsimAdapter.from_defaults().compile(
+        ExperimentSpec.model_validate(spec.model_dump(warnings=False)), tmp_path / "native"
+    )
+    program = """
+import json,sys,runpy,devsim as d
+sys.argv=['run_devsim.py','input.json'];ns=runpy.run_path('run_devsim.py');assert ns['main']()==0
+device='novatom_device';regions=d.get_region_list(device=device)
+coordinates={region:[d.get_equation_command(device=device,region=region,name=eq)['variable_name']
+ for eq in d.get_equation_list(device=device,region=region)] for region in regions}
+saved={(r,v):list(d.get_node_model_values(device=device,region=r,name=v))
+       for r in regions for v in ('Potential','Electrons','Holes')}
+for region in regions:
+ for variable in coordinates[region]:
+  d.set_node_values(device=device,region=region,name='Recovery'+variable,init_from=variable)
+d.set_parameter(device=device,name='contact_0_bias',value=-0.10340799914574)
+failed=False
+try:d.solve(type='dc',absolute_error=1e-100,relative_error=1e-100,maximum_iterations=1)
+except d.error:failed=True
+for region in regions:
+ for variable in coordinates[region]:
+  d.set_node_values(device=device,region=region,name=variable,init_from='Recovery'+variable)
+assert all(list(d.get_node_model_values(device=device,region=r,name=v))==values
+           for (r,v),values in saved.items())
+d.set_parameter(device=device,name='contact_0_bias',value=-0.01)
+converged=True
+solver=d.get_parameter(name='solver_callback').__self__
+solver.predict_voltage(-0.01,'x_min')
+try:solver.solve(type='dc',absolute_error=1e10,relative_error=1e-6,maximum_iterations=80)
+except (d.error,RuntimeError,ValueError):converged=False
+print('RECOVERY_JSON='+json.dumps({'initial_failed':failed,'recovery_converged':converged}))
+"""
+    completed = subprocess.run(
+        [str(resolve_devsim_python(ROOT)), "-c", program],
+        cwd=job.entrypoint.parent,
+        text=True,
+        capture_output=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stderr[-6000:]
+    state = json.loads(completed.stdout.split("RECOVERY_JSON=")[-1])
+    assert state["initial_failed"], state
+    assert state["recovery_converged"], state

@@ -114,6 +114,11 @@ let sendingPrompt = false;
 let activeFile = null;
 let activeResult = null;
 let resultComparisonHistory = [];
+let savedResultEntries = [];
+let savedResultNotice = "";
+let savedResultQuery = "";
+let savedResultPage = 0;
+const savedResultPageSize = 20;
 let editingFile = null;
 let fileRequestGeneration = 0;
 let selectedRunId = null;
@@ -127,6 +132,10 @@ let activePreparation = null;
 let activePlan = null;
 let clarificationRenderSignature = "";
 let activeClarificationIndex = 0;
+let clarificationRequestGeneration = 0;
+let clarificationSubmitting = false;
+let clarificationSubmissionToken = null;
+const answeredClarificationRevisions = new Map();
 let lastErrorEnvelope = null;
 const navigationGuard = window.AgentKronigIDEState.createNavigationGuard();
 const repositoryRequests = window.AgentKronigIDEState.createRepositoryRequestCoordinator();
@@ -302,7 +311,12 @@ function renderWorkspace(workspace) {
   gitState.textContent = workspace.git.available
     ? `${workspace.git.branch || "DETACHED"}${workspace.git.dirty ? " · MODIFIED" : " · CLEAN"}`
     : "NO GIT";
-  if (changedWorkspace) closeFileViewer();
+  if (changedWorkspace) {
+    savedResultQuery = "";
+    savedResultPage = 0;
+    renderExperimentProjects([]);
+    closeFileViewer();
+  }
 }
 
 function closeFileViewer() {
@@ -548,7 +562,9 @@ function renderFileContent(mode = "preview") {
   setViewerNotice(activeFile.truncated ? "This is a truncated preview of a large file." : "");
   fileViewerPreview.classList.toggle("is-active", mode === "preview");
   fileViewerSource.classList.toggle("is-active", mode === "source");
-  if (mode === "source") {
+  if (activeFile.kind === "result_library") {
+    renderSavedResultsLibrary();
+  } else if (mode === "source") {
     renderSource(activeFile.content);
   } else if (activeResult) {
     window.AgentKronigResults.render(
@@ -675,8 +691,9 @@ async function openManagedResult(runId) {
 async function openSavedResult(bundleRunId) {
   const workspaceId = activeWorkspace?.id;
   if (!workspaceId) return;
+  const requestGeneration = ++fileRequestGeneration;
   const payload = await api(`/api/workspaces/${workspaceId}/saved-results/${encodeURIComponent(bundleRunId)}`);
-  if (activeWorkspace?.id !== workspaceId) return;
+  if (activeWorkspace?.id !== workspaceId || requestGeneration !== fileRequestGeneration) return;
   showCanonicalResult({path: payload.canonical_path, name: "canonical.json", size: 0}, payload);
 }
 
@@ -799,12 +816,76 @@ async function refreshCurrentRepository() {
 }
 
 function renderExperimentProjects(experiments = [], notice = "") {
+  savedResultEntries = [...experiments].sort((a, b) => (b.modified_at || 0) - (a.modified_at || 0));
+  savedResultNotice = notice;
   clearNode(experimentProjectList);
   experimentProjectCount.textContent = String(experiments.length);
   experimentProjects.hidden = experiments.length === 0 && !notice;
   document.querySelector("#experiment-projects-title").textContent = "SAVED RESULTS";
-  if (notice) experimentProjectList.append(emptyCopy(notice));
-  experiments.forEach((experiment) => {
+  const browse = document.createElement("button");
+  browse.type = "button";
+  browse.className = "saved-results-browse";
+  browse.textContent = "Browse saved results";
+  browse.addEventListener("click", openSavedResultsLibrary);
+  experimentProjectList.append(browse);
+  if (notice) {
+    browse.title = notice;
+    const status = document.createElement("span");
+    status.className = "saved-results-notice";
+    status.textContent = "Listing limited or incomplete";
+    experimentProjectList.append(status);
+  }
+  if (activeFile?.kind === "result_library") renderSavedResultsLibrary();
+}
+
+function openSavedResultsLibrary() {
+  if (!activeWorkspace) return;
+  if (editingFile) {
+    setViewerNotice("Save or cancel your edits before browsing saved results.");
+    return;
+  }
+  fileRequestGeneration += 1;
+  activeFile = {kind: "result_library", name: "Saved results", path: ".", content: ""};
+  activeResult = null;
+  workspaceWelcome.classList.add("hidden");
+  fileViewer.classList.remove("hidden");
+  fileViewerTitle.textContent = "Saved results";
+  fileViewerPath.textContent = "Scientific records for this repository";
+  fileViewerRefresh.hidden = false;
+  fileViewerDownload.hidden = true;
+  setFileEditing(false);
+  setViewerNotice("");
+  document.querySelectorAll(".tree-entry.is-selected").forEach(entry => entry.classList.remove("is-selected"));
+  renderSavedResultsLibrary();
+}
+
+function renderSavedResultsLibrary() {
+  // Keep search focus and caret across background refreshes of the saved bundle list.
+  const oldSearch = fileViewerBody.querySelector('[aria-label="Filter saved results"]');
+  const focused = oldSearch === document.activeElement;
+  const selection = focused ? [oldSearch.selectionStart, oldSearch.selectionEnd] : null;
+  clearNode(fileViewerBody);
+  const library = document.createElement("section");
+  library.className = "saved-results-library";
+  library.setAttribute("aria-label", "Saved results library");
+  const controls = document.createElement("div");
+  controls.className = "saved-results-controls";
+  const search = document.createElement("input");
+  search.type = "search";
+  search.setAttribute("aria-label", "Filter saved results");
+  search.placeholder = "Search saved studies";
+  search.value = savedResultQuery;
+  controls.append(search);
+  library.append(controls);
+  if (savedResultNotice) library.append(emptyCopy(savedResultNotice));
+  const query = savedResultQuery.trim().toLocaleLowerCase();
+  const filtered = savedResultEntries.filter(entry =>
+    [entry.name, entry.reason, entry.execution_state, entry.validation_state].join(" ").toLocaleLowerCase().includes(query));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / savedResultPageSize));
+  savedResultPage = Math.min(savedResultPage, pageCount - 1);
+  const rows = document.createElement("div");
+  rows.className = "saved-results-rows";
+  filtered.slice(savedResultPage * savedResultPageSize, (savedResultPage + 1) * savedResultPageSize).forEach((experiment) => {
     const name = experiment.name;
     const article = document.createElement("article");
     const summary = document.createElement("div");
@@ -814,17 +895,25 @@ function renderExperimentProjects(experiments = [], notice = "") {
     const status = document.createElement("span");
     const disclosure = document.createElement("button");
     const actions = document.createElement("div");
-    article.className = `experiment-project is-${experiment.validation_state === "passed" ? "success" : "warning"}`;
+    article.className = `experiment-project is-${experiment.execution_state === "failed" ? "failed" : experiment.validation_state === "passed" ? "success" : "warning"}`;
+    article.dataset.savedResultRow = experiment.bundle_run_id;
     summary.className = "experiment-project-summary";
     primary.type = "button";
     primary.className = "experiment-project-primary";
     primary.title = name;
-    primary.setAttribute("aria-label", `Reopen results: ${name}`);
+    primary.setAttribute("aria-label", `Open results: ${name}`);
     identity.className = "experiment-project-identity";
     title.textContent = name;
     status.className = "experiment-project-status";
     status.textContent = experiment.reason || (experiment.validation_state === "passed" ? "Checks passed" : "Checks need review");
     identity.append(title, status);
+    const date = document.createElement("time");
+    const modified = new Date(Number(experiment.modified_at) * 1000);
+    if (!Number.isNaN(modified.getTime())) {
+      date.dateTime = modified.toISOString();
+      date.textContent = modified.toLocaleString();
+      identity.append(date);
+    }
     primary.append(identity);
     primary.addEventListener("click", async () => {
       try { await openSavedResult(experiment.bundle_run_id); }
@@ -863,8 +952,42 @@ function renderExperimentProjects(experiments = [], notice = "") {
     });
     summary.append(primary, disclosure);
     article.append(summary, actions);
-    experimentProjectList.append(article);
+    rows.append(article);
   });
+  if (!filtered.length) rows.append(emptyCopy(savedResultEntries.length ? "No saved studies match this search." : "No saved results for this repository yet."));
+  const footer = document.createElement("nav");
+  footer.className = "saved-results-pagination";
+  footer.setAttribute("aria-label", "Saved results pages");
+  const count = document.createElement("span");
+  count.textContent = filtered.length
+    ? `${savedResultPage * savedResultPageSize + 1} to ${Math.min((savedResultPage + 1) * savedResultPageSize, filtered.length)} of ${filtered.length}`
+    : "0 studies";
+  footer.append(count);
+  [["Previous", "Previous results page", -1], ["Next", "Next results page", 1]].forEach(([label, accessible, step]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.setAttribute("aria-label", accessible);
+    button.disabled = step < 0 ? savedResultPage === 0 : savedResultPage === pageCount - 1;
+    button.addEventListener("click", () => {
+      savedResultPage += step;
+      renderSavedResultsLibrary();
+      fileViewerBody.scrollTop = 0;
+      fileViewerBody.querySelector(`[aria-label="${accessible}"]`)?.focus({preventScroll: true});
+    });
+    footer.append(button);
+  });
+  library.append(rows, footer);
+  fileViewerBody.append(library);
+  search.addEventListener("input", () => {
+    savedResultQuery = search.value;
+    savedResultPage = 0;
+    renderSavedResultsLibrary();
+  });
+  if (focused) {
+    search.focus();
+    if (selection && selection[0] !== null) search.setSelectionRange(...selection);
+  }
 }
 
 async function loadExperimentProjects(workspaceId = activeWorkspace?.id) {
@@ -1068,6 +1191,7 @@ function renderClarification(preparation) {
   messageForm.hidden = !interaction.showComposer;
   clarificationCard.classList.toggle("hidden", !view.visible);
   if (!view.visible) {
+    clarificationRequestGeneration += 1;
     clarificationRenderSignature = "";
     activeClarificationIndex = 0;
     clearNode(clarificationQuestions);
@@ -1314,15 +1438,25 @@ async function loadPlan(run = activeRun) {
 }
 
 async function loadPreparation(run = activeRun) {
-  if (!run?.id) {
+  if (!run?.id || run.state !== "waiting_for_user") {
     renderClarification(null);
     return;
   }
+  if (clarificationSubmitting) return;
+  const generation = ++clarificationRequestGeneration;
   try {
     const preparation = await api(`/api/runs/${run.id}/preparation`);
-    if (activeRun?.id === run.id) renderClarification(preparation);
+    if (generation !== clarificationRequestGeneration || clarificationSubmitting
+      || activeRun?.id !== run.id || activeRun.state !== "waiting_for_user") return;
+    if (Number(preparation.revision) <= (answeredClarificationRevisions.get(run.id) ?? -1)) {
+      renderClarification(null);
+      return;
+    }
+    renderClarification(preparation);
   } catch (_error) {
-    renderClarification(null);
+    // A connection failure must not discard answers already being edited.
+    if (generation === clarificationRequestGeneration
+      && activePreparation?.run_id !== run.id) renderClarification(null);
   }
 }
 
@@ -1396,7 +1530,7 @@ function setRun(run) {
   sendMessage.disabled = messageInput.disabled;
   sendMessage.textContent = sendingPrompt ? "Starting…" : "Send";
   refreshSession.disabled = !activeSession;
-  if (state !== "waiting_for_user" && activePreparation?.run_id !== run?.id) {
+  if (state !== "waiting_for_user" || activePreparation?.run_id !== run?.id) {
     renderClarification(null);
   }
   if (state !== "waiting_for_plan_approval") renderPlan(null);
@@ -1963,7 +2097,14 @@ function connectEvents(sessionKey) {
       void openSavedResult(event.payload.bundle_run_id).catch(error => showError(error.message));
       void loadExperimentProjects(workspaceId).catch(error => showError(error.message));
     }
-    if (["clarification_answered", "prompt_compiled"].includes(event.kind)) {
+    if (["clarification_answered", "prompt_compiled"].includes(event.kind)
+      && eventRunId === activeRun?.id) {
+      if (event.kind === "clarification_answered" && eventRunId) {
+        const answeredRevision = Number(event.payload?.preparation_revision);
+        answeredClarificationRevisions.set(eventRunId, Math.max(
+          answeredClarificationRevisions.get(eventRunId) ?? -1, answeredRevision,
+        ));
+      }
       renderClarification(null);
     }
     if (event.kind === "approval_requested" || event.kind === "approval_resolved") {
@@ -2026,6 +2167,12 @@ function clearSession() {
   selectedRunId = null;
   activeChangeSet = null;
   activePreparation = null;
+  clarificationSubmitting = false;
+  clarificationSubmissionToken = null;
+  clarificationForm.inert = false;
+  submitClarification.disabled = false;
+  submitClarification.textContent = "Continue";
+  answeredClarificationRevisions.clear();
   activePlan = null;
   renderClarification(null);
   renderPlan(null);
@@ -2150,7 +2297,8 @@ clarificationNext.addEventListener("click", advanceClarification);
 
 clarificationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!activeRun?.id || !activePreparation) return;
+  if (clarificationSubmitting || !activeRun?.id || !activePreparation
+    || activeRun.state !== "waiting_for_user") return;
   showError();
   const values = clarificationValues();
   const incompleteIndex = window.AgentKronigClarification.firstIncomplete(
@@ -2167,23 +2315,52 @@ clarificationForm.addEventListener("submit", async (event) => {
     });
     return;
   }
+  const submittedRunId = activeRun.id;
+  const submittedPreparation = activePreparation;
+  const submissionToken = {};
+  clarificationSubmissionToken = submissionToken;
+  let refreshPreparation = false;
+  clarificationSubmitting = true;
+  clarificationRequestGeneration += 1;
+  clarificationForm.inert = true;
   submitClarification.disabled = true;
   submitClarification.textContent = "Preparing…";
   try {
-    const payload = window.AgentKronigClarification.submission(activePreparation, values);
-    const run = await api(`/api/runs/${activeRun.id}/clarifications`, {
+    const payload = window.AgentKronigClarification.submission(submittedPreparation, values);
+    const run = await api(`/api/runs/${submittedRunId}/clarifications`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    answeredClarificationRevisions.set(submittedRunId, Math.max(
+      answeredClarificationRevisions.get(submittedRunId) ?? -1, payload.expected_revision + 1,
+    ));
+    if (activeRun?.id !== submittedRunId
+      || clarificationSubmissionToken !== submissionToken) return;
+    refreshPreparation = true;
     renderClarification(null);
     setRun(run);
     await refreshMessages(activeSession?.id, {forceScroll: true});
+    await requestSessionRefresh();
   } catch (error) {
-    showError(error.message);
-    if (error.code === "stale_revision") await loadPreparation(activeRun);
+    if (activeRun?.id !== submittedRunId
+      || clarificationSubmissionToken !== submissionToken) return;
+    if (error.code === "stale_revision") {
+      refreshPreparation = true;
+      renderClarification(null);
+      await requestSessionRefresh();
+    } else showError(error.message);
   } finally {
-    submitClarification.disabled = false;
-    submitClarification.textContent = "Continue";
+    if (clarificationSubmissionToken === submissionToken) {
+      clarificationSubmissionToken = null;
+      clarificationSubmitting = false;
+      clarificationForm.inert = false;
+      submitClarification.disabled = false;
+      submitClarification.textContent = "Continue";
+      if (refreshPreparation && activeRun?.id === submittedRunId
+        && activeRun.state === "waiting_for_user") {
+        await loadPreparation(activeRun);
+      }
+    }
   }
 });
 
@@ -2382,7 +2559,8 @@ fileViewerEdit.addEventListener("click", () => void beginFileEdit());
 fileViewerSave.addEventListener("click", () => void saveFileEdit());
 fileViewerCancel.addEventListener("click", cancelFileEdit);
 fileViewerRefresh.addEventListener("click", () => {
-  if (activeResult?.saved_bundle_id) void openSavedResult(activeResult.saved_bundle_id).catch(error => showError(error.message));
+  if (activeFile?.kind === "result_library") void loadExperimentProjects().catch(error => showError(error.message));
+  else if (activeResult?.saved_bundle_id) void openSavedResult(activeResult.saved_bundle_id).catch(error => showError(error.message));
   else if (activeFile) void openFile({path: activeFile.path});
 });
 window.addEventListener("kronig:review-recovery", event => {

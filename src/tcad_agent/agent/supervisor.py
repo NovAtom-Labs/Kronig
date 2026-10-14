@@ -246,11 +246,11 @@ class AgentSupervisor:
         if self.preparation is None:
             raise IDEStoreError("prompt preparation is not configured")
         run = self.services.store.get_run(run_id)
-        if run.state is not RunState.WAITING_FOR_USER:
-            raise IDEStoreError("run is not waiting for clarification")
         preparation = self.services.store.get_prompt_preparation(run_id)
         if preparation.revision != expected_revision:
             raise IDEStoreError(f"stale prompt preparation revision for {run_id}")
+        if run.state is not RunState.WAITING_FOR_USER:
+            raise IDEStoreError("stale clarification: run is no longer waiting for answers")
         decision = preparation.decision
         if decision is None or decision.status != "clarification":
             raise IDEStoreError("run has no active clarification questions")

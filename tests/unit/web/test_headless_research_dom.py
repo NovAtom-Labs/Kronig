@@ -52,14 +52,27 @@ def test_plan_revision_submit_remains_reachable_in_short_pane(research_page):
 
 def test_clarification_polling_keeps_answer_focus_and_selection(research_page):
     page = research_page
-    preparation = {"revision": 1, "decision": {"status": "clarification",
-        "summary": "Confirm dimensions and contact boundaries before execution.",
-        "questions": [
-            {"id": "dimensions", "prompt": "What are the region dimensions?",
-             "reason": "Dimensions define the domain.", "required": True},
-            {"id": "contacts", "prompt": "What contact boundaries should be used?",
-             "reason": "Contacts define the applied bias.", "required": True},
-        ]}}
+    preparation = {
+        "revision": 1,
+        "decision": {
+            "status": "clarification",
+            "summary": "Confirm dimensions and contact boundaries before execution.",
+            "questions": [
+                {
+                    "id": "dimensions",
+                    "prompt": "What are the region dimensions?",
+                    "reason": "Dimensions define the domain.",
+                    "required": True,
+                },
+                {
+                    "id": "contacts",
+                    "prompt": "What contact boundaries should be used?",
+                    "reason": "Contacts define the applied bias.",
+                    "required": True,
+                },
+            ],
+        },
+    }
     page.evaluate("preparation => renderClarification(preparation)", preparation)
     answer = page.locator('#clarification-questions textarea[data-question-id="dimensions"]')
     answer.fill("Use one micrometre per semiconductor region.")
@@ -115,3 +128,363 @@ def test_scientific_selectors_change_slice_and_zoom_in_narrow_result(research_pa
     point.select_option("0")
     assert "1.000e6 Hz" in point.get_attribute("title")
     assert root.evaluate("root => root.scrollWidth <= root.clientWidth")
+
+
+def _clarification_fixture():
+    return {
+        "run_id": "research-run",
+        "revision": 1,
+        "decision": {
+            "status": "clarification",
+            "summary": "Confirm the physical boundaries.",
+            "questions": [
+                {
+                    "id": "boundary",
+                    "prompt": "Which boundary is driven?",
+                    "reason": "Defines the applied voltage.",
+                    "required": True,
+                }
+            ],
+        },
+    }
+
+
+def test_accepted_questions_do_not_reappear_from_queued_preparation(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'queued'};
+      renderClarification(preparation);
+      api=async () => preparation;
+    }""",
+        _clarification_fixture(),
+    )
+    page.evaluate("async () => await loadPreparation(activeRun)")
+    assert page.locator("#clarification-card").is_hidden()
+
+
+def test_late_preparation_response_cannot_reopen_answered_questions(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+      api=url => url.endsWith('/preparation')
+        ? new Promise(resolve => {window.resolvePreparation=resolve})
+        : Promise.resolve(null);
+      window.preparationLoad=loadPreparation(activeRun);
+      setRun({id:'research-run',state:'queued'});
+      window.resolvePreparation(preparation);
+    }""",
+        _clarification_fixture(),
+    )
+    page.evaluate("async () => await window.preparationLoad")
+    assert page.locator("#clarification-card").is_hidden()
+
+
+def test_clarification_continue_cannot_submit_twice_while_request_pending(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+      window.clarificationPosts=[];
+      api=(url,options) => {
+        if(url.endsWith('/clarifications')) {
+          window.clarificationPosts.push(JSON.parse(options.body));
+          return new Promise(resolve => {window.resolveSubmission=resolve});
+        }
+        return Promise.resolve(null);
+      };
+    }""",
+        _clarification_fixture(),
+    )
+    page.locator("#clarification-questions textarea").fill("Drive the left boundary.")
+    page.evaluate("""() => {
+      const form=document.querySelector('#clarification-form');
+      form.dispatchEvent(new Event('submit',{cancelable:true}));
+      form.dispatchEvent(new Event('submit',{cancelable:true}));
+    }""")
+    assert page.evaluate("window.clarificationPosts.length") == 1
+    page.evaluate("window.resolveSubmission({id:'research-run',state:'queued'})")
+    page.wait_for_function(
+        "document.querySelector('#clarification-card').classList.contains('hidden')"
+    )
+
+
+def test_accepted_revision_is_hidden_but_new_followup_remains_answerable(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      answeredClarificationRevisions.set('research-run',1);
+      api=async () => preparation;
+    }""",
+        _clarification_fixture(),
+    )
+    page.evaluate("async () => await loadPreparation(activeRun)")
+    assert page.locator("#clarification-card").is_hidden()
+    followup = _clarification_fixture()
+    followup["revision"] = 3
+    followup["decision"]["questions"][0].update(
+        id="area", prompt="Do you need total current or current density?"
+    )
+    page.evaluate("preparation => {api=async () => preparation}", followup)
+    page.evaluate("async () => await loadPreparation(activeRun)")
+    assert page.locator("#clarification-card").is_visible()
+    page.locator('#clarification-questions textarea[data-question-id="area"]').fill(
+        "Current density only."
+    )
+    assert page.locator("#clarification-questions textarea").input_value() == (
+        "Current density only."
+    )
+
+
+def test_accepted_snapshot_revision_does_not_reopen_during_stale_run_poll(research_page):
+    page = research_page
+    preparation = _clarification_fixture()
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+      api=async (url,options) => url.endsWith('/clarifications')
+        ? {id:'research-run',state:'queued'} : null;
+    }""",
+        preparation,
+    )
+    page.locator("#clarification-questions textarea").fill("Drive the left boundary.")
+    page.locator("#submit-clarification").click()
+    page.wait_for_function("!clarificationSubmitting")
+    # Accepting answers increments preparation to2 but keeps the old decision
+    # until inference produces revision3. A poll can carry a pre-acceptance run.
+    preparation["revision"] = 2
+    page.evaluate(
+        """preparation => {
+      setRun({id:'research-run',state:'waiting_for_user'});
+      api=async () => preparation;
+    }""",
+        preparation,
+    )
+    page.evaluate("async () => await loadPreparation(activeRun)")
+    assert page.locator("#clarification-card").is_hidden()
+
+
+def test_failed_clarification_submission_and_refresh_preserve_typed_answers(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+      api=async () => {throw new Error('Connection temporarily unavailable')};
+    }""",
+        _clarification_fixture(),
+    )
+    page.locator("#clarification-questions textarea").fill("Drive the left boundary.")
+    page.locator("#submit-clarification").click()
+    page.wait_for_function("!clarificationSubmitting")
+    page.evaluate("async () => await loadPreparation(activeRun)")
+    assert page.locator("#clarification-card").is_visible()
+    assert page.locator("#clarification-questions textarea").input_value() == (
+        "Drive the left boundary."
+    )
+    assert page.locator("#submit-clarification").is_enabled()
+
+
+def test_old_repository_submission_cannot_lock_or_unlock_new_clarification(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+      window.pendingSubmissions={};
+      api=(url,options) => url.endsWith('/clarifications')
+        ? new Promise(resolve => {window.pendingSubmissions[url]=resolve})
+        : Promise.resolve(null);
+    }""",
+        _clarification_fixture(),
+    )
+    page.locator("#clarification-questions textarea").fill("Drive the left boundary.")
+    page.locator("#submit-clarification").click()
+    next_preparation = _clarification_fixture()
+    next_preparation["run_id"] = "second-research-run"
+    page.evaluate(
+        """preparation => {
+      clearSession();
+      activeRun={id:'second-research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+    }""",
+        next_preparation,
+    )
+    assert page.locator("#clarification-form").evaluate("form => !form.inert")
+    assert page.locator("#submit-clarification").is_enabled()
+    page.locator("#clarification-questions textarea").fill("Drive the right boundary.")
+    page.locator("#submit-clarification").click()
+    page.evaluate("""() => {
+      window.pendingSubmissions['/api/runs/research-run/clarifications'](
+        {id:'research-run',state:'queued'});
+    }""")
+    page.wait_for_function("answeredClarificationRevisions.has('research-run')")
+    assert page.locator("#clarification-form").evaluate("form => form.inert")
+    assert page.locator("#submit-clarification").is_disabled()
+    page.evaluate("""() => {
+      window.pendingSubmissions['/api/runs/second-research-run/clarifications'](
+        {id:'second-research-run',state:'queued'});
+    }""")
+    page.wait_for_function("!clarificationSubmitting")
+    assert page.locator("#clarification-card").is_hidden()
+
+
+def test_returning_to_same_run_does_not_apply_obsolete_submission_response(research_page):
+    page = research_page
+    page.evaluate(
+        """preparation => {
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+      api=url => url.endsWith('/clarifications')
+        ? new Promise(resolve => {window.resolveOldSubmission=resolve})
+        : Promise.resolve(null);
+    }""",
+        _clarification_fixture(),
+    )
+    page.locator("#clarification-questions textarea").fill("Drive the left boundary.")
+    page.locator("#submit-clarification").click()
+    followup = _clarification_fixture()
+    followup["revision"] = 3
+    followup["decision"]["questions"][0].update(
+        id="sampling", prompt="Which operating points should have spatial profiles?"
+    )
+    page.evaluate(
+        """preparation => {
+      clearSession();
+      activeRun={id:'research-run',state:'waiting_for_user'};
+      renderClarification(preparation);
+    }""",
+        followup,
+    )
+    page.locator("#clarification-questions textarea").fill("All requested operating points.")
+    page.evaluate("window.resolveOldSubmission({id:'research-run',state:'queued'})")
+    page.wait_for_function("answeredClarificationRevisions.has('research-run')")
+    assert page.evaluate("activeRun.state") == "waiting_for_user"
+    assert page.locator("#clarification-questions textarea").input_value() == (
+        "All requested operating points."
+    )
+
+
+def test_failed_results_workbench_displays_reason_without_fabricating_plots(research_page):
+    page = research_page
+    page.evaluate("""() => {
+      const root=document.createElement('div');root.id='failed-result';
+      document.querySelector('#workspace-welcome').replaceWith(root);
+      AgentKronigResults.render(root,{execution_state:'failed',experiment:{regions:[]},
+        manifest:{execution_state:'failed',state:'failed'},
+        result:{status:'timed_out',error:'Simulation exceeded the execution time budget.',
+          axes:{},datasets:{},operating_points:[],metadata:{}},
+        validation:{overall:'failed',checks:[]}});
+    }""")
+    root = page.locator("#failed-result")
+    assert "Simulation exceeded the execution time budget." in root.inner_text()
+    assert root.locator(".result-chart-line").count() == 0
+
+
+def test_saved_results_do_not_expand_repository_and_library_is_paged(research_page):
+    page = research_page
+    entries = [
+        {
+            "bundle_run_id": f"run-{i}",
+            "name": f"Study {i}",
+            "validation_state": "passed",
+            "execution_state": "completed",
+            "reason": "Checks passed",
+            "modified_at": 1_700_000_000 + i,
+        }
+        for i in range(101)
+    ]
+    page.evaluate(
+        """entries => {
+      activeWorkspace={id:'research-workspace'};
+      renderExperimentProjects(entries);
+    }""",
+        entries,
+    )
+    assert page.locator("#experiment-project-list .experiment-project").count() == 0
+    assert page.locator("#experiment-project-count").inner_text() == "101"
+    assert (
+        page.locator("#experiment-projects").evaluate(
+            "section => section.getBoundingClientRect().height"
+        )
+        < 100
+    )
+    page.get_by_role("button", name="Browse saved results", exact=True).click()
+    assert page.locator("[data-saved-result-row]").count() == 20
+    page.get_by_role("button", name="Next results page", exact=True).click()
+    assert page.locator("[data-saved-result-row]").count() == 20
+    assert "Study 80" in page.locator("#file-viewer-body").inner_text()
+    assert page.locator("#file-viewer-body").evaluate("body => body.scrollTop") == 0
+    page.get_by_role("searchbox", name="Filter saved results", exact=True).fill("Study 97")
+    assert page.locator("[data-saved-result-row]").count() == 1
+    page.evaluate("""() => {
+      window.openedSavedResult=null;
+      api=async url => {
+        window.openedSavedResult=url;
+        return {manifest:{run_id:'run-97'},bundle_path:'run-97',result:{datasets:{},axes:{}}};
+      };
+    }""")
+    page.get_by_role("button", name="Open results: Study 97", exact=True).click()
+    page.wait_for_function("activeResult?.manifest?.run_id === 'run-97'")
+    assert page.evaluate("window.openedSavedResult") == (
+        "/api/workspaces/research-workspace/saved-results/run-97"
+    )
+
+
+def test_result_library_preserves_search_focus_and_does_not_discard_edits(research_page):
+    page = research_page
+    page.evaluate("""() => {
+      activeWorkspace={id:'research-workspace'};
+      renderExperimentProjects([{bundle_run_id:'a',name:'Evidence A',modified_at:2},
+        {bundle_run_id:'b',name:'Evidence B',modified_at:1}]);
+      activeFile={kind:'text',path:'notes.txt',content:'Original'};
+      editingFile={content:'Original'};
+      fileEditor.value='Unsaved researcher notes';
+    }""")
+    page.get_by_role("button", name="Browse saved results", exact=True).click()
+    assert page.evaluate("activeFile.path") == "notes.txt"
+    assert page.locator("#file-editor").input_value() == "Unsaved researcher notes"
+    assert "Save or cancel" in page.locator("#file-viewer-notice").inner_text()
+    page.evaluate("editingFile=null")
+    page.get_by_role("button", name="Browse saved results", exact=True).click()
+    search = page.get_by_role("searchbox", name="Filter saved results", exact=True)
+    search.fill("Evidence B")
+    page.evaluate("renderExperimentProjects(savedResultEntries)")
+    assert search.input_value() == "Evidence B"
+    assert search.evaluate("input => input === document.activeElement")
+    assert page.locator("[data-saved-result-row]").count() == 1
+    assert page.locator("#file-viewer-edit").is_hidden()
+    assert page.locator("#file-viewer-download").is_hidden()
+
+
+def test_library_refresh_and_saved_result_reply_respect_current_view(research_page):
+    page = research_page
+    page.evaluate("""() => {
+      activeWorkspace={id:'research-workspace'};
+      renderExperimentProjects([{bundle_run_id:'a',name:'Evidence A',modified_at:1}]);
+      openSavedResultsLibrary();
+      window.libraryRequests=[];
+      api=async url => {
+        libraryRequests.push(url);
+        if(url.endsWith('/saved-results')) return {entries:[
+          {bundle_run_id:'b',name:'Evidence B',modified_at:2}]};
+        return new Promise(resolve => {window.replyToSavedResult=resolve;});
+      };
+    }""")
+    page.locator("#file-viewer-refresh").click()
+    page.wait_for_function("savedResultEntries[0]?.name === 'Evidence B'")
+    assert page.evaluate("libraryRequests") == ["/api/workspaces/research-workspace/saved-results"]
+    page.get_by_role("button", name="Open results: Evidence B", exact=True).click()
+    page.wait_for_function('typeof replyToSavedResult === "function"')
+    page.evaluate("""() => {
+      openSavedResultsLibrary();
+      replyToSavedResult({manifest:{run_id:'b'},bundle_path:'b',result:{datasets:{},axes:{}}});
+    }""")
+    page.wait_for_timeout(100)
+    assert page.evaluate("activeFile.kind") == "result_library"
+    assert page.evaluate("activeResult") is None
