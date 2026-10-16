@@ -1,5 +1,6 @@
 """Typed inputs and outputs for immutable experiment bundles."""
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -9,6 +10,14 @@ from tcad_agent.results.models import CanonicalResult
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
 from tcad_agent.science.models import ScientificCompletenessReport
 from tcad_agent.validation.models import ValidationReport
+
+
+def require_run_id(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value) is None:
+        raise ValueError(
+            "Invalid run ID: use a single alphanumeric, underscore or hyphen identifier"
+        )
+    return value
 
 
 class BundleInputs(StrictModel):

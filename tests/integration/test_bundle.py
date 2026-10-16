@@ -14,6 +14,7 @@ from tcad_agent.events.ledger import EventLedger
 from tcad_agent.events.models import RunEventKind
 from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
+from tcad_agent.runners.process import ExecutionCancelled, cancellation_scope
 from tcad_agent.validation.engine import ValidationEngine
 
 
@@ -86,6 +87,35 @@ def bundle_inputs(tmp_path: Path, valid_spec: ExperimentSpec) -> BundleInputs:
         validation=validation,
         events_path=events_path,
     )
+
+
+def test_writer_rejects_unsafe_run_id_before_creating_a_directory(tmp_path, valid_spec):
+    inputs = bundle_inputs(tmp_path, valid_spec).model_copy(update={"run_id": "../protected"})
+    root = tmp_path / "must-not-be-created"
+    with pytest.raises(ValueError, match="run ID"):
+        BundleWriter(root).write(inputs)
+    assert not root.exists()
+
+
+def test_cancel_during_artifact_hashing_does_not_publish_completed_bundle(
+    tmp_path, valid_spec, monkeypatch
+):
+    from openhands.sdk.conversation.cancellation import CancellationToken
+
+    token = CancellationToken()
+    original = BundleWriter._hash_artifacts
+
+    def hash_then_stop(root):
+        records = original(root)
+        token.cancel()
+        return records
+
+    monkeypatch.setattr(BundleWriter, "_hash_artifacts", staticmethod(hash_then_stop))
+    inputs = bundle_inputs(tmp_path, valid_spec)
+    root = tmp_path / "cancelled-bundles"
+    with cancellation_scope(lambda: token.is_cancelled), pytest.raises(ExecutionCancelled):
+        BundleWriter(root).write(inputs)
+    assert not list(root.iterdir())
 
 
 def test_bundle_manifest_hashes_every_artifact_and_report_uses_structured_values(

@@ -11,7 +11,7 @@ the user's native Electron window. Sentaurus was unavailable and was not tested.
 | Study | Final numerical outcome | Important qualification |
 |---|---|---|
 | Al / p-Si / n-Si / Al, equilibrium, 300 K, both dopings 1e17 cm^-3, work functions 4.10 eV | 19 checks passed, none failed | The initial uniform mesh needed an explicitly reviewed graded-mesh recovery. |
-| The same structure, left contact +2 V and -2 V, right contact 0 V | 19 checks passed, none failed | The final verification used the exact approved plan through ExperimentEngine with a 3600-second budget, not a fresh complete native-UI run. |
+| The same structure, left contact +2 V and -2 V, right contact 0 V | 19 checks passed, none failed | The exact approved plan was verified through ExperimentEngine, initially with a 3600-second budget and then successfully with the normal 1200-second budget. This was not a fresh complete native-UI run. |
 | 10 nm oxide / 1 um p-Si, Na 1e16 cm^-3, 4.1 eV gate, quasi-static -5 to +5 V in 0.1 V increments | 18 checks passed, none failed | All 101 points converged. Capacitance density was explicitly chosen, so no gate area was invented. |
 
 Check counts include artifact and numerical checks. They are not counts of
@@ -55,7 +55,7 @@ errors. Test artifacts and provider responses are intentionally ignored by Git.
 - Requested root-selected terminal units also appear in the Markdown evidence
   summary, including complex responses. Canonical SI values are unchanged.
 
-## Remaining gaps at this checkpoint
+## Initial checkpoint verification
 
 Checkpoint verification: the complete Python suite passed 1198 tests with 26
 skipped and 7 existing dependency/runtime warnings in 1283.67 seconds. The
@@ -65,10 +65,81 @@ whitespace checks passed. Opt-in provider calls and licensed Sentaurus tests are
 not implied by the skipped pytest cases; live scientific workflow evidence is
 described separately above.
 
-- Stop interrupts the agent but does not yet terminate its blocking native
-  DEVSIM job. This is the next lifecycle fix, not a claimed completed capability.
-- High-bias extended-precision evaluation is slow. The default 1200-second
-  budget was insufficient for the final three-mesh comparison above.
+## Native execution follow-up
+
+The exact previously approved `+2,-2 V` plan was rerun through ExperimentEngine
+with its normal 1200-second budget. It completed in 870.08 seconds, compared
+with 2354.93 seconds before optimization. This is the total solve and mesh
+verification time, not LLM latency. No provider call was made in this retest.
+
+| Mesh | Before, seconds | After, seconds |
+|---|---:|---:|
+| Original | 480.86 | 155.40 |
+| First refinement | 641.30 | 266.74 |
+| Second refinement | 1232.77 | 447.49 |
+
+For each mesh, all 31 canonical datasets, axes, operating-point records, and
+continuation events are bit-identical to the reference. The final validation
+report is unchanged: 19 checks passed and none failed. The first mesh comparison
+still fails, and the second still passes at the same maximum 2.105543 percent
+difference. Artifact hashes were verified through the actual Results Workbench
+reader. Runtime source digests and elapsed times change as required by provenance.
+
+Profiling identified extended-precision native expression evaluation as the hot
+path. DEVSIM evaluates both branches of a vector `ifelse`, but short-circuits a
+scalar condition. Vector extrema now select the same branch directly only when
+every value is on the same side of the existing statistical breakpoint. Mixed
+vectors use the original expression. The statistical approximation, derivative,
+113-bit evaluation, physics models, voltage order, continuation, meshes, acceptance
+thresholds, and validation policy are unchanged. No device name, prompt text, or
+requested voltage selects this optimization.
+
+Stop now carries the actual OpenHands per-run cancellation token through the
+domain execution tool into both local and desktop-sidecar runners. Waiting polls
+at most every 0.1 seconds. Cleanup sends termination, escalates when needed, and
+reaps the owned native worker without killing the desktop backend or unrelated
+runs. Tests include workers which ignore termination, cancellation between mesh
+solves, cancellation during result hashing, and token isolation between runs.
+Cancelled work cannot publish a completed bundle before the atomic commit point.
+This does not claim cancellation of remote Sentaurus jobs or external hardware.
+
+Packaged sidecar integrity checks now accept the real four-file compiler contract
+and verify the composite runtime digest, including both numerical helper modules.
+Tampering is refused before execution. An actual compiler-to-production-sidecar
+test runs Fermi equilibrium physics and checks the canonical validation result.
+The development launcher was exercised on macOS, not a rebuilt frozen installer
+or a Windows host.
+
+Run identifiers are validated before filesystem access. Execution claims its
+work directory exclusively and refuses existing work, staging or final results.
+Duplicate requests cannot clean up another execution's files. The experiment
+engine cleans only work it owns; the bundle writer owns its staging cleanup.
+
+Final follow-up verification on the complete changed source: 1224 Python tests
+passed, 27 skipped, and 10 dependency/runtime warnings in 358.77 seconds using
+four isolated pytest workers. The desktop Node suite passed 60 tests. The opt-in
+relative native expression performance regression passed separately. Ruff and
+Git whitespace checks passed. Skips do not constitute provider, licensed
+Sentaurus, frozen-installer, or other-OS verification. No new live provider call
+was needed for these native process and mathematical-evaluation changes.
+
+Reproduce the relative timing check separately from scientific acceptance:
+
+```bash
+KRONIG_RUN_PERFORMANCE_TESTS=1 .venv/bin/pytest -q \
+  tests/integration/test_devsim_statistical_evaluation.py
+```
+
+This optional benchmark compares the native legacy and optimized expressions
+with identical values. Hardware-dependent timing is not a physical validation
+threshold. Routine suites skip it unless explicitly enabled.
+
+## Remaining limits after the follow-up
+
+- High-bias extended-precision solves are still computationally expensive.
+  This reference now completes inside the default budget, but harder structures
+  or parameters can still require more time or fail convergence. A timing result
+  is not a guarantee for all supported experiments.
 - Built-in voltage is not automatically extracted as a dedicated scalar.
   Manual neutral-bulk comparison gave approximately 0.85218 V. The global
   potential span includes contact bending and must not be substituted for it.

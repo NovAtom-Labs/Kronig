@@ -22,7 +22,7 @@ from openhands.sdk.tool import (
 )
 from pydantic import Field, ValidationError
 
-from tcad_agent.bundles.models import ExperimentBundle
+from tcad_agent.bundles.models import ExperimentBundle, require_run_id
 from tcad_agent.bundles.reader import BundleIntegrityError, BundleReader
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
 from tcad_agent.domain.studies import (
@@ -50,6 +50,7 @@ from tcad_agent.knowledge.web import (
 )
 from tcad_agent.prompting.models import ResolvedResearchIntent
 from tcad_agent.runners.models import RunBudget
+from tcad_agent.runners.process import ExecutionCancelled, cancellation_scope
 from tcad_agent.runtime.paths import RuntimePaths
 
 if TYPE_CHECKING:
@@ -483,7 +484,7 @@ class DomainTools:
                 raise TypeError("timeout_seconds must be numeric")
             budget = RunBudget(seconds=float(timeout_value))
             run_id_value = request.get("run_id")
-            run_id = str(run_id_value) if run_id_value is not None else None
+            run_id = require_run_id(str(run_id_value)) if run_id_value is not None else None
         except (KeyError, TypeError, ValueError, ValidationError) as exc:
             return ToolResponse(
                 status="refused",
@@ -499,6 +500,8 @@ class DomainTools:
                 budget=budget,
                 run_id=run_id,
             )
+        except ExecutionCancelled as exc:
+            return ToolResponse(status="refused", code="experiment_cancelled", message=str(exc))
         except PlanDigestMismatchError as exc:
             return ToolResponse(status="refused", code="plan_digest_mismatch", message=str(exc))
         except ExperimentExecutionError as exc:
@@ -870,10 +873,15 @@ class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
             )
         elif action.operation == "validate_spec":
             response = self.tools.validate_spec(action.payload)
-        elif action.operation == "execute_experiment":
-            response = self.tools.execute_experiment(action.payload)
-        elif action.operation == "execute_approved_plan":
-            response = self.tools.execute_approved_plan(action.payload)
+        elif action.operation in {"execute_experiment", "execute_approved_plan"}:
+            token = conversation.cancel_token if conversation is not None else None
+            try:
+                with cancellation_scope(lambda: token is not None and token.is_cancelled):
+                    response = getattr(self.tools, action.operation)(action.payload)
+            except ExecutionCancelled as exc:
+                response = ToolResponse(
+                    status="refused", code="experiment_cancelled", message=str(exc)
+                )
         elif action.operation == "validate_result":
             response = self.tools.validate_result(action.payload)
         elif action.operation in {

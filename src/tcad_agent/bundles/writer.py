@@ -12,10 +12,12 @@ from tcad_agent.bundles.models import (
     BundleInputs,
     BundleManifest,
     ExperimentBundle,
+    require_run_id,
 )
 from tcad_agent.reporting.artifacts import FieldArtifactWriter
 from tcad_agent.reporting.markdown import MarkdownReport
 from tcad_agent.reporting.traceability import build_traceability
+from tcad_agent.runners.process import raise_if_cancelled
 
 
 class BundleWriter:
@@ -23,6 +25,7 @@ class BundleWriter:
         self.root = root
 
     def write(self, inputs: BundleInputs) -> ExperimentBundle:
+        require_run_id(inputs.run_id)
         self.root.mkdir(parents=True, exist_ok=True)
         final = self.root / inputs.run_id
         staging = self.root / f".{inputs.run_id}.staging"
@@ -100,6 +103,7 @@ class BundleWriter:
                 artifacts=artifacts,
             )
             self._write_json(staging / "manifest.json", manifest.model_dump_json(indent=2))
+            raise_if_cancelled()
             staging.replace(final)
         finally:
             if staging.exists():

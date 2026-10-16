@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from tcad_agent.adapters.registry import BackendBinding, get_backend
-from tcad_agent.bundles.models import BundleInputs, ExperimentBundle
+from tcad_agent.bundles.models import BundleInputs, ExperimentBundle, require_run_id
 from tcad_agent.bundles.writer import BundleWriter
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
 from tcad_agent.capabilities.service import CapabilityService
@@ -31,6 +31,7 @@ from tcad_agent.experiments.planning import (
 )
 from tcad_agent.recovery.proposals import RecoveryProposal, RecoveryProposalService
 from tcad_agent.runners.models import RunBudget
+from tcad_agent.runners.process import ExecutionCancelled, raise_if_cancelled
 from tcad_agent.science.completeness import ScientificCompletenessEngine
 from tcad_agent.validation.engine import ValidationEngine
 from tcad_agent.validation.refinement import mesh_comparison, refined_spec
@@ -86,6 +87,7 @@ class ExperimentEngine:
         budget: RunBudget,
         run_id: str | None = None,
     ) -> ExperimentBundle:
+        raise_if_cancelled()
         if approved_plan_digest != prepared.plan_digest:
             raise PlanDigestMismatchError("approval does not match the prepared experiment plan")
         if digest_plan(prepared.plan) != prepared.plan_digest:
@@ -113,10 +115,18 @@ class ExperimentEngine:
                 raise ValueError("Recovery requires a complete recorded acceptance limit mapping")
             validation_engine = ValidationEngine(**limits)
 
-        selected_run_id = run_id or f"run-{uuid4().hex[:12]}"
+        selected_run_id = require_run_id(
+            run_id if run_id is not None else f"run-{uuid4().hex[:12]}"
+        )
         root = output_root.resolve()
         work = root / ".work" / selected_run_id
         staging = root / f".{selected_run_id}.staging"
+        if (root / selected_run_id).exists() or staging.exists():
+            raise ExperimentExecutionError("run ID already has saved or staged results")
+        try:
+            work.mkdir(parents=True, exist_ok=False)
+        except FileExistsError as exc:
+            raise ExperimentExecutionError("run ID is already in use") from exc
         ledger = EventLedger(work / "events.jsonl")
         try:
             binding = self.backend_resolver(prepared.backend)
@@ -133,12 +143,14 @@ class ExperimentEngine:
                 {"plan_digest": approved_plan_digest},
             )
             job = binding.adapter.compile(prepared.spec, work / "compiled")
+            raise_if_cancelled()
             ledger.append(RunEventKind.COMPILED, {"backend": prepared.backend})
             ledger.append(
                 RunEventKind.STARTED,
                 {"backend": prepared.backend, "timeout_seconds": budget.seconds},
             )
             native = binding.runner.run(job, budget)
+            raise_if_cancelled()
             result = binding.adapter.normalize(native)
             mesh_root = None
             if result.status == "completed" and result.operating_points:
@@ -171,6 +183,7 @@ class ExperimentEngine:
                 elapsed = native.elapsed_seconds
                 history = []
                 for level in range(1, 5):
+                    raise_if_cancelled()
                     remaining = budget.seconds - elapsed
                     if remaining <= 0:
                         record = {
@@ -186,15 +199,18 @@ class ExperimentEngine:
                     started = time.monotonic()
                     try:
                         fine_job = binding.adapter.compile(fine_spec, level_root / "compiled")
+                        raise_if_cancelled()
                         fine_native = binding.runner.run(
                             fine_job, RunBudget(seconds=min(remaining, 3600))
                         )
+                        raise_if_cancelled()
                         fine_result = binding.adapter.normalize(fine_native)
                         (level_root / "canonical.json").write_text(
                             fine_result.model_dump_json(indent=2)
                         )
                         record = mesh_comparison(
-                            result, fine_result,
+                            result,
+                            fine_result,
                             equilibrium=prepared.spec.study.kind == "equilibrium",
                             current_absolute_tolerance=min(
                                 validation_engine.current_atol,
@@ -213,6 +229,8 @@ class ExperimentEngine:
                                 "selected_mesh_level": level - 1,
                             }
                         )
+                    except ExecutionCancelled:
+                        raise
                     except Exception as exc:
                         record = {
                             **record,
@@ -265,6 +283,7 @@ class ExperimentEngine:
                     "validation_status": validation.overall,
                 },
             )
+            raise_if_cancelled()
             return BundleWriter(root).write(
                 BundleInputs(
                     run_id=selected_run_id,
@@ -285,10 +304,9 @@ class ExperimentEngine:
                     else None,
                 )
             )
-        except PlanDigestMismatchError:
+        except (PlanDigestMismatchError, ExecutionCancelled):
             raise
         except Exception as exc:
             raise ExperimentExecutionError(f"Simulator execution failed: {exc}") from exc
         finally:
             shutil.rmtree(work, ignore_errors=True)
-            shutil.rmtree(staging, ignore_errors=True)

@@ -98,7 +98,14 @@ def inverse_fermi_expression(ratio: str, *, derivative: bool = False) -> str:
             f"(pow(pow({0.75 * math.sqrt(math.pi):.17g}*({high}),4/3)"
             f"-{math.pi**2 / 6:.17g},0.5)+({OFFSET:.17g}))"
         )
-    return f"ifelse(({ratio})<{BREAKPOINT:.17g},{small},{large})"
+    mixed = f"ifelse(({ratio})<{BREAKPOINT:.17g},{small},{large})"
+    # DEVSIM evaluates both vector branches, but short-circuits scalar tests.
+    # Extrema select the identical formula when a whole vector is on one side;
+    # mixed vectors still use the original pointwise expression and precision.
+    return (
+        f"ifelse(vec_max({ratio})<{BREAKPOINT:.17g},{small},"
+        f"ifelse(vec_min({ratio})>={BREAKPOINT:.17g},{large},{mixed}))"
+    )
 
 
 def fermi_models(prefix: str, eta: str) -> dict[str, str]:

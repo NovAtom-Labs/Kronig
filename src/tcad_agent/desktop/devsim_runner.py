@@ -13,8 +13,9 @@ from collections.abc import Callable, MutableMapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from tcad_agent.adapters.devsim import runtime
+from tcad_agent.adapters.devsim import density_solver, runtime, statistics
 from tcad_agent.runners.models import CompiledJob, NativeRunResult, RunBudget
+from tcad_agent.runners.process import raise_if_cancelled, wait_for_process
 
 _MANIFEST_NAME = "compiled-job.json"
 _DLL_DIRECTORY_HANDLES: list[object] = []
@@ -52,12 +53,26 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _trusted_runtime_digest() -> str:
-    module_path = Path(runtime.__file__)
+def _source_bytes(module: Any) -> bytes:
+    module_path = Path(module.__file__)
     source_path = module_path if module_path.suffix == ".py" else module_path.with_suffix(".py")
     if source_path.is_file():
-        return _sha256(source_path)
-    return hashlib.sha256(inspect.getsource(runtime).encode("utf-8")).hexdigest()
+        return source_path.read_bytes()
+    return inspect.getsource(module).encode("utf-8")
+
+
+def _runtime_digest(main: bytes, stats: bytes, density: bytes) -> str:
+    # Same filename-delimited compiler contract, verified with real compiled jobs.
+    return hashlib.sha256(
+        b"run_devsim.py\0" + main + b"\0devsim_statistics.py\0" + stats
+        + b"\0devsim_density_solver.py\0" + density
+    ).hexdigest()
+
+
+def _trusted_runtime_digest() -> str:
+    return _runtime_digest(
+        _source_bytes(runtime), _source_bytes(statistics), _source_bytes(density_solver)
+    )
 
 
 def _inside(root: Path, value: object) -> Path:
@@ -92,8 +107,8 @@ def _validated_manifest(
 
     entrypoint = _inside(root, data.get("entrypoint"))
     inputs_value = data.get("input_files")
-    if not isinstance(inputs_value, list) or len(inputs_value) != 2:
-        raise ValueError("compiled job must contain the reviewed runtime and one input")
+    if not isinstance(inputs_value, list) or len(inputs_value) not in {2, 4}:
+        raise ValueError("compiled job must contain only the reviewed runtime inputs")
     input_paths = tuple(_inside(root, value) for value in inputs_value)
     if entrypoint not in input_paths or not all(path.is_file() for path in input_paths):
         raise ValueError("compiled job inputs are missing")
@@ -107,9 +122,21 @@ def _validated_manifest(
 
     runtime_digest = data.get("runtime_digest")
     input_digest = data.get("input_digest")
+    actual_runtime_digest = _sha256(entrypoint)
+    if len(input_paths) == 4:
+        named = {path.name: path for path in input_paths}
+        expected = {
+            entrypoint.name, payload_path.name, "devsim_statistics.py", "devsim_density_solver.py"
+        }
+        if len(expected) != 4 or set(named) != expected:
+            raise ValueError("compiled runtime does not match the reviewed runtime file set")
+        actual_runtime_digest = _runtime_digest(
+            entrypoint.read_bytes(), named["devsim_statistics.py"].read_bytes(),
+            named["devsim_density_solver.py"].read_bytes(),
+        )
     if (
         not isinstance(runtime_digest, str)
-        or _sha256(entrypoint) != runtime_digest
+        or actual_runtime_digest != runtime_digest
         or runtime_digest != trusted_runtime_digest
     ):
         raise ValueError("compiled runtime does not match the installed reviewed runtime")
@@ -184,6 +211,7 @@ class DevsimSidecarRunner:
         self.executable = executable.resolve()
 
     def run(self, job: CompiledJob, budget: RunBudget) -> NativeRunResult:
+        raise_if_cancelled()
         if not self.executable.is_file():
             raise FileNotFoundError(self.executable)
         workspace = job.entrypoint.parent.resolve()
@@ -197,6 +225,7 @@ class DevsimSidecarRunner:
             if key in {"PATH", "TMPDIR", "TEMP", "LANG", "LC_ALL"}
         }
         started = time.monotonic()
+        owns_group = os.name != "nt" and os.environ.get("AGENT_KRONIG_DESKTOP_OWNER_PIPE") != "1"
         with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
             process = subprocess.Popen(
                 [str(self.executable), str(manifest_path)],
@@ -205,19 +234,11 @@ class DevsimSidecarRunner:
                 stdout=stdout,
                 stderr=stderr,
                 text=True,
-                start_new_session=(
-                    os.name != "nt" and os.environ.get("AGENT_KRONIG_DESKTOP_OWNER_PIPE") != "1"
-                ),
+                start_new_session=owns_group,
             )
             try:
-                return_code = process.wait(timeout=budget.seconds)
+                return_code = wait_for_process(process, budget.seconds, owns_group=owns_group)
             except subprocess.TimeoutExpired:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
                 return NativeRunResult(
                     backend="devsim",
                     status="timed_out",

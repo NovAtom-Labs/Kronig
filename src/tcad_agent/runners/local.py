@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import subprocess
 import time
 from pathlib import Path
 
 from tcad_agent.runners.models import CompiledJob, NativeRunResult, RunBudget
+from tcad_agent.runners.process import raise_if_cancelled, wait_for_process
 
 
 class LocalRunner:
@@ -17,6 +17,7 @@ class LocalRunner:
         self.devsim_python = devsim_python.absolute()
 
     def run(self, job: CompiledJob, budget: RunBudget) -> NativeRunResult:
+        raise_if_cancelled()
         if job.backend != "devsim":
             raise ValueError(f"local runner cannot execute backend {job.backend!r}")
         if not self.devsim_python.is_file():
@@ -48,20 +49,8 @@ class LocalRunner:
                 start_new_session=owns_group,
             )
             try:
-                return_code = process.wait(timeout=budget.seconds)
+                return_code = wait_for_process(process, budget.seconds, owns_group=owns_group)
             except subprocess.TimeoutExpired:
-                if owns_group:
-                    os.killpg(process.pid, signal.SIGTERM)
-                else:
-                    process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    if owns_group:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    else:
-                        process.kill()
-                    process.wait(timeout=5)
                 return NativeRunResult(
                     backend="devsim",
                     status="timed_out",
