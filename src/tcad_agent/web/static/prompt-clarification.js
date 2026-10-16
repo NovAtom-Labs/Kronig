@@ -10,6 +10,9 @@
       summary: String(decision?.summary || "A few details are needed before execution."),
       questions: questions.map((question) => ({
         id: String(question.id),
+        fieldPath: String(question.field_path || question.id),
+        reasonKind: String(question.reason_kind || "unspecified"),
+        evidenceQuotes: question.evidence_quotes || [],
         prompt: String(question.prompt),
         reason: String(question.reason),
         required: question.required !== false,

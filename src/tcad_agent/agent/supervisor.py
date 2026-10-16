@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -245,32 +246,16 @@ class AgentSupervisor:
     ) -> AgentRunRecord:
         if self.preparation is None:
             raise IDEStoreError("prompt preparation is not configured")
+        updated, accepted = self.services.store.accept_clarification(
+            run_id, expected_revision, answers,
+            max_rounds=max(1, min(32, int(os.getenv(
+                "AGENT_KRONIG_MAX_CLARIFICATION_ROUNDS", "8"
+            )))),
+        )
         run = self.services.store.get_run(run_id)
-        preparation = self.services.store.get_prompt_preparation(run_id)
-        if preparation.revision != expected_revision:
-            raise IDEStoreError(f"stale prompt preparation revision for {run_id}")
-        if run.state is not RunState.WAITING_FOR_USER:
-            raise IDEStoreError("stale clarification: run is no longer waiting for answers")
-        decision = preparation.decision
-        if decision is None or decision.status != "clarification":
-            raise IDEStoreError("run has no active clarification questions")
-        by_id = {answer.question_id: answer for answer in answers}
-        if len(by_id) != len(answers):
-            raise IDEStoreError("clarification answers must have unique question ids")
-        known = {question.id for question in decision.questions}
-        required = {question.id for question in decision.questions if question.required}
-        if not set(by_id).issubset(known) or not required.issubset(by_id):
-            raise IDEStoreError("clarification answers do not match the active questions")
-        combined = tuple(
-            {answer.question_id: answer for answer in (*preparation.answers, *answers)}.values()
-        )
-        updated = self.services.store.update_prompt_preparation(
-            run_id,
-            expected_revision,
-            answers=combined,
-            decision=decision,
-            compiled_request=None,
-        )
+        if not accepted:
+            return run
+        decision = updated.decision
         rendered = ["Clarification answers"]
         question_by_id = {question.id: question for question in decision.questions}
         for answer in answers:
@@ -278,7 +263,7 @@ class AgentSupervisor:
                 (f"- {question_by_id[answer.question_id].prompt}", f"  {answer.answer}")
             )
         self.services.conversations.add_user_message(run.conversation_id, "\n".join(rendered))
-        queued = self._transition(run_id, RunState.QUEUED)
+        queued = self.services.store.get_run(run_id)
         self.services.events.append(
             run.conversation_id,
             "clarification_answered",
@@ -670,6 +655,7 @@ class AgentSupervisor:
                 answers=record.answers,
                 on_progress=report_progress,
                 previous_decision=record.decision,
+                prior_decisions=self.services.store.clarification_decisions(run_id),
             )
             current_run = self.services.store.get_run(run_id)
             if current_run.state is RunState.CANCELLED:

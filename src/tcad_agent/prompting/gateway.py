@@ -16,6 +16,7 @@ from tcad_agent.agent.runtime import llm_from_environment
 from tcad_agent.capabilities.descriptors import CapabilityCatalogView
 from tcad_agent.domain.presentation import QUANTITY_UNITS, normalize_display_units
 from tcad_agent.domain.units import UNIT_REGISTRY, QuantityValue
+from tcad_agent.prompting.clarifications import current_answers, validate_questions
 from tcad_agent.prompting.errors import (
     ModelResponseError,
     ResearcherInputRequiredError,
@@ -270,7 +271,7 @@ class OpenHandsPreparationModel:
                 decision = PreparationDecision.model_validate_json(
                     _repair_clarification_paths(_unwrap_json_fence(text))
                 )
-                self._validate_unresolved_paths(decision)
+                self._validate_unresolved_paths(decision, capabilities)
                 decision = self._reconcile_explicit_researcher_origins(
                     decision, original_prompt, answers
                 )
@@ -281,7 +282,9 @@ class OpenHandsPreparationModel:
                                    if c.startswith("study.")}
                     changed_schedule = any(
                         q.field_path.startswith("study.")
-                        and any(a.question_id == q.id for a in answers)
+                        and any(a.question_id == q.id and (
+                            a.field_path is None or a.field_path == q.field_path
+                        ) for a in current_answers(answers))
                         for q in previous_decision.questions
                     )
                     from tcad_agent.prompting.completeness import canonical_path
@@ -328,8 +331,13 @@ class OpenHandsPreparationModel:
                             "intent": decision.intent.model_copy(update={"fields": tuple(fields)})
                         }
                     )
-                decision = self._normalize_quantity_fields(decision, workspace, capabilities)
+                decision = self._normalize_quantity_fields(
+                    decision, workspace, capabilities, original_prompt, answers
+                )
                 self._validate_authority(decision, workspace, evidence, capabilities)
+                validate_questions(
+                    decision, original_prompt, answers, capabilities, previous_decision
+                )
                 return decision
             except (ValidationError, ValueError) as error:
                 if isinstance(error, _ResearcherAuthorityViolation):
@@ -448,13 +456,24 @@ class OpenHandsPreparationModel:
         return schema
 
     @staticmethod
-    def _validate_unresolved_paths(decision: PreparationDecision) -> None:
+    def _validate_unresolved_paths(decision: PreparationDecision, capabilities=None) -> None:
         paths = (
             *decision.unresolved_critical,
             *(decision.intent.unresolved_critical if decision.intent else ()),
         )
         if any(len(path) > 240 or not re.fullmatch(r"[a-z][a-z0-9_.-]*", path) for path in paths):
             raise ValueError("unresolved_critical entries must be machine field paths, not prose")
+        if capabilities:
+            from tcad_agent.prompting.completeness import canonical_path, descriptor_for_path
+
+            asked = {canonical_path(q.field_path) for q in decision.questions}
+            selected = decision.intent.selected_capabilities if decision.intent else ()
+            if any(canonical_path(path) not in asked
+                   and descriptor_for_path(path, capabilities, selected) is None for path in paths):
+                raise ValueError(
+                    "An unresolved input must have a matching human-readable question or a "
+                    "declared capability input. Do not leave unasked internal bookkeeping paths."
+                )
         if decision.intent and set(decision.intent.unresolved_critical) != set(
             decision.unresolved_critical
         ):
@@ -530,7 +549,9 @@ class OpenHandsPreparationModel:
         return decision.model_copy(update={"intent": intent})
 
     @staticmethod
-    def _normalize_quantity_fields(decision, workspace, capabilities):
+    def _normalize_quantity_fields(
+        decision, workspace, capabilities, original_prompt="", answers=()
+    ):
         """Normalize explicit units, never infer a unit from a number's size."""
         from tcad_agent.prompting.completeness import descriptor_for_path
 
@@ -544,7 +565,7 @@ class OpenHandsPreparationModel:
                     )})
                 })
                 normalized = OpenHandsPreparationModel._normalize_quantity_fields(
-                    item_decision, workspace, capabilities
+                    item_decision, workspace, capabilities, original_prompt, answers
                 )
                 fields.append(field.model_copy(update={
                     "value": [item.value for item in normalized.intent.fields]
@@ -570,8 +591,22 @@ class OpenHandsPreparationModel:
                         })
                         numeric = False
             if (numeric and descriptor and descriptor.unit
-                    and field.origin is IntentOrigin.REPOSITORY):
-                text = files.get((field.source_reference or "").partition("#")[0], "")
+                    and field.origin in {IntentOrigin.REPOSITORY, IntentOrigin.RESEARCHER}):
+                if field.origin is IntentOrigin.REPOSITORY:
+                    text = files.get((field.source_reference or "").partition("#")[0], "")
+                else:
+                    from tcad_agent.prompting.completeness import _matches_scope
+
+                    scoped = [answer for answer in answers if answer.field_path and (
+                        _matches_scope(field.path, answer.field_path)
+                        or _matches_scope(answer.field_path, field.path)
+                        or field.path.startswith(answer.field_path + ".")
+                    )]
+                    text = (
+                        "\n".join(answer.answer for answer in current_answers(scoped))
+                        if scoped else
+                        "\n".join((original_prompt, *(answer.answer for answer in answers)))
+                    )
                 literals = re.findall(r"`([^`\n]+)`", text)
                 for match in re.finditer(
                     r"(?<![\w.\u2212+\-\u2013\u2014])(?:[-+\u2212]\s*)?"
@@ -647,7 +682,8 @@ class OpenHandsPreparationModel:
                     )
             if descriptor and descriptor.unit and not _dimension_matches(
                 field.value, descriptor.unit,
-                ambiguous=field.origin is IntentOrigin.REPOSITORY, path=field.path,
+                ambiguous=field.origin in {IntentOrigin.REPOSITORY, IntentOrigin.RESEARCHER},
+                path=field.path,
             ):
                 quantity_errors.append(
                     f"Normalize {field.path} as a dimension-compatible quantity with "
@@ -738,6 +774,8 @@ class OpenHandsPreparationModel:
             "concentrations, contacts, applied conditions, study bounds, fixed parameters, "
             "or deliverables. If one of those is essential and absent, return clarification. "
             "Use the capability catalog as the authoritative bounded backend scope. "
+            "Each unresolved input must match a displayed question field or a declared "
+            "capability input; do not add unasked internal bookkeeping paths. "
             "Always set selected_capabilities to the IDs of EVERY requested study and output. "
             "Retain requested spatial extraction voltages as profile_sampling.bias_values. "
             "If representative states were requested without exact voltages or a selection "
@@ -759,20 +797,36 @@ class OpenHandsPreparationModel:
             "Capacitance-versus-voltage alone does not identify quasi-static versus "
             "finite-frequency small-signal measurement. Ask which measurement is intended "
             "before asking for settings belonging to only one interpretation. "
-            "Use previous_decision and answer_field_mapping to apply answers; do not ask again "
-            "for resolved inputs, forget them, or reinterpret them. Do not silently reduce "
+            "Use previous_decision and answer_field_mapping to apply answers. "
+            "Set every question's reason_kind to missing, invalid, ambiguous, conflict, or "
+            "dependency_changed. For invalid/ambiguous cite at least one exact evidence_quotes "
+            "excerpt from researcher input; for conflict cite both conflicting excerpts. "
+            "A dependency_changed question must list the actual changed dependency_fields. "
+            "Do not fabricate a conflict or ask for an input already present. Preserve all "
+            "confirmed fields in intent. Do not merely change question wording when an answer "
+            "was supplied; apply the answer or explain its concrete invalidity. "
+            "Answers with field_path, question_prompt and question_revision are server-bound "
+            "historical records. Their question IDs may be reused for unrelated inputs in "
+            "later rounds. Use the field scope and question snapshot, never ID alone. "
+            "An explicit later correction supersedes only the same scoped field. "
+            "Do not ask again for resolved inputs, forget them, or reinterpret them. Do not reduce "
             "coupled analyses to one study. For AC at multiple DC biases preserve both schedules "
-            "and spatial extraction points as separate requirements. Question prompts must be "
+            "and spatial extraction points as separate requirements. "
             "For coupled AC or frequency analyses, put voltage-schedule inputs under "
             "study.bias_schedule.start/stop/step/values/contact and keep frequency inputs "
             "in the outer study fields with explicit units. Do not conflate their bounds. "
             "For a temperature study, the requested temperature list defines all physical "
             "temperatures. Do not ask for another single temperature; adapter initialization "
             "may use a value from that list without changing any requested study point. "
-            "natural scientific language, never raw schema paths or array indices. "
+            "Question prompts must use natural scientific language, never raw schema paths "
+            "or array indices. "
             "A simulator or backend explicitly named by the researcher is researcher-origin "
             "intent, not an evidence-origin expert choice. "
             "For researcher-origin fields always use empty evidence_refs. "
+            "Dimensional values must carry their explicit units as a string or QuantityValue, "
+            "not a bare JSON number, even when already converted to SI. Reconstruct quantities "
+            "from the supplied input; repair representation internally rather than re-asking. "
+            "Every numeric clarification question must state the requested answer unit. "
             "Do not attach documentation citations to user-supplied inputs. "
             "Ask about missing required researcher-owned inputs. Do not ask for expert "
             "or platform-owned inputs when reviewed evidence or defaults authorize them. "

@@ -100,6 +100,38 @@ The researcher message is never rewritten in place. Answers are stored separatel
 
 Question count is adaptive rather than fixed. The normal target is three to five questions and the hard limit is seven. Complete requests proceed without ceremonial questions. If local evidence is insufficient, the compiled request can authorize the execution agent to request bounded web research through the existing network approval policy.
 
+### Clarification safeguards
+
+Clarifications are run-local. Each accepted answer retains its exact text, scientific
+field, displayed question and question-set revision. Reused model-generated question
+IDs cannot overwrite another contact or input. Accepted corrections update the
+effective intent while the prior answer stays available as provenance.
+
+- Missing-value questions are reconciled against capability descriptors and valid
+  confirmed quantities, rather than matching a particular device or prompt.
+- Conflicts and invalid inputs need quotations from actual researcher input.
+  Dependency follow-ups need a real scientific input change, not unit reformatting.
+- Duplicate or concurrent answer submissions acknowledge the first acceptance without
+  starting another preparation. Different stale answers are rejected. The UI retains
+  field-bound drafts during refreshes and submission conflicts.
+- No-progress and repeated-state detection stop clarification loops. The default
+  maximum is eight accepted rounds per run, configurable with
+  `AGENT_KRONIG_MAX_CLARIFICATION_ROUNDS` from 1 to 32. This is a round budget, not a
+  requirement to ask a fixed number of questions. A rejected submission starts no
+  extra model call.
+- Before a plan is prepared, typed schema-addressable scientific values are compared
+  with confirmed intent using compatible physical units and entity scope. Existing
+  guards also retain requested physics, studies, outputs, areas and profile policies.
+  Explicit quantity overrides absent from the portable physics contract are blocked
+  rather than replaced with simulator defaults.
+
+These checks are not universal semantic proof of arbitrary prose. Unmapped free-text
+instructions still require model reasoning and plan review. Native scientific
+validation remains independent: a correctly clarified request can still fail numerical
+or mesh checks and must be shown as needing review.
+
+See the [clarification verification record](docs/verification/2026-10-16-clarification-guardrails.md).
+
 ## Current capabilities
 
 | Area | Alpha capability |

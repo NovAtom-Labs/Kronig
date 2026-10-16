@@ -94,6 +94,37 @@ def test_clarification_polling_keeps_answer_focus_and_selection(research_page):
     assert page.locator("#submit-clarification").is_visible()
 
 
+def test_reused_question_id_never_carries_a_draft_into_a_different_field(research_page):
+    page = research_page
+    page.evaluate("""() => {
+      activeRun={id:'run-a',state:'waiting_for_user'};
+      renderClarification({revision:1,decision:{status:'clarification',questions:[
+        {id:'setting',field_path:'physics.temperature',prompt:'Temperature?',reason:'Required'}]}});
+    }""")
+    answer = page.locator("#clarification-questions textarea")
+    answer.fill("315 K")
+    page.evaluate("""() => renderClarification({revision:2,decision:{
+      status:'clarification',questions:[{id:'setting',field_path:'contacts.gate.work_function',
+      prompt:'Work function?',reason:'Required'}]}})
+    """)
+    assert answer.input_value() == ""
+
+
+def test_renamed_question_for_same_field_keeps_only_that_fields_draft(research_page):
+    page = research_page
+    page.evaluate("""() => {
+      activeRun={id:'run-a',state:'waiting_for_user'};
+      renderClarification({revision:1,decision:{status:'clarification',questions:[
+        {id:'old',field_path:'physics.temperature',prompt:'Temperature?',reason:'Required'}]}});
+    }""")
+    page.locator("#clarification-questions textarea").fill("315 K")
+    page.evaluate("""() => renderClarification({revision:2,decision:{
+      status:'clarification',questions:[{id:'new',field_path:'physics.temperature',
+      prompt:'Physical temperature?',reason:'Required'}]}})
+    """)
+    assert page.locator("#clarification-questions textarea").input_value() == "315 K"
+
+
 def test_scientific_selectors_change_slice_and_zoom_in_narrow_result(research_page):
     page = research_page
     page.evaluate("""() => {

@@ -45,11 +45,19 @@ class ClarificationQuestion(StrictModel):
     prompt: str = Field(min_length=1, max_length=1000)
     reason: str = Field(min_length=1, max_length=1000)
     required: bool = True
+    reason_kind: Literal[
+        "unspecified", "missing", "invalid", "ambiguous", "conflict", "dependency_changed"
+    ] = "unspecified"
+    evidence_quotes: tuple[str, ...] = Field(default=(), max_length=4)
+    dependency_fields: tuple[str, ...] = Field(default=(), max_length=8)
 
 
 class ClarificationAnswer(StrictModel):
     question_id: str = Field(min_length=1, max_length=80, pattern=r"^[a-z][a-z0-9_-]*$")
     answer: str = Field(min_length=1, max_length=10_000)
+    field_path: str | None = Field(default=None, max_length=240, pattern=r"^[a-z][a-z0-9_.-]*$")
+    question_prompt: str | None = Field(default=None, min_length=1, max_length=1000)
+    question_revision: int | None = Field(default=None, ge=0)
 
 
 class ResolvedResearchIntent(StrictModel):
@@ -84,6 +92,9 @@ class PreparationDecision(StrictModel):
 
     @model_validator(mode="after")
     def validate_status_payload(self) -> Self:
+        ids = [question.id for question in self.questions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("clarification requires unique question ids within a revision")
         if self.status == "clarification":
             if not self.questions:
                 raise ValueError("clarification requires at least one question")

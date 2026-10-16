@@ -48,6 +48,7 @@ from tcad_agent.knowledge.web import (
     ScientificWebResearch,
     UnsafeResearchURL,
 )
+from tcad_agent.prompting.authority import plan_authority_issues
 from tcad_agent.prompting.models import ResolvedResearchIntent
 from tcad_agent.runners.models import RunBudget
 from tcad_agent.runners.process import ExecutionCancelled, cancellation_scope
@@ -313,6 +314,14 @@ class DomainTools:
             if area_refusal is not None:
                 return area_refusal
             if self.research_intent:
+                issues = plan_authority_issues(spec, self.research_intent)
+                if issues:
+                    return ToolResponse(
+                        status="refused", code="scientific_input_authority_violation",
+                        message="The plan changes confirmed scientific inputs. Retain their "
+                        "values and units, or request an explicit researcher correction.",
+                        data={"issues": issues},
+                    )
                 actual = {
                     "study." + spec.study.kind,
                     *("observable." + str(value) for value in spec.observables),

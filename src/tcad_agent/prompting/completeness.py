@@ -105,50 +105,56 @@ def _entity_key_matches(key: str, identity: str) -> bool:
         return False
 
 
+def _record_identity(value, collection: str):
+    return value.get(collection.removesuffix("s"), value.get("id", value.get("label")))
+
+
 def _entity_values(value, collection: str, identity: str):
     """Project only the requested entity from an explicitly scoped record."""
+
     if isinstance(value, list | tuple):
         if identity.isdigit():
             index = int(identity)
             return [value[index]] if index < len(value) else []
-        marker = collection.removesuffix("s")
-        return [item for item in value if isinstance(item, dict) and item.get(marker) == identity]
+        return [
+            item
+            for item in value
+            if isinstance(item, dict) and _record_identity(item, collection) == identity
+        ]
     if isinstance(value, dict):
-        if value.get(collection.removesuffix("s")) == identity:
+        if _record_identity(value, collection) == identity:
             return [value]
         if identity in value:
             return [value[identity]]
         scoped = {key: item for key, item in value.items() if _entity_key_matches(key, identity)}
         if scoped:
             return [scoped]
-        marker = collection.removesuffix("s")
         return [
             item
             for item in value.values()
-            if isinstance(item, dict) and item.get(marker) == identity
+            if isinstance(item, dict) and _record_identity(item, collection) == identity
         ]
     return []
 
 
 def _without_entity(value, collection: str, identity: str):
     """Remove an explicitly answered entity without changing other quantities."""
-    marker = collection.removesuffix("s")
     if isinstance(value, list | tuple):
         # Preserve original positions when removing an answered entity.
         return {
             str(index): item
             for index, item in enumerate(value)
             if str(index) != identity
-            and not (isinstance(item, dict) and item.get(marker) == identity)
+            and not (isinstance(item, dict) and _record_identity(item, collection) == identity)
         }
     if isinstance(value, dict):
-        if value.get(marker) == identity:
+        if _record_identity(value, collection) == identity:
             return {}
         return {
             key: item
             for key, item in value.items()
             if not _entity_key_matches(key, identity)
-            and not (isinstance(item, dict) and item.get(marker) == identity)
+            and not (isinstance(item, dict) and _record_identity(item, collection) == identity)
         }
     return value
 
@@ -188,6 +194,7 @@ def question_for_path(
         reason=(
             f"This determines the {label.lower()}; it must not be chosen without your instruction."
         ),
+        reason_kind="missing",
     )
 
 
@@ -203,12 +210,16 @@ def requirement_path(capability_id: str, path: str, selected: tuple[str, ...]) -
 
 
 def descriptor_for_path(path, catalog, selected=()):
+    normalized = canonical_path(path)
+    parts = normalized.split(".")
+    if len(parts) == 3 and parts[0] in {"contacts", "regions", "profiles", "interfaces"}:
+        normalized = parts[0] + "." + parts[2]
     candidates = [
         item
         for cap in (catalog.capabilities if catalog else ())
         if not selected or cap.id in selected
         for item in (*cap.required_inputs, *cap.optional_inputs)
-        if canonical_path(requirement_path(cap.id, item.path, selected)) == canonical_path(path)
+        if canonical_path(requirement_path(cap.id, item.path, selected)) == normalized
     ]
     if not candidates or len({item.unit for item in candidates}) > 1:
         return None
@@ -276,6 +287,63 @@ def _dimension_matches(value, unit, *, ambiguous, path=""):
         return False
 
 
+def input_values(intent, path):
+    """Extract one exact entity's input, never borrow another entity's value."""
+    candidates = [field.value for field in intent.fields if _matches_scope(field.path, path)]
+    target = _scoped_path(path).split(".")
+    if (
+        not candidates
+        and len(target) == 3
+        and target[0] in {"contacts", "regions", "profiles", "interfaces"}
+    ):
+        aggregate = target[0] + "." + target[2]
+        candidates = [
+            value
+            for field in intent.fields
+            if _scoped_path(field.path) == aggregate
+            for value in _entity_values(field.value, target[0], target[1])
+        ]
+    if (
+        not candidates
+        and len(target) in {2, 3}
+        and target[0] in {"contacts", "regions", "profiles", "interfaces"}
+    ):
+
+        def properties(value):
+            if isinstance(value, dict):
+                if target[-1] in value:
+                    yield value[target[-1]]
+                for key, item in value.items():
+                    if key != target[-1]:
+                        yield from properties(item)
+            elif isinstance(value, list | tuple):
+                for item in value:
+                    yield from properties(item)
+
+        for field in intent.fields:
+            if field.path.split(".")[0] != target[0]:
+                continue
+            records = (
+                _entity_values(field.value, target[0], target[1])
+                if len(target) == 3
+                else [field.value]
+            )
+            candidates.extend(item for record in records for item in properties(record))
+    return candidates
+
+
+def complete_input(intent, path, catalog):
+    descriptor = descriptor_for_path(path, catalog, intent.selected_capabilities)
+    if not descriptor or descriptor.completeness_check != "value":
+        return False
+    values = input_values(intent, path)
+    return bool(values) and all(
+        value is not None
+        and _dimension_matches(value, descriptor.unit, ambiguous=False, path=descriptor.path)
+        for value in values
+    )
+
+
 def enforce_completeness(
     decision: PreparationDecision, catalog: CapabilityCatalogView | None
 ) -> PreparationDecision:
@@ -333,22 +401,7 @@ def enforce_completeness(
 
     def has_value(qualified, item):
         ambiguous = len({other.unit for _, other in requirements if other.path == item.path}) > 1
-        candidates = [
-            field.value for field in intent.fields if _matches_scope(field.path, qualified)
-        ]
-        target = _scoped_path(qualified).split(".")
-        if (
-            not candidates
-            and len(target) == 3
-            and target[0] in {"contacts", "regions", "profiles", "interfaces"}
-        ):
-            aggregate = target[0] + "." + target[2]
-            candidates = [
-                value
-                for field in intent.fields
-                if _scoped_path(field.path) == aggregate
-                for value in _entity_values(field.value, target[0], target[1])
-            ]
+        candidates = input_values(intent, qualified)
         if not candidates and qualified.startswith("study.bias_schedule."):
             candidates = [
                 field.value
@@ -383,7 +436,12 @@ def enforce_completeness(
         # A model question may concern conflicting values or ambiguous units.
         # Compatibility alone cannot resolve it. Only our own mechanically
         # generated missing-value questions are safe to dismiss here.
-        if (
+        explicitly_resolved = (
+            question is not None
+            and question.reason_kind == "missing"
+            and complete_input(intent, path, catalog)
+        )
+        if not explicitly_resolved and (
             not checker_owned
             or not matching
             or not all(has_value(path, item) for _, item in matching)

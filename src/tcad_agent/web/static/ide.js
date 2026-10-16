@@ -1202,7 +1202,7 @@ function renderClarification(preparation) {
 
   const drafts = {};
   clarificationQuestions.querySelectorAll("textarea[data-question-id]").forEach((input) => {
-    drafts[input.dataset.questionId] = input.value;
+    drafts[input.dataset.fieldKey] = input.value;
   });
   const focusedInput = document.activeElement?.closest?.(
     "#clarification-questions textarea[data-question-id]",
@@ -1240,11 +1240,14 @@ function renderClarification(preparation) {
     reason.textContent = question.reason;
     answer.id = inputId;
     answer.dataset.questionId = question.id;
+    answer.dataset.fieldKey = JSON.stringify([
+      activeRun?.id || "local", question.fieldPath, question.reasonKind, question.evidenceQuotes,
+    ]);
     answer.required = question.required;
     answer.rows = 2;
     answer.autocomplete = "off";
     answer.placeholder = question.required ? "Your answer" : "Optional";
-    answer.value = drafts[question.id] || "";
+    answer.value = drafts[answer.dataset.fieldKey] || "";
     answer.addEventListener("input", () => renderClarificationStep());
     rationale.append(rationaleLabel, reason);
     field.append(label, rationale, answer);
@@ -2346,7 +2349,6 @@ clarificationForm.addEventListener("submit", async (event) => {
       || clarificationSubmissionToken !== submissionToken) return;
     if (error.code === "stale_revision") {
       refreshPreparation = true;
-      renderClarification(null);
       await requestSessionRefresh();
     } else showError(error.message);
   } finally {

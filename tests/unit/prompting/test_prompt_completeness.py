@@ -6,6 +6,118 @@ from tcad_agent.prompting.completeness import enforce_completeness, question_for
 from tcad_agent.prompting.models import IntentField, PreparationDecision, ResolvedResearchIntent
 
 
+@pytest.mark.parametrize("identity_key", ["contact", "id", "label"])
+def test_correction_and_lookup_use_the_same_entity_identity(identity_key):
+    from tcad_agent.prompting.completeness import _without_entity
+
+    right = {identity_key: "right", "work_function": "4.7 eV"}
+    records = [{identity_key: "left", "work_function": "4.2 eV"}, right]
+    assert _without_entity(records, "contacts", "left") == {"1": right}
+
+
+@pytest.mark.parametrize("target", ["contacts.work_function", "contacts.gate.work_function"])
+@pytest.mark.parametrize("identity_key", ["contact", "id", "label"])
+def test_typed_quantity_inside_an_entity_record_is_already_supplied(target, identity_key):
+    from tcad_agent.prompting.completeness import complete_input
+
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Use supplied contacts",
+        selected_capabilities=("contact.metal_work_function",),
+        fields=(
+            IntentField(
+                path="contacts.boundary_conditions",
+                origin="researcher",
+                value=[
+                    {
+                        identity_key: "gate",
+                        "type": "metal_work_function",
+                        "work_function": "4.25 eV",
+                    }
+                ],
+            ),
+        ),
+    )
+    catalog = CapabilityCatalog.from_manifest(
+        CapabilityManifest.from_backend("devsim")
+    ).public_view()
+    assert complete_input(intent, target, catalog)
+    assert not complete_input(intent, "contacts.right.work_function", catalog)
+
+
+@pytest.mark.parametrize(
+    "path,value,capability",
+    [
+        ("physics.temperature", "315 K", "study.equilibrium"),
+        ("contacts.gate.work_function", "4.23 eV", "contact.metal_work_function"),
+        ("study.bias_schedule.step", "25 mV", ("study.frequency", "study.dc")),
+    ],
+)
+def test_reworded_missing_question_cannot_override_a_complete_input(path, value, capability):
+    from tcad_agent.prompting.models import ClarificationQuestion
+
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Analyze the specified structure",
+        selected_capabilities=(capability,) if isinstance(capability, str) else capability,
+        fields=(IntentField(path=path, value=value, origin="researcher"),),
+    )
+    question = ClarificationQuestion.model_construct(
+        id="new_wording",
+        field_path=path,
+        prompt="Please provide this input again.",
+        reason="This value is missing.",
+        required=True,
+        reason_kind="missing",
+    )
+    decision = PreparationDecision(
+        status="clarification",
+        summary="Need input",
+        questions=(question,),
+        intent=intent,
+        unresolved_critical=(path,),
+    )
+    catalog = CapabilityCatalog.from_manifest(
+        CapabilityManifest.from_backend("devsim")
+    ).public_view()
+    result = enforce_completeness(decision, catalog)
+    assert path not in result.unresolved_critical
+    assert path not in {question.field_path for question in result.questions}
+
+
+def test_one_contacts_value_does_not_answer_a_different_contact_question():
+    from tcad_agent.prompting.models import ClarificationQuestion
+
+    question = ClarificationQuestion.model_construct(
+        id="right",
+        field_path="contacts.right.work_function",
+        prompt="Right work function?",
+        reason="Needed for the right boundary",
+        required=True,
+        reason_kind="missing",
+    )
+    decision = PreparationDecision(
+        status="clarification",
+        summary="Need right contact",
+        questions=(question,),
+        unresolved_critical=(question.field_path,),
+        intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Compare contacts",
+            selected_capabilities=("contact.metal_work_function",),
+            fields=(
+                IntentField(
+                    path="contacts.left.work_function", value="4.23 eV", origin="researcher"
+                ),
+            ),
+        ),
+    )
+    catalog = CapabilityCatalog.from_manifest(
+        CapabilityManifest.from_backend("devsim")
+    ).public_view()
+    assert question.field_path in enforce_completeness(decision, catalog).unresolved_critical
+
+
 def test_coupled_frequency_bounds_do_not_supply_missing_dc_bounds():
     decision = PreparationDecision(
         status="ready",

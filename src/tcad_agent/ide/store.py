@@ -34,6 +34,7 @@ from tcad_agent.ide.models import (
     WorkspaceRecord,
     is_run_grantable,
 )
+from tcad_agent.prompting.clarifications import bind_answers
 from tcad_agent.prompting.models import (
     ClarificationAnswer,
     CompiledAgentRequest,
@@ -42,6 +43,7 @@ from tcad_agent.prompting.models import (
 )
 
 RUN_OWNED_TABLES = (
+    "clarification_receipts",
     "approval_requests",
     "run_permission_grants",
     "run_change_baselines",
@@ -54,6 +56,10 @@ RUN_OWNED_TABLES = (
 
 
 class IDEStoreError(RuntimeError):
+    pass
+
+
+class ClarificationLimitError(IDEStoreError):
     pass
 
 
@@ -171,6 +177,14 @@ class SqliteIDEStore:
                     revision INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS clarification_receipts (
+                    run_id TEXT NOT NULL REFERENCES agent_runs(id),
+                    question_revision INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    decision_json TEXT NOT NULL,
+                    PRIMARY KEY (run_id, question_revision)
                 );
 
                 CREATE TABLE IF NOT EXISTS prepared_plans (
@@ -911,6 +925,96 @@ class SqliteIDEStore:
         if row is None:
             raise IDEStoreError(f"prompt preparation does not exist: {run_id}")
         return self._prompt_preparation(row)
+
+    def clarification_decisions(self, run_id: UUID) -> tuple[PreparationDecision, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT decision_json FROM clarification_receipts WHERE run_id = ? "
+                "ORDER BY question_revision", (str(run_id),),
+            ).fetchall()
+        return tuple(PreparationDecision.model_validate_json(row[0]) for row in rows)
+
+    def accept_clarification(
+        self, run_id: UUID, expected_revision: int, answers: tuple[ClarificationAnswer, ...],
+        *, max_rounds: int = 8,
+    ) -> tuple[PromptPreparationRecord, bool]:
+        """Atomically accept once, bind provenance and queue work; exact replay is read-only."""
+        payload = json.dumps(sorted(
+            (answer.question_id, answer.answer.strip()) for answer in answers
+        ), separators=(",", ":"))
+        connection = self._connect()
+        accepted = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            receipt = connection.execute(
+                "SELECT payload_json, decision_json FROM clarification_receipts "
+                "WHERE run_id = ? AND question_revision = ?", (str(run_id), expected_revision),
+            ).fetchone()
+            if receipt is not None:
+                if payload != receipt["payload_json"]:
+                    raise IDEStoreError("stale clarification revision contains different answers")
+                decision = PreparationDecision.model_validate_json(receipt["decision_json"])
+                bind_answers(answers, decision.questions, expected_revision)
+            else:
+                row = connection.execute(
+                    "SELECT * FROM prompt_preparations WHERE run_id = ?", (str(run_id),)
+                ).fetchone()
+                run = connection.execute(
+                    "SELECT state FROM agent_runs WHERE id = ?", (str(run_id),)
+                ).fetchone()
+                if row is None or row["revision"] != expected_revision:
+                    raise IDEStoreError("stale prompt preparation revision")
+                if run is None or run["state"] != RunState.WAITING_FOR_USER.value:
+                    raise IDEStoreError("stale clarification: run is no longer waiting for answers")
+                record = self._prompt_preparation(row)
+                decision = record.decision
+                if decision is None or decision.status != "clarification":
+                    raise IDEStoreError("run has no active clarification questions")
+                ids = [answer.question_id for answer in answers]
+                if any(not answer.answer.strip() for answer in answers):
+                    raise IDEStoreError("clarification answers must be non-empty")
+                known = {question.id for question in decision.questions}
+                required = {question.id for question in decision.questions if question.required}
+                if (len(set(ids)) != len(ids) or not set(ids).issubset(known)
+                        or not required.issubset(ids)):
+                    raise IDEStoreError("clarification answers do not match the active questions")
+                rounds = connection.execute(
+                    "SELECT COUNT(*) FROM clarification_receipts WHERE run_id = ?", (str(run_id),)
+                ).fetchone()[0]
+                if rounds >= max_rounds:
+                    raise ClarificationLimitError(
+                        "The clarification round limit was reached. No further model call was "
+                        "started. Your accepted answers are retained; revise the request."
+                    )
+                combined = (
+                    *record.answers, *bind_answers(answers, decision.questions, expected_revision)
+                )
+                now = datetime.now(UTC).isoformat()
+                connection.execute(
+                    "UPDATE prompt_preparations SET answers_json = ?, revision = revision + 1, "
+                    "updated_at = ? WHERE run_id = ? AND revision = ?",
+                    (json.dumps([answer.model_dump(mode="json") for answer in combined]), now,
+                     str(run_id), expected_revision),
+                )
+                connection.execute(
+                    "INSERT INTO clarification_receipts VALUES (?, ?, ?, ?)",
+                    (str(run_id), expected_revision, payload, decision.model_dump_json()),
+                )
+                connection.execute(
+                    "UPDATE agent_runs SET state = ?, revision = revision + 1, updated_at = ? "
+                    "WHERE id = ?", (RunState.QUEUED.value, now, str(run_id)),
+                )
+                accepted = True
+            connection.commit()
+        except (ValueError, KeyError) as exc:
+            connection.rollback()
+            raise IDEStoreError(f"Invalid clarification binding: {exc}") from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get_prompt_preparation(run_id), accepted
 
     def update_prompt_preparation(
         self,

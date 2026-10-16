@@ -149,6 +149,188 @@ def ready() -> PreparationDecision:
     )
 
 
+def test_reused_question_id_does_not_replace_another_fields_answer(tmp_path):
+    first = clarification()
+    second = first.model_copy(
+        update={
+            "questions": (
+                first.questions[0].model_copy(
+                    update={
+                        "field_path": "contacts.gate.work_function",
+                        "prompt": "Gate work function?",
+                    }
+                ),
+            ),
+            "unresolved_critical": ("contacts.gate.work_function",),
+            "intent": ready().intent,
+        }
+    )
+    services, conversation, _, supervisor = setup(tmp_path, [first, second, ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    supervisor.answer_clarification(
+        run.id, record.revision, (ClarificationAnswer(question_id="temperature", answer="300 K"),)
+    )
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    supervisor.answer_clarification(
+        run.id, record.revision, (ClarificationAnswer(question_id="temperature", answer="4.23 eV"),)
+    )
+    assert supervisor.join(run.id, timeout=3)
+    answers = services.store.get_prompt_preparation(run.id).answers
+    assert len(answers) == 2
+    assert [(a.field_path, a.answer) for a in answers] == [
+        ("study.temperature", "300 K"),
+        ("contacts.gate.work_function", "4.23 eV"),
+    ]
+    assert answers[0].question_prompt == "What temperature should be used?"
+    assert answers[0].question_revision < answers[1].question_revision
+
+
+def test_client_cannot_rebind_answer_to_another_scientific_input(tmp_path):
+    import pytest
+
+    from tcad_agent.ide.store import IDEStoreError
+
+    services, conversation, _, supervisor = setup(tmp_path, [clarification(), ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    forged = ClarificationAnswer.model_construct(
+        question_id="temperature",
+        answer="300 K",
+        field_path="contacts.gate.work_function",
+    )
+    with pytest.raises(IDEStoreError, match="binding"):
+        supervisor.answer_clarification(run.id, record.revision, (forged,))
+
+
+def test_accepted_answers_can_be_replayed_after_preparation_finishes(tmp_path):
+    services, conversation, factory, supervisor = setup(tmp_path, [clarification(), ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    answers = (ClarificationAnswer(question_id="temperature", answer="300 K"),)
+    supervisor.answer_clarification(run.id, record.revision, answers)
+    assert supervisor.join(run.id, timeout=3)
+    acknowledged = supervisor.answer_clarification(run.id, record.revision, answers)
+    assert acknowledged.id == run.id
+    assert len(factory.created) == 1
+    assert (
+        len(
+            [
+                event
+                for event in services.events.list_after(conversation.id, 0)
+                if event.kind == "clarification_answered"
+            ]
+        )
+        == 1
+    )
+    assert len(services.store.get_prompt_preparation(run.id).answers) == 1
+
+
+def test_concurrent_identical_answer_requests_launch_only_one_preparation(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    services, conversation, factory, supervisor = setup(tmp_path, [clarification(), ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    answers = (ClarificationAnswer(question_id="temperature", answer="300 K"),)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        requests = [
+            pool.submit(supervisor.answer_clarification, run.id, record.revision, answers)
+            for _ in range(2)
+        ]
+        assert all(request.result(timeout=5).id == run.id for request in requests)
+    assert supervisor.join(run.id, timeout=3)
+    assert len(factory.created) == 1
+    assert (
+        len(
+            [
+                event
+                for event in services.events.list_after(conversation.id, 0)
+                if event.kind == "clarification_answered"
+            ]
+        )
+        == 1
+    )
+
+
+def test_changed_stale_answer_is_not_treated_as_an_exact_replay(tmp_path):
+    import pytest
+
+    from tcad_agent.ide.store import IDEStoreError
+
+    services, conversation, _, supervisor = setup(tmp_path, [clarification(), ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    supervisor.answer_clarification(
+        run.id, record.revision, (ClarificationAnswer(question_id="temperature", answer="300 K"),)
+    )
+    assert supervisor.join(run.id, timeout=3)
+    with pytest.raises(IDEStoreError, match="stale"):
+        supervisor.answer_clarification(
+            run.id,
+            record.revision,
+            (ClarificationAnswer(question_id="temperature", answer="310 K"),),
+        )
+
+
+def test_whitespace_only_answer_does_not_start_another_preparation(tmp_path):
+    import pytest
+
+    from tcad_agent.ide.store import IDEStoreError
+
+    services, conversation, factory, supervisor = setup(tmp_path, [clarification(), ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    before = services.store.get_prompt_preparation(run.id)
+    with pytest.raises(IDEStoreError, match="non-empty"):
+        supervisor.answer_clarification(run.id, before.revision, (
+            ClarificationAnswer(question_id="temperature", answer="   "),))
+    assert services.store.get_prompt_preparation(run.id) == before
+    assert not factory.created
+
+
+def test_preparation_round_budget_blocks_more_calls_without_discarding_answers(
+    tmp_path, monkeypatch
+):
+    import pytest
+
+    from tcad_agent.ide.store import IDEStoreError
+
+    monkeypatch.setenv("AGENT_KRONIG_MAX_CLARIFICATION_ROUNDS", "1")
+    second = clarification().model_copy(
+        update={
+            "questions": (
+                clarification()
+                .questions[0]
+                .model_copy(update={"id": "geometry", "field_path": "regions.structure"}),
+            ),
+            "unresolved_critical": ("regions.structure",),
+        }
+    )
+    services, conversation, _, supervisor = setup(tmp_path, [clarification(), second, ready()])
+    run = supervisor.start(conversation.id, "Inspect the research request")
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    supervisor.answer_clarification(
+        run.id, record.revision, (ClarificationAnswer(question_id="temperature", answer="300 K"),)
+    )
+    assert supervisor.join(run.id, timeout=3)
+    record = services.store.get_prompt_preparation(run.id)
+    with pytest.raises(IDEStoreError, match="round limit"):
+        supervisor.answer_clarification(
+            run.id,
+            record.revision,
+            (ClarificationAnswer(question_id="geometry", answer="2 um silicon"),),
+        )
+    assert services.store.get_prompt_preparation(run.id).answers == record.answers
+
+
 def test_scientific_agent_chat_finish_without_result_is_not_success(tmp_path):
     decision = ready()
     decision = decision.model_copy(
@@ -364,6 +546,5 @@ def test_http_clarification_lifecycle_resumes_the_same_run(tmp_path: Path) -> No
             "answers": [{"question_id": "temperature", "answer": "300 K"}],
         },
     )
-    assert duplicate.status_code == 409
-    assert duplicate.json()["code"] == "stale_revision"
-    assert "do not match" not in duplicate.json()["message"]
+    assert duplicate.status_code == 202
+    assert duplicate.json()["id"] == str(run_id)

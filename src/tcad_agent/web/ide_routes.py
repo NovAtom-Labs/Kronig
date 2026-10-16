@@ -777,6 +777,8 @@ def build_ide_router(services: IDEServices, supervisor: AgentSupervisor) -> APIR
             )
         except IDEStoreError as exc:
             detail = str(exc).lower()
+            if "clarification round limit" in detail:
+                raise AgentAPIError(409, "clarification_limit", str(exc)) from exc
             code = "stale_revision" if "stale" in detail else "invalid_clarification"
             status = 409 if code == "stale_revision" else 400
             raise AgentAPIError(
