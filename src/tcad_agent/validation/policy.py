@@ -17,13 +17,18 @@ _POLICY_MODULES = (
     "tcad_agent.validation.mesh",
     "tcad_agent.validation.models",
     "tcad_agent.validation.physics",
+    "tcad_agent.validation.statistics",
+    "tcad_agent.validation.charge",
+    "tcad_agent.validation.refinement",
     "tcad_agent.validation.policy",
     "tcad_agent.domain.models",
+    "tcad_agent.domain.presentation",
     "tcad_agent.domain.profiles",
     "tcad_agent.domain.studies",
     "tcad_agent.domain.units",
     "tcad_agent.results.datasets",
     "tcad_agent.results.models",
+    "tcad_agent.results.presentation",
 )
 
 

@@ -43,7 +43,8 @@ def test_initial_failed_dc_attempt_counts_toward_retry_budget(retries):
         "_native_dc_starting_controls": runtime._native_dc_starting_controls,
         "_bias_points": lambda study: [1.0],
         "payload": {
-            "study": {"strategy": "adaptive", "minimum_step_v": 0.001, "maximum_retries": retries}
+            "study": {"kind": "dc", "strategy": "adaptive", "minimum_step_v": 0.001,
+                      "maximum_retries": retries}
         },
         "requested_contact": "left",
         "study_backend_contact": "left",

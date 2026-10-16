@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 _UNIT_CONVERSIONS: dict[str, tuple[float, str]] = {
+    "cm": (1e-2, "m"),
     "cm^-3": (1e6, "m^-3"),
     "V/cm": (1e2, "V/m"),
     "A/cm^2": (1e4, "A/m^2"),

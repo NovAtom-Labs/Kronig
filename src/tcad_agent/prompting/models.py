@@ -109,7 +109,7 @@ class WorkspaceFileContext(StrictModel):
     path: str = Field(min_length=1, max_length=1000)
     size: int = Field(ge=0)
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-    text_excerpt: str | None = Field(default=None, max_length=4000)
+    text_excerpt: str | None = Field(default=None, max_length=16000)
 
 
 class WorkspaceContext(StrictModel):

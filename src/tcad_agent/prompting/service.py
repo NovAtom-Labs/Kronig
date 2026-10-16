@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import os
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -16,6 +17,9 @@ from tcad_agent.domain.models import StrictModel
 from tcad_agent.domain.units import QuantityValue
 from tcad_agent.prompting.compiler import PromptCompiler
 from tcad_agent.prompting.completeness import (
+    _matches_scope,
+    _scoped_path,
+    _without_entity,
     canonical_path,
     descriptor_for_path,
     enforce_completeness,
@@ -205,13 +209,13 @@ class PromptPreparationService:
                 report(heartbeat_phase)
         if previous_decision and previous_decision.intent and decision.intent:
             changed = {
-                canonical_path(q.field_path)
+                _scoped_path(q.field_path)
                 for q in previous_decision.questions
                 if q.id in {answer.question_id for answer in answers}
             }
-            fields = {field.path: field for field in decision.intent.fields}
+            fields = {_scoped_path(field.path): field for field in decision.intent.fields}
             previous_fields = {
-                canonical_path(field.path): field for field in previous_decision.intent.fields
+                _scoped_path(field.path): field for field in previous_decision.intent.fields
             }
             # A measurement choice may be answered under a related field (e.g.
             # frequency), but replacing an analysis requires explicit researcher
@@ -239,7 +243,9 @@ class PromptPreparationService:
                 )
             )
             preserve_models = (
-                "physics.models" in previous_fields and "physics.models" not in changed
+                "physics.models" in previous_fields
+                and "physics.models" not in changed
+                and previous_fields["physics.models"].origin.value in {"researcher", "repository"}
             )
             if analysis_changed:
                 changed.add("study.kind")
@@ -247,7 +253,10 @@ class PromptPreparationService:
                 cap
                 for cap in previous_decision.intent.selected_capabilities
                 if (not cap.startswith("study.") or not analysis_changed)
-                and not ("physics.models" in changed and cap.startswith("model."))
+                and not (
+                    ("physics.models" in changed or not preserve_models)
+                    and cap.startswith("model.")
+                )
             )
             current_caps = tuple(
                 cap
@@ -255,11 +264,34 @@ class PromptPreparationService:
                 if not (preserve_models and cap.startswith("model."))
             )
             for field in previous_decision.intent.fields:
-                if (
-                    field.origin.value in {"researcher", "repository"}
-                    and canonical_path(field.path) not in changed
+                if field.origin.value in {"researcher", "repository"} and not any(
+                    _matches_scope(field.path, path) for path in changed
                 ):
-                    fields[field.path] = field
+                    previous_value = field.value
+                    for path in changed:
+                        parts = _scoped_path(path).split(".")
+                        if (
+                            len(parts) == 3
+                            and parts[0] in {"contacts", "regions", "profiles", "interfaces"}
+                            and _scoped_path(field.path) == parts[0] + "." + parts[2]
+                        ):
+                            field = field.model_copy(
+                                update={"value": _without_entity(field.value, parts[0], parts[1])}
+                            )
+                    if field.value == {}:
+                        continue
+                    current = fields.get(_scoped_path(field.path))
+                    if current and field.value != previous_value and isinstance(field.value, dict):
+                        current_value = current.value
+                        if isinstance(current_value, list):
+                            current_value = {
+                                str(index): value for index, value in enumerate(current_value)
+                            }
+                        if isinstance(current_value, dict):
+                            field = current.model_copy(
+                                update={"value": {**current_value, **field.value}}
+                            )
+                    fields[_scoped_path(field.path)] = field
             decision = decision.model_copy(
                 update={
                     "intent": decision.intent.model_copy(
@@ -315,6 +347,10 @@ class PromptPreparationService:
         for question in previous.questions:
             if question.id not in supplied:
                 return None
+            if re.match(r"^[+-]?(?:\d|\.\d)", supplied[question.id]) is None:
+                # Unit-only and conversational replies require reasoning about
+                # the previous quantity, not implicit replacement with 1 unit.
+                return None
             descriptor = descriptor_for_path(
                 question.field_path, catalog, previous.intent.selected_capabilities
             )
@@ -328,9 +364,9 @@ class PromptPreparationService:
             fields[question.field_path] = IntentField(
                 path=question.field_path, value=supplied[question.id], origin="researcher"
             )
-        answered = {canonical_path(question.field_path) for question in previous.questions}
+        answered = {_scoped_path(question.field_path) for question in previous.questions}
         remaining = tuple(
-            path for path in previous.unresolved_critical if canonical_path(path) not in answered
+            path for path in previous.unresolved_critical if _scoped_path(path) not in answered
         )
         if remaining:
             return None

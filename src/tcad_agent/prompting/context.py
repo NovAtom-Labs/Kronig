@@ -76,9 +76,12 @@ class WorkspaceContextCollector:
         selected = ordered[: self.max_files]
         file_contexts = []
         remaining_text = 16000
+        file_text_limit = max(4000, remaining_text // max(1, len(selected)))
         for path in selected:
             try:
-                item = self._file_context(canonical, path)
+                item = self._file_context(
+                    canonical, path, text_limit=min(file_text_limit, remaining_text)
+                )
                 excerpt = item.text_excerpt
                 if excerpt:
                     excerpt = excerpt[:remaining_text] or None
@@ -103,21 +106,23 @@ class WorkspaceContextCollector:
             inventory_truncated=truncated,
         )
 
-    def _file_context(self, root: Path, path: Path) -> WorkspaceFileContext:
+    def _file_context(
+        self, root: Path, path: Path, *, text_limit: int = 4000
+    ) -> WorkspaceFileContext:
         size = path.stat().st_size
         digest: str | None = None
         if size <= self.hash_limit:
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
         excerpt = None
-        if path.suffix.casefold() in {".md", ".txt", ".rst"}:
+        if text_limit and path.suffix.casefold() in {".md", ".txt", ".rst"}:
             from tcad_agent.agent.events import configured_secret_values, safe_event_text
 
             with path.open("rb") as source:
-                raw = source.read(4000)
+                raw = source.read(text_limit)
             if b"\x00" not in raw:
                 excerpt = safe_event_text(
                     raw.decode("utf-8", errors="replace"), configured_secret_values()
-                )[:4000]
+                )[:text_limit]
         return WorkspaceFileContext(
             path=path.relative_to(root).as_posix(),
             size=size,

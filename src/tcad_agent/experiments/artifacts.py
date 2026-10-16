@@ -29,7 +29,7 @@ def project_slug(name: str) -> str:
 def _display(value: Any) -> str:
     if isinstance(value, dict) and set(value) >= {"magnitude_si", "si_unit", "dimensionality"}:
         quantity = QuantityValue.model_validate(value)
-        return f"{quantity.magnitude_si:g} {quantity.si_unit}"
+        return f"`{quantity.magnitude_si:.15g} {quantity.si_unit}`"
     if isinstance(value, dict) and set(value) >= {"value", "unit"}:
         return f"{value['value']} {value['unit']}"
     if isinstance(value, dict):
@@ -187,6 +187,22 @@ class ExperimentPlanArtifactWriter:
             lines.append(f"- {key.replace('_', ' ').title()}: {_display(value)}")
         lines.extend(["", "## Requested observables", ""])
         lines.extend(f"- `{observable.value}`" for observable in spec.observables)
+        lines.extend(
+            [
+                "",
+                "## Output units and verification",
+                "",
+                "Canonical evidence is retained in SI. Requested display units:",
+            ]
+        )
+        lines.extend(f"- `{key}`: {unit}" for key, unit in spec.display_units.items())
+        lines.append(
+            "Up to four half-spacing mesh comparisons retain the same physics and study, "
+            "using a 3% per-profile response criterion. Numerically refined results may "
+            "replace the initial coarse result, with every input retained in provenance. "
+            "Existing physical tolerances are unchanged. Failed or incomplete "
+            "verification remains visible."
+        )
         if spec.profile_sampling:
             lines.extend(
                 [

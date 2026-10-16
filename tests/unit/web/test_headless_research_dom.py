@@ -99,7 +99,10 @@ def test_scientific_selectors_change_slice_and_zoom_in_narrow_result(research_pa
     page.evaluate("""() => {
       const root=document.createElement('div');root.id='headless-result';
       root.style.width='560px';document.querySelector('#workspace-welcome').replaceWith(root);
-      AgentKronigResults.render(root,{execution_state:'completed',experiment:{regions:[]},
+      AgentKronigResults.render(root,{execution_state:'completed',experiment:{regions:[
+        {id:'bulk',x0:{magnitude_si:0},x1:{magnitude_si:2e-6}}],contacts:[
+        {id:'left_contact',location:'x_min'},
+        {id:'right_reference_contact',location:'x_max'}]},
         result:{metadata:{profile_bias_values_v:[-2,2]},operating_points:[],
           axes:{bias:{id:'bias',kind:'bias',label:'Bias',unit:'V',values:[-2,0,2]},
             position:{id:'position',kind:'position',label:'Position',unit:'m',values:[0,1e-6,2e-6]},
@@ -111,10 +114,15 @@ def test_scientific_selectors_change_slice_and_zoom_in_narrow_result(research_pa
         validation:{overall:'passed',checks:[]}});
     }""")
     root = page.locator("#headless-result")
+    assert root.locator(".result-metric-label").first.inner_text() == (
+        "Potential span · all points"
+    )
     dataset = root.locator('[aria-label="Displayed result dataset"]')
     point = root.locator('[aria-label="Displayed operating point"]')
     assert "requested profile" in point.locator("option").first.inner_text()
     line = root.locator(".result-chart-line").first
+    right_label = root.locator('svg text').filter(has_text="right_reference_contact")
+    assert right_label.evaluate("text => text.getBBox().x + text.getBBox().width <= 880")
     original_line = line.get_attribute("d")
     point.select_option("2")
     assert line.get_attribute("d") != original_line
@@ -128,6 +136,35 @@ def test_scientific_selectors_change_slice_and_zoom_in_narrow_result(research_pa
     point.select_option("0")
     assert "1.000e6 Hz" in point.get_attribute("title")
     assert root.evaluate("root => root.scrollWidth <= root.clientWidth")
+
+
+def test_plot_png_export_retains_visible_curve_and_opaque_background(research_page):
+    import base64
+
+    page = research_page
+    page.evaluate("""() => {
+      const root=document.createElement('div');root.id='export-result';
+      document.querySelector('#workspace-welcome').replaceWith(root);
+      AgentKronigResults.render(root,{experiment:{regions:[]},result:{metadata:{},
+        axes:{x:{id:'x',kind:'bias',label:'Bias',unit:'V',values:[-1,0,1]}},
+        datasets:{response:{id:'response',label:'Response',unit:'F/m^2',
+          axes:['x'],shape:[3],values:[0.003,0.0004,0.003]}},operating_points:[]},
+        validation:{checks:[]}});
+    }""")
+    with page.expect_download() as exported:
+        page.get_by_role("button", name="PNG", exact=True).click()
+    encoded = base64.b64encode(Path(exported.value.path()).read_bytes()).decode()
+    pixels = page.evaluate("""async encoded => {
+      const image=new Image();image.src='data:image/png;base64,'+encoded;await image.decode();
+      const canvas=document.createElement('canvas');
+      canvas.width=image.width;canvas.height=image.height;
+      const context=canvas.getContext('2d');context.drawImage(image,0,0);
+      const p=context.getImageData(0,0,canvas.width,canvas.height).data;
+      let blue=0;for(let i=0;i<p.length;i+=4)if(p[i+2]>p[i]+20&&p[i+2]>p[i+1]+5)blue++;
+      return {backgroundAlpha:p[3],bluePixels:blue};
+    }""", encoded)
+    assert pixels["backgroundAlpha"] == 255
+    assert pixels["bluePixels"] > 100
 
 
 def _clarification_fixture():

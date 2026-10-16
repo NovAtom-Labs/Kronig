@@ -68,7 +68,10 @@ class SavedResultCatalog:
         projects = self._projects(workspace)
         entries = []
         rejected = 0
-        candidates = sorted(root.iterdir(), key=lambda path: path.name)
+        candidates = sorted(
+            (path for path in root.iterdir() if path.name != ".work"),
+            key=lambda path: path.name,
+        )
         for candidate in candidates[: self.limit]:
             try:
                 view = self.read(workspace, candidate.name)

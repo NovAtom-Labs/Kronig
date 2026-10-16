@@ -1,5 +1,6 @@
 """Capability-driven input checks, independent of device names and prompt examples."""
 
+import math
 import re
 
 from tcad_agent.capabilities.descriptors import CapabilityCatalogView, InputAuthority
@@ -47,8 +48,8 @@ def readable_questions(decision: PreparationDecision, catalog: CapabilityCatalog
     )
 
 
-def canonical_path(path: str) -> str:
-    parts = [part for part in path.split(".") if not part.isdigit()]
+def canonical_path(path: str, *, preserve_indices: bool = False) -> str:
+    parts = [part for part in path.split(".") if preserve_indices or not part.isdigit()]
     aliases = {
         "studies": "study",
         "type": "kind",
@@ -65,6 +66,91 @@ def canonical_path(path: str) -> str:
     if parts[:2] == ["study", "dc_points"]:
         parts.pop(1)
     return ".".join(parts)
+
+
+def _scoped_path(path: str) -> str:
+    return canonical_path(
+        path,
+        preserve_indices=path.split(".", 1)[0] in {"contacts", "regions", "profiles", "interfaces"},
+    )
+
+
+def _matches_scope(field_path: str, requirement: str) -> bool:
+    """Allow entity-qualified inputs, not unrelated nested study schedules."""
+    actual = _scoped_path(field_path).split(".")
+    expected = _scoped_path(requirement).split(".")
+    if actual == expected:
+        return True
+    return (
+        len(expected) == 2
+        and len(actual) == 3
+        and expected[0] in {"contacts", "regions", "profiles", "interfaces"}
+        and actual[0] == expected[0]
+        and actual[2] == expected[1]
+    )
+
+
+def _entity_key_matches(key: str, identity: str) -> bool:
+    if key == identity:
+        return True
+    prefix = identity + "_"
+    if not key.startswith(prefix):
+        return False
+    try:
+        # A suffix must itself be a unit, not another entity's name. For
+        # example a left_aux quantity must never be assigned to entity left.
+        QuantityValue.model_validate("1 " + key[len(prefix) :])
+        return True
+    except ValueError:
+        return False
+
+
+def _entity_values(value, collection: str, identity: str):
+    """Project only the requested entity from an explicitly scoped record."""
+    if isinstance(value, list | tuple):
+        if identity.isdigit():
+            index = int(identity)
+            return [value[index]] if index < len(value) else []
+        marker = collection.removesuffix("s")
+        return [item for item in value if isinstance(item, dict) and item.get(marker) == identity]
+    if isinstance(value, dict):
+        if value.get(collection.removesuffix("s")) == identity:
+            return [value]
+        if identity in value:
+            return [value[identity]]
+        scoped = {key: item for key, item in value.items() if _entity_key_matches(key, identity)}
+        if scoped:
+            return [scoped]
+        marker = collection.removesuffix("s")
+        return [
+            item
+            for item in value.values()
+            if isinstance(item, dict) and item.get(marker) == identity
+        ]
+    return []
+
+
+def _without_entity(value, collection: str, identity: str):
+    """Remove an explicitly answered entity without changing other quantities."""
+    marker = collection.removesuffix("s")
+    if isinstance(value, list | tuple):
+        # Preserve original positions when removing an answered entity.
+        return {
+            str(index): item
+            for index, item in enumerate(value)
+            if str(index) != identity
+            and not (isinstance(item, dict) and item.get(marker) == identity)
+        }
+    if isinstance(value, dict):
+        if value.get(marker) == identity:
+            return {}
+        return {
+            key: item
+            for key, item in value.items()
+            if not _entity_key_matches(key, identity)
+            and not (isinstance(item, dict) and item.get(marker) == identity)
+        }
+    return value
 
 
 def covers(path: str, requirement: str) -> bool:
@@ -129,18 +215,61 @@ def descriptor_for_path(path, catalog, selected=()):
     return candidates[0]
 
 
-def _dimension_matches(value, unit, *, ambiguous):
+def _dimension_matches(value, unit, *, ambiguous, path=""):
+    """Check scalar quantities and scoped records without inventing physical values.
+
+    The model may group values by contact/region or include units in a quantity
+    key. Those are representations of the same input, not absent inputs. Every
+    record must contain a valid quantity; labels alone never supply one.
+    """
     if not unit:
         return True
     if isinstance(value, list | tuple):
         return bool(value) and all(
-            _dimension_matches(item, unit, ambiguous=ambiguous) for item in value
+            _dimension_matches(item, unit, ambiguous=ambiguous, path=path) for item in value
         )
     if isinstance(value, int | float):
         # A numeric intent has descriptor units only if those units are unique.
-        return not ambiguous
-    if isinstance(value, dict) and "value" in value and isinstance(value.get("unit"), str):
-        value = f"{value['value']} {value['unit']}"
+        return not isinstance(value, bool) and math.isfinite(value) and not ambiguous
+    if isinstance(value, dict):
+        quantity_key = "value" if "value" in value else "magnitude"
+        if "value" in value and "magnitude" in value and value["value"] != value["magnitude"]:
+            return False
+        if quantity_key in value and "unit" in value:
+            # An explicit but wrong unit must not fall back to descriptor units.
+            return (
+                not isinstance(value[quantity_key], bool)
+                and isinstance(value["unit"], str)
+                and _dimension_matches(
+                    f"{value[quantity_key]} {value['unit']}", unit, ambiguous=ambiguous, path=path
+                )
+            )
+        if {"magnitude_si", "si_unit", "dimensionality"} <= value.keys():
+            try:
+                return QuantityValue.model_validate(value).is_compatible_with(unit)
+            except ValueError:
+                return False
+        metadata = {"region", "contact", "id", "name", "label", "source_reference", "rationale"}
+        quantities = [(key, item) for key, item in value.items() if key not in metadata]
+        if not quantities:
+            return False
+        leaf = canonical_path(path).rsplit(".", 1)[-1]
+        for key, item in quantities:
+            if key in {leaf, "value"} or key.isdigit() or isinstance(item, dict | list | tuple):
+                valid = _dimension_matches(item, unit, ambiguous=ambiguous, path=path)
+            elif isinstance(item, str):
+                valid = _dimension_matches(item, unit, ambiguous=ambiguous, path=path)
+            elif isinstance(item, int | float) and not isinstance(item, bool) and "_" in key:
+                # For example a role-qualified energy or a temperature_K entry.
+                # Parse the explicit suffix with the same unit registry as scalars.
+                valid = _dimension_matches(
+                    f"{item} {key.rsplit('_', 1)[-1]}", unit, ambiguous=ambiguous, path=path
+                )
+            else:
+                valid = False
+            if not valid:
+                return False
+        return True
     try:
         return QuantityValue.model_validate(value).is_compatible_with(unit)
     except ValueError:
@@ -195,13 +324,71 @@ def enforce_completeness(
             and not decision.unresolved_critical
         ):
             decision = decision.model_copy(update={"status": "ready"})
-    missing = list(decision.unresolved_critical)
     requirements = [
         (cap.id, item)
         for cap in catalog.capabilities
         if cap.id in selected
         for item in cap.required_inputs
     ]
+
+    def has_value(qualified, item):
+        ambiguous = len({other.unit for _, other in requirements if other.path == item.path}) > 1
+        candidates = [
+            field.value for field in intent.fields if _matches_scope(field.path, qualified)
+        ]
+        target = _scoped_path(qualified).split(".")
+        if (
+            not candidates
+            and len(target) == 3
+            and target[0] in {"contacts", "regions", "profiles", "interfaces"}
+        ):
+            aggregate = target[0] + "." + target[2]
+            candidates = [
+                value
+                for field in intent.fields
+                if _scoped_path(field.path) == aggregate
+                for value in _entity_values(field.value, target[0], target[1])
+            ]
+        if not candidates and qualified.startswith("study.bias_schedule."):
+            candidates = [
+                field.value
+                for field in intent.fields
+                if canonical_path(field.path) == canonical_path(item.path)
+            ]
+        # Keep individual region/contact records: canonical aliases remove list
+        # indices, so a dict would let the last contact hide a missing first one.
+        return bool(candidates) and all(
+            value is not None
+            and _dimension_matches(value, item.unit, ambiguous=ambiguous, path=item.path)
+            for value in candidates
+        )
+
+    # Recompute unresolved value requirements from retained intent. A model can
+    # repeat a previous unresolved list even after it has supplied the answer.
+    # Structured ambiguities remain model-owned and are not dismissed here.
+    missing = []
+    existing = {_scoped_path(question.field_path): question for question in decision.questions}
+    for path in dict.fromkeys((*decision.unresolved_critical, *intent.unresolved_critical)):
+        question = existing.get(_scoped_path(path))
+        generated = question_for_path(path, catalog, selected=tuple(selected))
+        checker_owned = question is not None and all(
+            getattr(question, key) == getattr(generated, key) for key in ("id", "prompt", "reason")
+        )
+        matching = [
+            (requirement_path(cap_id, item.path, tuple(selected)), item)
+            for cap_id, item in requirements
+            if _matches_scope(path, requirement_path(cap_id, item.path, tuple(selected)))
+            and item.completeness_check == "value"
+        ]
+        # A model question may concern conflicting values or ambiguous units.
+        # Compatibility alone cannot resolve it. Only our own mechanically
+        # generated missing-value questions are safe to dismiss here.
+        if (
+            not checker_owned
+            or not matching
+            or not all(has_value(path, item) for _, item in matching)
+        ):
+            missing.append(path)
     for capability in catalog.capabilities:
         if capability.id not in selected:
             continue
@@ -215,30 +402,21 @@ def enforce_completeness(
             ):
                 qualified = requirement_path(capability.id, item.path, tuple(selected))
                 key = canonical_path(qualified)
-                ambiguous = (
-                    len({other.unit for _, other in requirements if other.path == item.path}) > 1
-                )
-                if (
-                    not any(
-                        value is not None
-                        and (
-                            covers(path, key)
-                            or (
-                                qualified != item.path
-                                and canonical_path(path) == canonical_path(item.path)
-                            )
-                        )
-                        and _dimension_matches(value, item.unit, ambiguous=ambiguous)
-                        for path, value in values.items()
-                    )
-                    and qualified not in missing
+                if not has_value(key, item) and not any(
+                    _matches_scope(path, key) for path in missing
                 ):
                     missing.append(qualified)
     if not missing:
-        return decision
-    existing = {canonical_path(question.field_path): question for question in decision.questions}
+        return decision.model_copy(
+            update={
+                "status": "ready",
+                "questions": (),
+                "unresolved_critical": (),
+                "intent": intent.model_copy(update={"unresolved_critical": ()}),
+            }
+        )
     questions = tuple(
-        existing.get(canonical_path(path))
+        existing.get(_scoped_path(path))
         or question_for_path(path, catalog, selected=tuple(selected))
         for path in dict.fromkeys(missing)
     )[:7]

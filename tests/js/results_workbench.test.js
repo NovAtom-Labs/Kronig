@@ -6,6 +6,15 @@ function assertEqual(actual, expected, message) {
 
 const results = globalThis.AgentKronigResults;
 
+const unitPayload = {display_projection:{capacitance__gate:{unit:"F/cm^2",canonical_unit:"F/m^2",scale:1e-4,offset:0}},
+  result:{axes:{bias:{id:"bias",kind:"bias",unit:"V",values:[0,1]}},datasets:{
+    capacitance__gate:{id:"capacitance__gate",axes:["bias"],shape:[2],unit:"F/m^2",values:[.003,.004]}}}};
+const projectedCurve = results.datasetOptions(unitPayload)[0];
+assertEqual(projectedCurve.unit,"F/cm^2","requested units label the visible plot");
+assertEqual(Math.abs(projectedCurve.values[0]-3e-7)<1e-20,true,"visible values are converted, not just relabelled");
+assertEqual(unitPayload.result.datasets.capacitance__gate.values[0],.003,"canonical values remain immutable");
+assertEqual(results.seriesForDataset(projectedCurve).valueUnit,"F/cm^2","tooltips and exported series share the projection");
+
 const independentStatuses = results.statusDimensions({
   execution_state: "completed", validation: {overall: "failed", checks: [{status: "failed"}]},
   deliverable_state: "complete",
@@ -240,6 +249,27 @@ const overlayPayload = {
   },
 };
 const overlayDatasets = results.datasetOptions(overlayPayload);
+const sameGridDifferentAxis = {
+  ...overlayDatasets[1],
+  axes: overlayDatasets[1].axes.map(axis => ({...axis, id: "independent-axis-name"})),
+};
+assertEqual(
+  results.compatibleOverlayOptions(overlayDatasets[0], [sameGridDifferentAxis]).length, 1,
+  "physically identical coordinates permit overlay despite independent axis IDs",
+);
+assertEqual(
+  results.compatibleOverlayOptions(overlayDatasets[0], [{
+    ...sameGridDifferentAxis,
+    axes: sameGridDifferentAxis.axes.map(axis => ({...axis, kind: "frequency", unit: "Hz"})),
+  }]).length, 0,
+  "matching coordinate numbers alone cannot equate voltage with frequency",
+);
+assertEqual(
+  results.compatibleOverlayOptions(overlayDatasets[0], [{
+    ...sameGridDifferentAxis, centering: "edge",
+  }]).length, 0,
+  "overlay preserves sample-centering semantics",
+);
 assertEqual(
   results.compatibleOverlayOptions(overlayDatasets[0], overlayDatasets).map((item) => item.id).join(","),
   "hole_current",

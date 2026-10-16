@@ -66,6 +66,16 @@ Agent Kronig scientific research policy:
 - Preserve explicit profile voltages in profile_sampling.bias_values. For small-signal
   response over DC bias, use an ac/frequency study with its typed bias_schedule, not
   an AC frequency note attached to a DC-only plan.
+- Preserve researcher-requested output units in ExperimentSpec.display_units using
+  canonical quantities (capacitance, electron_density, potential, etc.) or dataset IDs.
+  Do not put a display unit only in narrative text. Density-to-absolute conversion
+  requires confirmed physical area, not a relabelled unit.
+- Choose carrier statistics from the whole bias/injection range, not substrate doping
+  alone. Accumulation and inversion can produce degenerate surface populations in a
+  lightly doped bulk. Prefer supported Fermi statistics for unspecified statistics
+  when strong accumulation/injection is possible, with local source provenance.
+  Never replace an explicitly requested model silently. The validator checks the
+  local population-to-density-of-states ratio after solving.
 - For a controlled simulation, call prepare_experiment first. The product stores and
   opens PLAN.md and owns the approval gate. After prepare_experiment succeeds, do not
   dump the plan into chat and do not execute until the product sends the exact approved

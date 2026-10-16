@@ -300,6 +300,7 @@ def sweep_continuity_checks(
     result: CanonicalResult,
     *,
     maximum_slope_outlier_ratio: float = 1000.0,
+    absolute_noise_floors: dict[str, float] | None = None,
 ) -> tuple[ValidationCheck, ...]:
     """Screen locally isolated secant peaks, not physical validity of the response.
 
@@ -309,7 +310,9 @@ def sweep_continuity_checks(
     short peak is isolated; a globally rising exponential therefore does not
     become an outlier merely because it spans many decades. Both flanks must
     be nonzero: an exactly flat reference needs an observable-specific noise
-    floor, which this generic dimensionless diagnostic does not have.
+    floor. Supplied dimensional floors exclude only windows whose entire
+    variation is below a recorded absolute acceptance scale. The dimensionless
+    outlier bound is unchanged for every remaining window.
     """
 
     candidates = [
@@ -332,6 +335,7 @@ def sweep_continuity_checks(
         )
     worst_ratio: float | None = None
     worst_dataset = ""
+    excluded_windows = 0
     for dataset in candidates:
         axis = result.axes[dataset.axes[0]]
         validity = dataset.validity or (True,) * len(dataset.values)
@@ -358,6 +362,11 @@ def sweep_continuity_checks(
                 valid_window = [item for item in window if item is not None]
                 if any((step > 0) != (valid_window[0][0] > 0) for step, _ in valid_window):
                     continue
+                floor = (absolute_noise_floors or {}).get(dataset.unit, 0.0)
+                samples = dataset.values[start : start + width + 1]
+                if floor > 0 and max(samples) - min(samples) <= floor:
+                    excluded_windows += 1
+                    continue
                 magnitudes = [slope for _, slope in valid_window]
                 if magnitudes[0] == 0 or magnitudes[-1] == 0:
                     continue
@@ -373,7 +382,9 @@ def sweep_continuity_checks(
                 status="not_applicable",
                 message=(
                     "No contiguous valid monotone bias segment has a local secant window "
-                    "with two nonzero flanks; flat references need a specified noise floor."
+                    "with two nonzero flanks above the supplied absolute acceptance scales. "
+                    f"Excluded below-scale windows: {excluded_windows}; "
+                    f"dimensional scales: {absolute_noise_floors or {}}."
                 ),
                 evidence_paths=("result.datasets",),
             ),
@@ -391,6 +402,8 @@ def sweep_continuity_checks(
                 "must not exceed the configured bound; this is a numerical screen, "
                 "not a physical validity test; "
                 f"worst dataset: {worst_dataset}."
+                f" Excluded below-scale windows: {excluded_windows}; "
+                f"supplied absolute acceptance scales: {absolute_noise_floors or {}}."
             ),
             evidence_origin="derived",
             evidence_paths=(f"result.datasets.{worst_dataset}",),

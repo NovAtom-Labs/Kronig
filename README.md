@@ -119,6 +119,34 @@ Question count is adaptive rather than fixed. The normal target is three to five
 | Results | Dataset-driven metrics, curves, indexed profile families, heatmaps, complex-response views, compatible overlays, linear, log, and signed-log scales, operating points, validation, provenance, zoom, pan, crosshair inspection, contact and interface markers, and CSV, SVG, or PNG export |
 | Provenance | Source versions, hashes, compiler identity, simulator identity, validation records, and atomic bundle manifests |
 
+### Scientific results integrity
+
+Carrier-statistics selection considers the full operating range, not just bulk doping.
+When Boltzmann statistics are explicitly requested, the choice is preserved, but solved
+local `n/Nc` and `p/Nv` above the conservative nondegenerate limit of `0.1` fail the
+applicability check. Fermi calculations retain their named approximation and source
+provenance. Numerical convergence is not a claim of experimental accuracy.
+
+`ExperimentSpec.display_units` records requested presentation units. Canonical results
+and validation stay in SI; dimension-checked projections supply plot values, tooltips,
+tables and viewer exports. Carrier-unit groups expand into separate electron and hole
+fields. Incompatible units, unknown quantities and density-to-absolute conversions
+without physical area are rejected before execution. Missing or failed samples are
+shown as unavailable, not zero.
+
+The DEVSIM adapter captures electrostatic and carrier diagnostic evidence even when
+only terminal outputs were requested. Integrated charge is checked using native
+Poisson control volumes, terminal displacement charge and recorded interface sources.
+Contact boundary nodes are not counted twice. A separate mesh check compares identical
+physical studies at half spacing, with material interfaces kept separate. Up to four
+refinements share the execution budget. Original and refined specifications, native
+results, compiled files and comparison metrics are preserved in the hashed bundle.
+Budget exhaustion or an unstable comparison remains a failed check. A passing mesh
+pair is a numerical error indicator, not proof of asymptotic convergence or calibration.
+
+See the [statistics and evidence guidance](knowledge-sources/curated/scientific-results-integrity.md)
+for definitions and limitations.
+
 ### Backend boundary
 
 | Capability | DEVSIM pilot | Sentaurus adapter |
@@ -206,7 +234,7 @@ This alpha is for workflow evaluation and small exploratory drift-diffusion stud
 - No automated calibration against fabrication measurements.
 - Fermi transport includes reviewed one-dimensional silicon ohmic and Schottky equilibrium/DC benchmarks. The ohmic high-doping reference remains `5e19 cm^-3`; this is a benchmark, not a blanket convergence guarantee. Fermi drift/diffusion decomposition is supported using the same native quasi-Fermi-gradient equations, including band-gap-narrowing gradients. Combined Fermi/Schottky AC, frequency and transient response remain refused.
 - Silicon Schottky contacts use statistics-consistent Boltzmann or Fermi thermionic reservoirs with the actual local band gap, DOS and BGN reference. Benchmarks include both-metal equilibrium, current conservation, contact passivity, temperature variation and the original Al/p-Si/n-Si/Al study at `0,+2,-2 V`. Image-force lowering, tunneling and distributed contact states are not silently added.
-- Agent-driven simulator execution has a bounded ten-minute default budget, allowing refined nonlinear meshes to finish without weakening scientific acceptance. An explicit caller timeout takes precedence and is recorded in execution provenance. The budget is a maximum, not a mandatory wait. A timeout or failed solve stays visible; it is not an accepted result.
+- Agent-driven simulator execution has a bounded twenty-minute default budget shared by the original solve and mandatory mesh verification. An explicit caller timeout takes precedence and is recorded in execution provenance. The budget is a maximum, not a mandatory wait. A timeout or failed solve stays visible; it is not an accepted result.
 - Surface physics supports surface SRH and one charged single-level donor or acceptor trap. Trap distributions, tunneling, frequency dispersion, and Philips-style surface mobility remain outside the reviewed one-dimensional boundary.
 - Prescribed spatial temperature supports positive constant, linear, piecewise-constant, or tabulated silicon profiles with reviewed local material and transport terms under equilibrium or DC. It is not a heat-flow or self-heating solve, and unbenchmarked model and study combinations are refused.
 - Boltzmann drift and diffusion components are continuum diagnostics compared with the native Scharfetter-Gummel current. Fermi components split the native quasi-Fermi-gradient current into electrostatic drift and thermodynamic diffusion, explicitly including band-gradient corrections. The reconciliation residual is calculated from actual currents; it is not a continuity-equation residual or independent proof of physical accuracy. Definitions and references are in [current decomposition guidance](knowledge-sources/curated/devsim-current-decomposition.md).

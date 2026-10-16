@@ -20,6 +20,24 @@ from tcad_agent.knowledge.retrieve import KnowledgeIndex
 ROOT = Path(__file__).parents[3]
 
 
+def test_preparation_binds_requested_display_units_to_portable_plan(tmp_path, valid_spec):
+    from tcad_agent.prompting.models import IntentField, ResolvedResearchIntent
+
+    tools = DomainTools(
+        tmp_path,
+        research_intent=ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Inspect potential in millivolts",
+            fields=(
+                IntentField(path="display_units", value={"potential": "mV"}, origin="researcher"),
+            ),
+        ),
+    )
+    response = tools.prepare_experiment(valid_spec.model_dump(mode="json"), backend="devsim")
+    assert response.status == "ok", response
+    assert response.data["prepared"]["spec"]["display_units"] == {"potential": "mV"}
+
+
 def test_agent_can_discover_and_reopen_verified_saved_results_without_chat(
     tmp_path, monkeypatch, result_bundle_factory
 ):
@@ -635,7 +653,7 @@ def test_native_agent_execution_has_bounded_default_budget_and_honors_explicit_b
     assert tools.execute_experiment(request).code == "experiment_execution_failed"
     # Refined nonlinear meshes must have a finite runtime allowance without
     # changing the requested equations or the scientific acceptance policy.
-    assert engine.seconds == 600
+    assert engine.seconds == 1200
     assert (
         tools.execute_experiment({**request, "timeout_seconds": 30}).code
         == "experiment_execution_failed"

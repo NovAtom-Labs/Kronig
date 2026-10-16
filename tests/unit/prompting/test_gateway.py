@@ -13,7 +13,10 @@ from tcad_agent.prompting.gateway import (
 from tcad_agent.prompting.models import EvidenceExcerpt, WorkspaceContext, WorkspaceFileContext
 
 
-def test_repository_reference_uses_known_workspace_relative_path_without_retry():
+@pytest.mark.parametrize("reference", ["repo/reference.md#temperature",
+                                       "repository:reference.md#temperature",
+                                       "reference.md; confirmed from the temperature table"])
+def test_repository_reference_uses_known_workspace_relative_path_without_retry(reference):
     context = workspace().model_copy(
         update={
             "files": (
@@ -35,7 +38,7 @@ def test_repository_reference_uses_known_workspace_relative_path_without_retry()
                         "path": "physics.temperature",
                         "value": "300 K",
                         "origin": "repository",
-                        "source_reference": "repo/reference.md#temperature",
+                        "source_reference": reference,
                     }
                 ],
             },
@@ -45,7 +48,11 @@ def test_repository_reference_uses_known_workspace_relative_path_without_retry()
     decision = OpenHandsPreparationModel(llm).prepare(
         original_prompt="Repeat study", answers=(), workspace=context, evidence=()
     )
-    assert decision.intent.fields[0].source_reference == "reference.md#temperature"
+    assert decision.intent.fields[0].source_reference == (
+        "reference.md" if ";" in reference else "reference.md#temperature"
+    )
+    if ";" in reference:
+        assert "confirmed from the temperature table" in decision.intent.fields[0].rationale
     assert len(llm.messages) == 1
 
 
@@ -65,6 +72,43 @@ class ScriptedLLM:
         )
 
 
+@pytest.mark.parametrize("value,origin", [(6.97e-19, "repository"),
+                                         ("4.35 eV (both contacts)", "researcher")])
+@pytest.mark.parametrize("status", ["ready", "clarification"])
+def test_malformed_known_physical_quantity_is_repaired_not_reasked(value, origin, status):
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
+
+    context = workspace().model_copy(update={"files": (WorkspaceFileContext(
+        path="reference.md", size=40, sha256="b" * 64,
+        text_excerpt="Contact work function: 4.35 eV",
+    ),)})
+    payload = {"status": status, "summary": "Use the confirmed contact",
+               "intent": {"task_kind": "simulation", "objective": "Repeat contact study",
+                          "selected_capabilities": ["contact.metal_work_function"],
+                          "fields": [{"path": "contacts.work_function", "value": value,
+                                      "origin": origin,
+                                      "source_reference": (
+                                          "reference.md" if origin == "repository" else None)}]}}
+    if status == "clarification":
+        payload["questions"] = [{"id": "temperature", "field_path": "physics.temperature",
+                                 "prompt": "What temperature?", "reason": "Sets the study"}]
+        payload["unresolved_critical"] = ["physics.temperature"]
+        payload["intent"]["unresolved_critical"] = ["physics.temperature"]
+    valid = json.loads(json.dumps(payload))
+    valid["intent"]["fields"][0]["value"] = "4.35 eV"
+    llm = ScriptedLLM([json.dumps(payload), json.dumps(valid)])
+    catalog = CapabilityCatalog.from_manifest(
+        CapabilityManifest.from_backend("devsim")
+    ).public_view()
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Use the same 4.35 eV contact", answers=(), workspace=context,
+        evidence=(), capabilities=catalog,
+    )
+    assert len(llm.messages) == 2
+    assert decision.intent.fields[0].value == "4.35 eV"
+
+
 def workspace() -> WorkspaceContext:
     return WorkspaceContext(
         display_name="repo",
@@ -72,6 +116,322 @@ def workspace() -> WorkspaceContext:
         git_dirty=False,
         inventory_hash="a" * 64,
     )
+
+
+@pytest.mark.parametrize("suffix", ["ev", "eV"])
+def test_explicit_unit_suffix_is_normalized_without_another_model_call(suffix):
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
+
+    payload = {"status": "ready", "summary": "Confirmed contact", "intent": {
+        "task_kind": "simulation", "objective": "Analyze contact",
+        "selected_capabilities": ["contact.metal_work_function"], "fields": [
+            {"path": f"contacts.0.work_function_{suffix}", "value": 4.35,
+             "origin": "researcher"},
+        ],
+    }}
+    corrected = json.loads(json.dumps(payload))
+    corrected["intent"]["fields"][0].update(
+        path="contacts.0.work_function", value={"magnitude": 4.35, "unit": "eV"}
+    )
+    llm = ScriptedLLM([json.dumps(payload), json.dumps(corrected)])
+    result = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Use a 4.35 eV contact", answers=(), workspace=workspace(), evidence=(),
+        capabilities=CapabilityCatalog.from_manifest(
+            CapabilityManifest.from_backend("devsim")
+        ).public_view(),
+    )
+    assert len(llm.messages) == 1
+    assert result.intent.fields[0].path == "contacts.0.work_function"
+    from tcad_agent.domain.units import QuantityValue
+
+    quantity = QuantityValue.model_validate(result.intent.fields[0].value)
+    assert quantity.to("eV") == pytest.approx(4.35)
+
+
+@pytest.mark.parametrize("source", ["Temperature: `300 kelvin`", "Temperature: 300 K",
+                                   "Temperature: 300K"])
+def test_repository_numeric_units_are_recovered_only_from_unique_cited_quantities(source):
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
+    from tcad_agent.domain.units import QuantityValue
+
+    context = workspace().model_copy(update={"files": (WorkspaceFileContext(
+        path="reference.md", size=len(source), sha256="b" * 64, text_excerpt=source,
+    ),)})
+    payload = {"status": "ready", "summary": "Repeat supplied conditions", "intent": {
+        "task_kind": "simulation", "objective": "Repeat conditions",
+        "selected_capabilities": ["study.equilibrium"], "fields": [
+            {"path": "physics.temperature", "value": 300, "origin": "repository",
+             "source_reference": "reference.md"},
+        ],
+    }}
+    llm = ScriptedLLM([json.dumps(payload)] * 2)
+    result = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Repeat the saved study", answers=(), workspace=context, evidence=(),
+        capabilities=CapabilityCatalog.from_manifest(
+            CapabilityManifest.from_backend("devsim")
+        ).public_view(),
+    )
+    assert len(llm.messages) == 1
+    assert QuantityValue.model_validate(result.intent.fields[0].value).to("K") == 300
+
+
+def test_repository_voltage_lists_preserve_each_signed_source_quantity():
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
+    from tcad_agent.domain.units import QuantityValue
+
+    source = "Requested operating points: `2 V`, `-2 V`."
+    context = workspace().model_copy(update={"files": (WorkspaceFileContext(
+        path="reference.md", size=len(source), sha256="b" * 64, text_excerpt=source,
+    ),)})
+    payload = {"status": "ready", "summary": "Repeat saved points", "intent": {
+        "task_kind": "simulation", "objective": "Repeat saved points",
+        "selected_capabilities": ["study.dc_points"], "fields": [
+            {"path": "study.values", "value": [2, -2], "origin": "repository",
+             "source_reference": "reference.md"},
+        ],
+    }}
+    llm = ScriptedLLM([json.dumps(payload)] * 2)
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Repeat the saved study", answers=(), workspace=context, evidence=(),
+        capabilities=CapabilityCatalog.from_manifest(
+            CapabilityManifest.from_backend("devsim")
+        ).public_view(),
+    )
+    assert len(llm.messages) == 1
+    assert [QuantityValue.model_validate(v).to("V")
+            for v in decision.intent.fields[0].value] == [2, -2]
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "source", "capability"),
+    [("physics.temperature", 300, "`300 K` or `300 degC`", "study.equilibrium"),
+     ("study.start", 2, "Applied voltage: \u22122 V", "study.dc"),
+     ("study.start", 2, "Applied voltage: - 2 V", "study.dc"),
+     ("study.start", 2, "Applied voltage: \u2212 2 V", "study.dc"),
+     ("study.start", 2, "Applied voltage: \u20132 V", "study.dc")],
+)
+def test_ambiguous_or_opposite_signed_source_does_not_supply_a_numeric_unit(
+    path, value, source, capability
+):
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
+
+    context = workspace().model_copy(update={"files": (WorkspaceFileContext(
+        path="reference.md", size=len(source), sha256="b" * 64, text_excerpt=source,
+    ),)})
+    payload = {"status": "ready", "summary": "Repeat study", "intent": {
+        "task_kind": "simulation", "objective": "Repeat conditions",
+        "selected_capabilities": [capability], "fields": [
+            {"path": path, "value": value, "origin": "repository",
+             "source_reference": "reference.md"},
+        ],
+    }}
+    llm = ScriptedLLM([json.dumps(payload)] * 2)
+    with pytest.raises(ModelResponseError, match="Normalize"):
+        OpenHandsPreparationModel(llm).prepare(
+            original_prompt="Repeat the saved study", answers=(), workspace=context, evidence=(),
+            capabilities=CapabilityCatalog.from_manifest(
+                CapabilityManifest.from_backend("devsim")
+            ).public_view(),
+        )
+
+
+def test_si_unit_suffix_case_does_not_turn_conductance_into_time():
+    from tcad_agent.capabilities.descriptors import CapabilityCatalog
+    from tcad_agent.capabilities.models import CapabilityManifest
+
+    payload = {"status": "ready", "summary": "Transient study", "intent": {
+        "task_kind": "simulation", "objective": "Analyze transient response",
+        "selected_capabilities": ["study.transient"], "fields": [
+            {"path": "study.stop_S", "value": 2, "origin": "researcher"},
+        ],
+    }}
+    llm = ScriptedLLM([json.dumps(payload)] * 2)
+    with pytest.raises(ModelResponseError):
+        OpenHandsPreparationModel(llm).prepare(
+            original_prompt="Analyze a transient", answers=(), workspace=workspace(), evidence=(),
+            capabilities=CapabilityCatalog.from_manifest(
+                CapabilityManifest.from_backend("devsim")
+            ).public_view(),
+        )
+
+
+def test_nested_intent_warnings_are_preserved_in_decision_without_retry():
+    payload = {
+        "status": "ready",
+        "summary": "Analyze the supplied contact",
+        "warnings": ["No experimental calibration supplied"],
+        "intent": {
+            "task_kind": "analysis",
+            "objective": "Analyze the contact",
+            "fields": [
+                {"path": "contacts.work_function", "value": "4.35 eV", "origin": "researcher"}
+            ],
+            "warnings": ["No area specified", "No experimental calibration supplied"],
+        },
+    }
+    llm = ScriptedLLM([json.dumps(payload)] * 2)
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Analyze a contact with work function 4.35 eV",
+        answers=(), workspace=workspace(), evidence=(),
+    )
+    assert decision.warnings == ("No experimental calibration supplied", "No area specified")
+    assert decision.intent.fields[0].value == "4.35 eV"
+    assert len(llm.messages) == 1
+
+
+def test_changed_study_representation_is_repaired_before_retaining_old_requirements():
+    from tcad_agent.prompting.models import ClarificationAnswer, PreparationDecision
+
+    previous = PreparationDecision.model_validate({
+        "status": "clarification", "summary": "Confirm measurement schedule",
+        "questions": [{"id": "step", "field_path": "study.step",
+                       "prompt": "Step?", "reason": "Schedule"}],
+        "unresolved_critical": ["study.step"],
+        "intent": {"task_kind": "simulation", "objective": "Voltage response",
+                   "selected_capabilities": ["study.dc"]},
+    })
+    payload = {
+        "status": "ready", "summary": "Researcher selected specific operating points",
+        "intent": {"task_kind": "simulation", "objective": "Voltage response",
+                   "selected_capabilities": ["study.dc_points"],
+                   "fields": [{"path": "study.values", "value": ["-1 V", "1 V"],
+                               "origin": "researcher"}]},
+    }
+    repaired = json.loads(json.dumps(payload))
+    repaired["intent"]["fields"].append({
+        "path": "study.kind", "value": "dc_points", "origin": "researcher",
+    })
+    decision = OpenHandsPreparationModel(ScriptedLLM([
+        json.dumps(payload), json.dumps(repaired),
+    ])).prepare(
+        original_prompt="Measure the voltage response", workspace=workspace(), evidence=(),
+        previous_decision=previous,
+        answers=(ClarificationAnswer(question_id="step", answer="Only -1 V and +1 V, no sweep"),),
+    )
+    assert next(f.value for f in decision.intent.fields if f.path == "study.kind") == "dc_points"
+
+
+def test_prose_unresolved_paths_are_repaired_before_reaching_the_input_checker():
+    payload = {
+        "status": "clarification",
+        "summary": "Clarify the physical thickness",
+        "questions": [
+            {
+                "id": "thickness",
+                "field_path": "regions.geometry.thickness",
+                "prompt": "What thickness and unit should be used?",
+                "reason": "The original unit is ambiguous",
+            }
+        ],
+        "unresolved_critical": ["regions.geometry.thickness"],
+        "intent": {
+            "task_kind": "simulation",
+            "objective": "Analyze the layered structure",
+            "unresolved_critical": ["Thickness unit ('original unit is ambiguous')"],
+        },
+    }
+    repaired = json.loads(json.dumps(payload))
+    repaired["intent"]["unresolved_critical"] = ["regions.geometry.thickness"]
+    llm = ScriptedLLM([json.dumps(payload), json.dumps(repaired)])
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Analyze the layered structure",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+    assert decision.intent.unresolved_critical == ("regions.geometry.thickness",)
+    assert len(llm.messages) == 2
+
+
+def test_authority_recovery_preserves_the_original_unanswered_questions():
+    payload = {
+        "status": "clarification",
+        "summary": "Temperature is missing",
+        "questions": [
+            {
+                "id": "temperature",
+                "field_path": "physics.temperature",
+                "prompt": "What temperature should be used?",
+                "reason": "Physical conditions",
+            }
+        ],
+        "unresolved_critical": ["physics.temperature"],
+        "intent": {
+            "task_kind": "simulation",
+            "objective": "Analyze the layered structure",
+            "fields": [
+                {
+                    "path": "contacts.boundary_conditions",
+                    "value": "ohmic contacts",
+                    "origin": "evidence",
+                    "rationale": "Typical example",
+                    "evidence_refs": ["example-document"],
+                },
+                {
+                    "path": "contacts.work_function",
+                    "value": "4.35 eV",
+                    "origin": "researcher",
+                },
+            ],
+            "unresolved_critical": ["physics.temperature"],
+        },
+    }
+    llm = ScriptedLLM([json.dumps(payload)])
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Use a 4.35 eV metal contact",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+    assert {q.field_path for q in decision.questions} == {
+        "physics.temperature",
+        "contacts.boundary_conditions",
+    }
+    assert set(decision.unresolved_critical) == {
+        "physics.temperature",
+        "contacts.boundary_conditions",
+    }
+    assert set(decision.intent.unresolved_critical) == set(decision.unresolved_critical)
+    assert [(f.path, f.value) for f in decision.intent.fields] == [
+        ("contacts.work_function", "4.35 eV")
+    ]
+
+
+def test_gateway_preserves_unresolved_lists_without_spending_another_model_call():
+    payload = {
+        "status": "clarification",
+        "summary": "Confirm physical thickness",
+        "questions": [
+            {
+                "id": "thickness",
+                "field_path": "regions.thickness",
+                "prompt": "Which thickness and unit?",
+                "reason": "Physical dimension",
+            }
+        ],
+        "unresolved_critical": ["regions.thickness"],
+        "intent": {
+            "task_kind": "simulation",
+            "objective": "Analyze the layered structure",
+            "unresolved_critical": ["regions.thickness_unit"],
+        },
+    }
+    corrected = json.loads(json.dumps(payload))
+    corrected["intent"]["unresolved_critical"] = ["regions.thickness"]
+    llm = ScriptedLLM([json.dumps(payload), json.dumps(corrected)])
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Analyze the layered structure",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+    assert decision.intent.unresolved_critical == decision.unresolved_critical
+    assert set(decision.unresolved_critical) == {"regions.thickness", "regions.thickness_unit"}
+    assert len(llm.messages) == 1
 
 
 def test_gateway_discards_ancillary_citations_from_researcher_owned_values():
@@ -451,3 +811,46 @@ def test_gateway_does_not_reconcile_value_absent_from_researcher_input() -> None
     assert decision.status == "clarification"
     assert decision.questions[0].field_path == "regions.p.profile.type"
     assert len(gateway._llm.messages) == 1
+
+
+def test_model_schema_requires_real_citations_for_expert_evidence_fields():
+    schema = OpenHandsPreparationModel._decision_schema()
+    evidence_rule = next(
+        rule
+        for rule in schema["$defs"]["IntentField"]["allOf"]
+        if rule["if"]["properties"]["origin"]["const"] == "evidence"
+    )
+    assert evidence_rule["then"]["properties"]["evidence_refs"]["minItems"] == 1
+    assert evidence_rule["then"]["properties"]["rationale"]["minLength"] == 1
+    assert "exact IDs from local_evidence" in OpenHandsPreparationModel._system_policy()
+
+
+def test_unregistered_display_intent_is_repaired_before_the_execution_agent_starts():
+    payload = {
+        "status": "ready",
+        "summary": "Extract density",
+        "intent": {
+            "task_kind": "simulation",
+            "objective": "Extract electron density",
+            "fields": [
+                {
+                    "path": "display_units",
+                    "value": {"concentration": "cm^-3"},
+                    "origin": "researcher",
+                }
+            ],
+        },
+    }
+    repaired = json.loads(json.dumps(payload))
+    repaired["intent"]["fields"][0]["value"] = {"electron_density": "cm^-3"}
+    llm = ScriptedLLM([json.dumps(payload), json.dumps(repaired)])
+    result = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Extract electron density in cm^-3",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+    assert result.intent.fields[0].value == {"electron_density": "cm^-3"}
+    assert len(llm.messages) == 2
+    packet = json.loads(llm.messages[0][1].content[0].text)
+    assert packet["display_quantity_units"]["electron_density"] == "m^-3"

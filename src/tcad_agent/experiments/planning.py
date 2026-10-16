@@ -26,6 +26,13 @@ def build_plan(
             record.model_dump(mode="json", exclude_none=True) for record in completeness.records
         ],
         "portable": True,
+        "verification": {
+            "mesh_refinement_factor": 0.5,
+            "mesh_relative_linf_limit": 0.03,
+            "maximum_mesh_comparisons": 4,
+            "scope": "same physical inputs and complete study; "
+            "existing scientific tolerances unchanged",
+        },
     }
 
 

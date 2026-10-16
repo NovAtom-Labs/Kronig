@@ -75,6 +75,13 @@ def test_temperature_study_rebuilds_models_and_preserves_spatial_fields(
     assert samples[0] < samples[1] < samples[2]
     assert result.datasets["conduction_band"].axes[0] == "temperature"
     assert result.metadata["numerical_precision"]["effective"] == "extended"
+    from tcad_agent.validation.engine import ValidationEngine
+
+    assert result.metadata["physics_models"] == ["boltzmann", "constant_mobility", "srh"]
+    assert result.metadata["validation_evidence_version"]
+    report = ValidationEngine().validate(result, spec=spec)
+    assert report.checks_by_id["carrier-statistics-applicability"].status == "passed"
+    assert report.checks_by_id["contact-charge-balance"].status == "passed"
 
 
 @pytest.mark.integration

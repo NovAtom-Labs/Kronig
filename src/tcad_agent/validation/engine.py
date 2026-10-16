@@ -15,7 +15,9 @@ from tcad_agent.domain.studies import (
 )
 from tcad_agent.recovery.models import FailureKind, FailureRecord
 from tcad_agent.results.models import CanonicalResult
+from tcad_agent.results.presentation import display_projection
 from tcad_agent.validation.analytical import built_in_potential_reference
+from tcad_agent.validation.charge import integrated_charge_check
 from tcad_agent.validation.convergence import convergence_checks
 from tcad_agent.validation.datasets import dataset_checks
 from tcad_agent.validation.models import (
@@ -33,6 +35,8 @@ from tcad_agent.validation.physics import (
     sweep_continuity_checks,
 )
 from tcad_agent.validation.policy import validation_policy_digest
+from tcad_agent.validation.refinement import mesh_stability_check
+from tcad_agent.validation.statistics import statistics_checks
 
 
 class ValidationEngine:
@@ -68,7 +72,8 @@ class ValidationEngine:
     def acceptance_limits(self) -> dict[str, float]:
         """Return configured scientific acceptance, separate from solver controls."""
         return {
-            "current_rtol": self.current_rtol, "current_atol": self.current_atol,
+            "current_rtol": self.current_rtol,
+            "current_atol": self.current_atol,
             "equilibrium_current_atol": self.equilibrium_current_atol,
             "built_in_potential_rtol": self.built_in_potential_rtol,
             "built_in_potential_atol": self.built_in_potential_atol,
@@ -155,8 +160,12 @@ class ValidationEngine:
         checks.extend(dataset_checks(result))
         checks.extend(convergence_checks(result))
         checks.extend(physics_checks(result))
+        checks.extend(statistics_checks(result))
+        checks.append(mesh_stability_check(result))
         checks.extend(poisson_residual_checks(result))
-        checks.extend(sweep_continuity_checks(result))
+        checks.extend(
+            sweep_continuity_checks(result, absolute_noise_floors={"A/m^2": self.current_atol})
+        )
         checks.extend(capacitance_consistency_checks(result))
         checks.extend(band_checks(result))
         checks.extend(recombination_checks(result))
@@ -191,6 +200,27 @@ class ValidationEngine:
         checks.append(self._carrier_density_check(result))
         if spec is not None:
             checks.append(self._requested_observables_check(result, spec))
+            try:
+                display_projection(result, spec.display_units)
+                display_check = ValidationCheck(
+                    id="requested-display-units",
+                    level="provenance",
+                    status="passed" if spec.display_units else "not_applicable",
+                    message="Every requested display quantity has "
+                    "dimension-compatible canonical evidence."
+                    if spec.display_units
+                    else "No explicit output-unit choices were requested.",
+                    evidence_paths=("experiment.display_units", "result.datasets"),
+                )
+            except ValueError as exc:
+                display_check = ValidationCheck(
+                    id="requested-display-units",
+                    level="provenance",
+                    status="failed",
+                    message=str(exc),
+                    evidence_paths=("experiment.display_units", "result.datasets"),
+                )
+            checks.append(display_check)
             checks.append(self._contact_charge_balance(result, spec))
         if spec is not None and isinstance(spec.study, EquilibriumStudy):
             checks.extend(self._equilibrium_checks(result, spec))
@@ -212,9 +242,12 @@ class ValidationEngine:
             overall = "failed"
         elif any(check.status == "warning" for check in checks):
             overall = "warning"
-        return ValidationReport(overall=overall, checks=tuple(checks),
-                                acceptance_limits=self.acceptance_limits(),
-                                validation_policy_digest=validation_policy_digest())
+        return ValidationReport(
+            overall=overall,
+            checks=tuple(checks),
+            acceptance_limits=self.acceptance_limits(),
+            validation_policy_digest=validation_policy_digest(),
+        )
 
     @staticmethod
     def _requested_study_order(
@@ -405,34 +438,51 @@ class ValidationEngine:
         result: CanonicalResult,
         spec: ExperimentSpec,
     ) -> tuple[ValidationCheck, ...]:
-        points = tuple(point for point in (result.operating_points or result.bias_points)
-                       if getattr(point, "converged", getattr(point, "state", None) == "converged"))
-        currents = [abs(value) for point in points
-                    for value in point.terminal_currents_a_per_m2.values()]
+        points = tuple(
+            point
+            for point in (result.operating_points or result.bias_points)
+            if getattr(point, "converged", getattr(point, "state", None) == "converged")
+        )
+        currents = [
+            abs(value) for point in points for value in point.terminal_currents_a_per_m2.values()
+        ]
         maximum_current = max(currents) if currents else None
         complete = bool(points) and all(
             len(point.terminal_currents_a_per_m2) >= 2
             and set(result.terminals).issubset(point.terminal_currents_a_per_m2)
             for point in points
         )
-        checks = [ValidationCheck(
-            id="equilibrium-terminal-current", level="physical",
-            status="not_applicable" if not currents else
-                   "passed" if complete and maximum_current is not None
-                   and maximum_current <= self.equilibrium_current_atol
-                   else "failed",
-            measured_value=maximum_current if maximum_current is None
-                           or math.isfinite(maximum_current) else "nonfinite currents",
-            limit=self.equilibrium_current_atol, unit="A/m^2",
-            absolute_tolerance=self.equilibrium_current_atol, relative_tolerance=0,
-            scale=maximum_current if maximum_current is not None
-                  and math.isfinite(maximum_current) else None,
-            message="Every terminal current density must approach zero at thermal equilibrium."
-                    if currents else "No converged terminal-current evidence is available.",
-            evidence_paths=("experiment.study.kind",
-                            "result.operating_points[*].terminal_currents_a_per_m2",
-                            "result.bias_points[*].terminal_currents_a_per_m2"),
-        )]
+        checks = [
+            ValidationCheck(
+                id="equilibrium-terminal-current",
+                level="physical",
+                status="not_applicable"
+                if not currents
+                else "passed"
+                if complete
+                and maximum_current is not None
+                and maximum_current <= self.equilibrium_current_atol
+                else "failed",
+                measured_value=maximum_current
+                if maximum_current is None or math.isfinite(maximum_current)
+                else "nonfinite currents",
+                limit=self.equilibrium_current_atol,
+                unit="A/m^2",
+                absolute_tolerance=self.equilibrium_current_atol,
+                relative_tolerance=0,
+                scale=maximum_current
+                if maximum_current is not None and math.isfinite(maximum_current)
+                else None,
+                message="Every terminal current density must approach zero at thermal equilibrium."
+                if currents
+                else "No converged terminal-current evidence is available.",
+                evidence_paths=(
+                    "experiment.study.kind",
+                    "result.operating_points[*].terminal_currents_a_per_m2",
+                    "result.bias_points[*].terminal_currents_a_per_m2",
+                ),
+            )
+        ]
 
         reference = built_in_potential_reference(spec)
         if reference is None:
@@ -495,6 +545,12 @@ class ValidationEngine:
         result: CanonicalResult,
         spec: ExperimentSpec,
     ) -> ValidationCheck:
+        if result.metadata.get("validation_evidence_version"):
+            return integrated_charge_check(
+                result,
+                relative_tolerance=self.contact_charge_rtol,
+                absolute_tolerance=self.contact_charge_atol,
+            )
         if any(region.material == "silicon" for region in spec.regions):
             return ValidationCheck(
                 id="contact-charge-balance",
@@ -523,9 +579,12 @@ class ValidationEngine:
             for point in points
         ):
             return ValidationCheck(
-                id="contact-charge-balance", level="physical", status="failed",
+                id="contact-charge-balance",
+                level="physical",
+                status="failed",
                 message="Charge balance requires finite charge at every declared terminal.",
-                unit="C/m^2", evidence_paths=("result.operating_points",),
+                unit="C/m^2",
+                evidence_paths=("result.operating_points",),
             )
         elementary_charge = 1.602176634e-19
         configured_sheet_charge = elementary_charge * sum(
@@ -547,11 +606,15 @@ class ValidationEngine:
         maximum_error = max(errors, default=math.inf)
         limit = self.contact_charge_atol + self.contact_charge_rtol * abs(configured_sheet_charge)
         return ValidationCheck(
-            id="contact-charge-balance", level="physical",
+            id="contact-charge-balance",
+            level="physical",
             status="passed" if maximum_error <= limit else "failed",
-            measured_value=maximum_error, limit=limit,
-            unit="C/m^2", absolute_tolerance=self.contact_charge_atol,
-            relative_tolerance=self.contact_charge_rtol, scale=abs(configured_sheet_charge),
+            measured_value=maximum_error,
+            limit=limit,
+            unit="C/m^2",
+            absolute_tolerance=self.contact_charge_atol,
+            relative_tolerance=self.contact_charge_rtol,
+            scale=abs(configured_sheet_charge),
             message=(
                 "Terminal displacement charge must balance configured dielectric "
                 "interface sheet charge."
@@ -564,36 +627,49 @@ class ValidationEngine:
 
     def _terminal_current_check(self, result: CanonicalResult) -> ValidationCheck:
         points = tuple(
-            point for point in (result.operating_points or result.bias_points)
+            point
+            for point in (result.operating_points or result.bias_points)
             if getattr(point, "converged", getattr(point, "state", None) == "converged")
         )
-        paths = ("result.operating_points[*].terminal_currents_a_per_m2",
-                 "result.bias_points[*].terminal_currents_a_per_m2")
+        paths = (
+            "result.operating_points[*].terminal_currents_a_per_m2",
+            "result.bias_points[*].terminal_currents_a_per_m2",
+        )
         if not any(point.terminal_currents_a_per_m2 for point in points):
             return ValidationCheck(
-                id="terminal-current-conservation", level="physical", status="not_applicable",
+                id="terminal-current-conservation",
+                level="physical",
+                status="not_applicable",
                 message="No converged terminal-current evidence is available.",
-                evidence_paths=paths, unit="A/m^2",
+                evidence_paths=paths,
+                unit="A/m^2",
             )
         if any(
-            len(point.terminal_currents_a_per_m2) < 2
+            not result.terminals
             or not set(result.terminals).issubset(point.terminal_currents_a_per_m2)
             for point in points
         ):
             return ValidationCheck(
-                id="terminal-current-conservation", level="physical", status="failed",
-                message=("Current conservation requires every declared terminal "
-                         "at each valid point."),
-                evidence_paths=paths, unit="A/m^2",
+                id="terminal-current-conservation",
+                level="physical",
+                status="failed",
+                message=(
+                    "Current conservation requires every declared terminal at each valid point."
+                ),
+                evidence_paths=paths,
+                unit="A/m^2",
             )
         residuals = []
         for point in points:
             currents = tuple(point.terminal_currents_a_per_m2.values())
             if not all(math.isfinite(value) for value in currents):
                 return ValidationCheck(
-                    id="terminal-current-conservation", level="physical", status="failed",
+                    id="terminal-current-conservation",
+                    level="physical",
+                    status="failed",
                     message="Terminal current evidence contains nonfinite numbers.",
-                    unit="A/m^2", evidence_paths=paths,
+                    unit="A/m^2",
+                    evidence_paths=paths,
                 )
             residual = abs(sum(currents))
             scale = max(abs(value) for value in currents)
@@ -602,10 +678,14 @@ class ValidationEngine:
             residuals.append((ratio, residual, limit, scale))
         _ratio, residual, limit, scale = max(residuals)
         return ValidationCheck(
-            id="terminal-current-conservation", level="physical",
+            id="terminal-current-conservation",
+            level="physical",
             status="passed" if all(item[1] <= item[2] for item in residuals) else "failed",
-            measured_value=residual, limit=limit, unit="A/m^2",
-            absolute_tolerance=self.current_atol, relative_tolerance=self.current_rtol,
+            measured_value=residual,
+            limit=limit,
+            unit="A/m^2",
+            absolute_tolerance=self.current_atol,
+            relative_tolerance=self.current_rtol,
             scale=scale,
             message="The algebraic sum of terminal currents must satisfy the configured tolerance.",
             applicability_reason="Complete terminal currents at converged operating points.",
@@ -619,17 +699,25 @@ class ValidationEngine:
             dataset = result.datasets.get(name)
             if dataset is not None:
                 valid = dataset.validity or (True,) * len(dataset.values)
-                values.extend(value for value, usable in zip(dataset.values, valid, strict=True)
-                              if usable)
+                values.extend(
+                    value for value, usable in zip(dataset.values, valid, strict=True) if usable
+                )
             elif name in result.fields:
                 values.extend(result.fields[name].values)
         return ValidationCheck(
-            id="nonnegative-carrier-density", level="physical",
-            status="not_applicable" if not values else
-                   "passed" if all(value >= 0 for value in values) else "failed",
-            measured_value=min(values) if values else None, limit=0.0 if values else None,
-            unit="m^-3", message="Classical carrier densities cannot be negative."
-            if values else "No valid canonical carrier-density evidence is available.",
+            id="nonnegative-carrier-density",
+            level="physical",
+            status="not_applicable"
+            if not values
+            else "passed"
+            if all(value >= 0 for value in values)
+            else "failed",
+            measured_value=min(values) if values else None,
+            limit=0.0 if values else None,
+            unit="m^-3",
+            message="Classical carrier densities cannot be negative."
+            if values
+            else "No valid canonical carrier-density evidence is available.",
             evidence_paths=("result.datasets.electron_density", "result.datasets.hole_density"),
         )
 

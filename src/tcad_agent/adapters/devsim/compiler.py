@@ -51,7 +51,7 @@ from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
 
 class DevsimAdapter:
-    compiler_version = "0.2.4"
+    compiler_version = "0.2.5"
 
     def __init__(self, manifest: CapabilityManifest) -> None:
         self._manifest = manifest
@@ -378,7 +378,7 @@ class DevsimAdapter:
                 },
                 "sign_convention": spec.sign_convention.model_dump(mode="json"),
                 "solver": {
-                    **spec.solver.model_dump(mode="json"),
+                    **spec.solver.model_dump(mode="json", exclude={"mesh_refinement_level"}),
                     "requested_precision": spec.solver.precision,
                     "precision": (
                         "extended"
@@ -417,7 +417,11 @@ class DevsimAdapter:
         for anchor in spec.mesh_anchors:
             add(anchor.position.to("cm"), anchor.spacing.to("cm"), "user")
 
-        def bounded_spacing(region: dict[str, object], candidate: float) -> float:
+        def bounded_spacing(
+            region: dict[str, object], candidate: float, *, physical_candidate: bool = True
+        ) -> float:
+            if physical_candidate:
+                candidate *= 2.0 ** (-spec.solver.mesh_refinement_level)
             target = min(candidate, cast(float, region["mesh_spacing_cm"]))
             minimum = region.get("minimum_mesh_spacing_cm")
             maximum = region.get("maximum_mesh_spacing_cm")
@@ -451,7 +455,9 @@ class DevsimAdapter:
                 for boundary in profile.boundaries[1:-1]:
                     add(
                         boundary.to("cm"),
-                        bounded_spacing(region, cast(float, region["mesh_spacing_cm"])),
+                        bounded_spacing(
+                            region, cast(float, region["mesh_spacing_cm"]), physical_candidate=False
+                        ),
                         "profile:piecewise_constant:boundary",
                     )
             elif isinstance(profile, TabulatedProfile):
@@ -473,7 +479,9 @@ class DevsimAdapter:
                 for boundary in temperature_profile.boundaries[1:-1]:
                     add(
                         boundary.to("cm"),
-                        bounded_spacing(region, cast(float, region["mesh_spacing_cm"])),
+                        bounded_spacing(
+                            region, cast(float, region["mesh_spacing_cm"]), physical_candidate=False
+                        ),
                         "temperature:piecewise_constant:boundary",
                     )
             elif isinstance(temperature_profile, TabulatedTemperatureProfile):
@@ -1082,9 +1090,16 @@ class DevsimAdapter:
                 "solver_events": data.get("solver_events", []),
                 "native_model_names": data.get("native_model_names", {}),
                 "regions": data.get("regions", []),
+                "region_domains": [
+                    {"id": r["id"], "x0_m": r["x0_cm"] * 1e-2, "x1_m": r["x1_cm"] * 1e-2}
+                    for r in data.get("regions", [])
+                ],
                 "interfaces": data.get("interfaces", []),
                 "profile_bias_values_v": data.get("profile_bias_values_v"),
                 "profile_sampling_provenance": data.get("profile_sampling_provenance"),
+                "physics_models": data.get("physics_models", []),
+                "validation_evidence_version": data.get("validation_evidence_version"),
+                "validation_fields": data.get("validation_fields", []),
             },
         )
 
@@ -1094,7 +1109,8 @@ class DevsimAdapter:
     ) -> tuple[float, ...] | None:
         deltas = tuple(right - left for left, right in pairwise(coordinates))
         if (
-            len(coordinates) < 2
+            # Two points give only one secant, not a local C-V curve.
+            len(coordinates) < 3
             or any(delta == 0 for delta in deltas)
             or not (all(delta > 0 for delta in deltas) or all(delta < 0 for delta in deltas))
         ):

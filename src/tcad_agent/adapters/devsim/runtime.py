@@ -681,6 +681,9 @@ def _run_payload_series(
         "requested_observables": payload["observables"],
         "sign_convention": payload["sign_convention"],
         "parameter_set_id": reference.get("parameter_set_id"),
+        "physics_models": reference.get("physics_models", []),
+        "validation_evidence_version": reference.get("validation_evidence_version"),
+        "validation_fields": reference.get("validation_fields", []),
         "parameter_sources": reference.get("parameter_sources", {}),
         "solver_configuration": reference.get("solver_configuration", {}),
         "numerical_precision": reference.get("numerical_precision", {}),
@@ -2460,6 +2463,18 @@ def main() -> int:
         )
 
     requested = set(payload["observables"])
+    validation_fields = {
+        "potential",
+        "electric_field",
+        "electrostatic_flux",
+        "charge_density",
+        "electron_density",
+        "hole_density",
+        "effective_density_conduction",
+        "effective_density_valence",
+    }
+    # Validation evidence must not depend on the researcher's plot selection.
+    requested |= validation_fields
     native_model_names = dict(NATIVE_MODEL_NAMES)
     if not drift_diffusion:
         native_model_names.update(
@@ -2472,6 +2487,14 @@ def main() -> int:
             name = region["id"]
             node_positions = list(get_node_model_values(device=device, region=name, name="x"))
             edge_positions = [(left + right) / 2 for left, right in pairwise(node_positions)]
+            weights = list(get_node_model_values(device=device, region=name, name="NodeVolume"))
+            for contact in payload["contacts"]:
+                if (
+                    contact["kind"] != "insulating"
+                    and _contact_region(payload, contact["location"])["id"] == name
+                ):
+                    weights[0 if contact["location"] == "x_min" else -1] = 0.0
+            _append_field(fields, "validation_charge_weight", node_positions, weights, "cm", "node")
             if "potential" in requested:
                 _append_field(
                     fields,
@@ -2526,7 +2549,31 @@ def main() -> int:
                     "node",
                 )
             if region["material"] != "silicon":
+                _append_field(
+                    fields,
+                    "charge_density",
+                    node_positions,
+                    [
+                        -float(v)
+                        for v in get_node_model_values(
+                            device=device, region=name, name="FixedBulkCharge"
+                        )
+                    ],
+                    "C/cm^3",
+                    "node",
+                )
                 continue
+            for output, native_name in (
+                ("effective_density_conduction", "EffectiveDensityConduction"),
+                ("effective_density_valence", "EffectiveDensityValence"),
+            ):
+                values = (
+                    list(get_node_model_values(device=device, region=name, name=native_name))
+                    if name in temperature_profiles
+                    else [float(get_parameter(device=device, region=name, name=native_name))]
+                    * len(node_positions)
+                )
+                _append_field(fields, output, node_positions, values, "cm^-3", "node")
             model_outputs = {
                 "electron_density": (native_model_names["electron_density"], "cm^-3", "node"),
                 "hole_density": (native_model_names["hole_density"], "cm^-3", "node"),
@@ -2616,6 +2663,29 @@ def main() -> int:
             doping = list(get_node_model_values(device=device, region=name, name="NetDoping"))
             if "net_doping" in requested:
                 _append_field(fields, "net_doping", node_positions, doping, "cm^-3", "node")
+            electrons = list(
+                get_node_model_values(
+                    device=device, region=name, name=native_model_names["electron_density"]
+                )
+            )
+            holes = list(
+                get_node_model_values(
+                    device=device, region=name, name=native_model_names["hole_density"]
+                )
+            )
+            charge = float(get_parameter(device=device, region=name, name="ElectronCharge"))
+            fixed = list(get_node_model_values(device=device, region=name, name="FixedBulkCharge"))
+            _append_field(
+                fields,
+                "charge_density",
+                node_positions,
+                [
+                    charge * (p - n + dop) - f
+                    for p, n, dop, f in zip(holes, electrons, doping, fixed, strict=True)
+                ],
+                "C/cm^3",
+                "node",
+            )
             for output, native_name in (
                 ("donor_concentration", "PhysicalDonors"),
                 ("acceptor_concentration", "PhysicalAcceptors"),
@@ -2634,20 +2704,6 @@ def main() -> int:
                     get_node_model_values(device=device, region=name, name="Electrons")
                 )
                 holes = list(get_node_model_values(device=device, region=name, name="Holes"))
-                if "charge_density" in requested:
-                    charge = float(get_parameter(device=device, region=name, name="ElectronCharge"))
-                    values = [
-                        charge * (p - n + dop)
-                        for p, n, dop in zip(holes, electrons, doping, strict=True)
-                    ]
-                    _append_field(
-                        fields,
-                        "charge_density",
-                        node_positions,
-                        values,
-                        "C/cm^3",
-                        "node",
-                    )
                 for output, parameter in (
                     ("electron_mobility", "mu_n"),
                     ("hole_mobility", "mu_p"),
@@ -2712,6 +2768,25 @@ def main() -> int:
                         "A/cm^2",
                         "edge",
                     )
+        sheet = 0.0
+        for interface, left, right in interface_names:
+            record = next((item for item in payload["interfaces"] if item["id"] == interface), None)
+            if record is None:
+                continue
+            sheet += 1.602176634e-19 * float(record.get("fixed_charge_cm2") or 0.0)
+            if record.get("trap_density_cm2") is not None:
+                silicon = left if left["material"] == "silicon" else right
+                endpoint = -1 if silicon is left else 0
+                sheet += float(
+                    get_node_model_values(
+                        device=device,
+                        region=silicon["id"],
+                        name=f"InterfaceTrapChargeSheet_{interface}",
+                    )[endpoint]
+                )
+        _append_field(
+            fields, "validation_sheet_charge", [regions[0]["x0_cm"]], [sheet], "C/cm^2", "node"
+        )
         return fields
 
     requested_contact = None if is_transient else payload["study"].get("contact")
@@ -2792,8 +2867,9 @@ def main() -> int:
         state_variables = [
             (region, coordinates.get(variable, variable)) for region, variable in state_variables
         ]
+    checkpoints = ("Previous", "Recovery")
     for region_name, variable in state_variables:
-        for checkpoint in ("Previous", "Recovery"):
+        for checkpoint in checkpoints:
             node_solution(device=device, region=region_name, name=f"{checkpoint}{variable}")
 
     def checkpoint_state(checkpoint: str, *, restore: bool = False) -> None:
@@ -3365,6 +3441,9 @@ def main() -> int:
         "requested_observables": payload["observables"],
         "sign_convention": payload["sign_convention"],
         "parameter_set_id": payload["physics"]["parameter_set_id"],
+        "physics_models": payload["physics"]["models"],
+        "validation_evidence_version": "novatom.1d-gauss-statistics.v1",
+        "validation_fields": sorted(validation_fields - set(payload["observables"])),
         "parameter_sources": payload["physics"].get("parameter_sources", {}),
         "solver_configuration": payload["solver"],
         "numerical_precision": numerical_precision,

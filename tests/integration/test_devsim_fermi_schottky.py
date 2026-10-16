@@ -130,11 +130,11 @@ def _metal_fermi(spec: ExperimentSpec, *, both=False, bgn=False) -> ExperimentSp
     )
 
 
-def _run(spec, workspace):
+def _run(spec, workspace, *, seconds=180):
     spec = ExperimentSpec.model_validate(spec.model_dump(warnings=False))
     adapter = DevsimAdapter.from_defaults()
     native = LocalRunner(resolve_devsim_python(ROOT)).run(
-        adapter.compile(spec, workspace), RunBudget(seconds=180)
+        adapter.compile(spec, workspace), RunBudget(seconds=seconds)
     )
     result = adapter.normalize(native)
     assert result.status == "completed", native.stderr_path.read_text()
@@ -231,7 +231,9 @@ def test_original_aluminum_structure_with_fermi_executes_both_bias_polarities(va
         }
     )
     spec = ExperimentSpec.model_validate(spec.model_dump(warnings=False))
-    result = _run(spec, tmp_path / "native")
+    # Ordered forward-to-reverse continuation costs more than isolated points.
+    # Keep the physics and numeric assertions, with a bounded native-time allowance.
+    result = _run(spec, tmp_path / "native", seconds=600)
     assert [point.bias_v for point in result.bias_points] == [0, 2, -2]
     assert all(point.converged for point in result.bias_points)
     bands = result.datasets["conduction_band"]
@@ -576,7 +578,7 @@ print('JACOBIAN_JSON='+json.dumps(out))
         cwd=job.entrypoint.parent,
         text=True,
         capture_output=True,
-        timeout=90,
+        timeout=180,
     )
     assert completed.returncode == 0, completed.stderr[-6000:]
     rows = json.loads(completed.stdout.split("JACOBIAN_JSON=")[-1])

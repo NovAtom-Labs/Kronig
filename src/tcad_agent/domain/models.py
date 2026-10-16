@@ -6,6 +6,7 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tcad_agent.domain.interfaces import Interface1D
+from tcad_agent.domain.presentation import normalize_display_units
 from tcad_agent.domain.profiles import (
     ConstantProfile,
     PiecewiseConstantProfile,
@@ -210,6 +211,7 @@ class SolverControls(StrictModel):
     carrier_absolute_error: float = Field(default=1e10, gt=0)
     transient_initial_relative_error: float = Field(default=1e-8, gt=0, le=1)
     transient_step_relative_error: float = Field(default=1e-4, gt=0, le=1)
+    mesh_refinement_level: int = Field(default=0, ge=0, le=12)
 
 
 class Contact(StrictModel):
@@ -419,7 +421,24 @@ class ExperimentSpec(StrictModel):
     mesh_anchors: tuple[MeshAnchor1D, ...] = ()
     sign_convention: SignConvention = Field(default_factory=SignConvention)
     solver: SolverControls = Field(default_factory=SolverControls)
+    display_units: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Requested display units by canonical quantity or dataset ID, for example "
+            "capacitance: F/cm^2 or electron_density: cm^-3. Canonical evidence remains SI; "
+            "density cannot become an absolute quantity without physical area."
+        ),
+    )
     metadata: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("display_units")
+    @classmethod
+    def require_valid_display_units(cls, value: dict[str, str]) -> dict[str, str]:
+        for key, unit in value.items():
+            if not key.strip() or not unit.strip():
+                raise ValueError("Display quantity and unit must not be empty")
+            QuantityValue.model_validate(f"1 {unit}")
+        return normalize_display_units(value)
 
     def profile_bias_values_v(self) -> tuple[float, ...]:
         if not self.profile_sampling:

@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0", "name": "insulated-gate-fermi", "dimension": 1,
+  "regions": [
+    {"id": "film", "material": "silicon_dioxide", "x0": "0 nm", "x1": "10 nm", "mesh_spacing": "0.25 nm"},
+    {"id": "body", "material": "silicon", "x0": "10 nm", "x1": "1010 nm", "mesh_spacing": "10 nm", "minimum_mesh_spacing": "0.25 nm", "maximum_mesh_spacing": "10 nm"}
+  ],
+  "interfaces": [{"id": "join", "left_region": "film", "right_region": "body"}],
+  "profiles": [{"kind": "constant", "region": "body", "species": "acceptor", "value": "1e16 cm^-3"}],
+  "contacts": [
+    {"id": "control", "location": "x_min", "kind": "metal_work_function", "work_function": "4.1 eV"},
+    {"id": "reference", "location": "x_max", "kind": "ohmic"}
+  ],
+  "physics": {"equations": ["poisson", "electron_continuity", "hole_continuity"], "models": ["fermi"], "temperature": "300 K"},
+  "study": {"kind": "dc", "contact": "control", "start": "-5 V", "stop": "5 V", "step": "0.1 V", "strategy": "adaptive", "minimum_step": "1 mV", "maximum_retries": 8},
+  "mesh_anchors": [
+    {"position": "10 nm", "spacing": "0.25 nm"},
+    {"position": "50 nm", "spacing": "2.5 nm"},
+    {"position": "1010 nm", "spacing": "10 nm"}
+  ],
+  "solver": {"mesh_refinement_level": 1},
+  "observables": ["terminal_charge", "potential", "electric_field", "charge_density", "electron_density", "hole_density", "electron_quasi_fermi_level", "hole_quasi_fermi_level"]
+}

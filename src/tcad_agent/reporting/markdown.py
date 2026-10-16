@@ -3,6 +3,7 @@
 from tcad_agent.domain.models import ExperimentSpec
 from tcad_agent.reporting.traceability import TraceabilityMatrix
 from tcad_agent.results.models import CanonicalResult
+from tcad_agent.results.presentation import display_projection, display_values
 from tcad_agent.validation.models import ValidationReport
 
 
@@ -42,6 +43,54 @@ class MarkdownReport:
                     f"| {point.bias_v:.6e} | {terminal} | {value} | "
                     f"{'yes' if point.converged else 'no'} |"
                 )
+        projection = display_projection(result, spec.display_units, allow_missing=True)
+        matched = {
+            name if name in spec.display_units else name.partition("__")[0] for name in projection
+        }
+        for name in spec.display_units.keys() - matched:
+            lines.extend(
+                ["", f"Requested output `{name}` is unavailable; no values were fabricated."]
+            )
+        for name, dataset in result.datasets.items():
+            if not (
+                name.startswith(
+                    (
+                        "capacitance__",
+                        "ac_capacitance__",
+                        "absolute_capacitance__",
+                        "absolute_ac_capacitance__",
+                    )
+                )
+                or name in projection
+            ):
+                continue
+            values, unit = display_values(dataset, projection.get(name))
+            if len(dataset.shape) != 1 or not dataset.axes:
+                continue
+            axis = result.axes[dataset.axes[0]]
+            lines.extend(
+                [
+                    "",
+                    f"## {dataset.label}",
+                    "",
+                    f"Values shown in {unit}; canonical evidence remains {dataset.unit}.",
+                    f"Source: `{dataset.source}`.",
+                    "",
+                    f"| {axis.label} ({axis.unit}) | {dataset.label} ({unit}) |",
+                    "|---:|---:|",
+                ]
+            )
+            for i, (coordinate, value) in enumerate(zip(axis.values, values, strict=True)):
+                if dataset.validity is not None and not dataset.validity[i]:
+                    formatted = "unavailable (failed sample)"
+                elif dataset.imaginary_values is not None:
+                    scale = projection.get(name, {}).get("scale", 1)
+                    formatted = (
+                        f"real {value:.6e}; imaginary {dataset.imaginary_values[i] * scale:.6e}"
+                    )
+                else:
+                    formatted = f"{value:.6e}"
+                lines.append(f"| {coordinate:.6e} | {formatted} |")
         lines.extend(
             [
                 "",
@@ -68,9 +117,7 @@ class MarkdownReport:
             )
             for record in traceability.records:
                 evidence = ", ".join(record.evidence_datasets) or "unavailable"
-                lines.append(
-                    f"| {record.deliverable} | {record.status.value} | {evidence} |"
-                )
+                lines.append(f"| {record.deliverable} | {record.status.value} | {evidence} |")
         lines.extend(
             [
                 "",

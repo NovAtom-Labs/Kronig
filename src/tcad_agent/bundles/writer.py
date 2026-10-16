@@ -42,6 +42,8 @@ class BundleWriter:
                     staging / "recovery-comparison.json",
                     inputs.recovery_comparison.model_dump_json(indent=2),
                 )
+            if inputs.mesh_verification_root is not None:
+                shutil.copytree(inputs.mesh_verification_root, staging / "verification" / "mesh")
             for source in inputs.job.input_files:
                 shutil.copy2(source, staging / "compiled" / source.name)
             shutil.copy2(inputs.native.stdout_path, staging / "logs" / "stdout.log")

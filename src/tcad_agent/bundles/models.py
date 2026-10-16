@@ -21,6 +21,7 @@ class BundleInputs(StrictModel):
     events_path: Path
     completeness: ScientificCompletenessReport | None = None
     recovery_comparison: RecoveryComparison | None = None
+    mesh_verification_root: Path | None = None
 
 
 class ArtifactRecord(StrictModel):

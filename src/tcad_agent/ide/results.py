@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from tcad_agent.bundles.models import BundleManifest
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
@@ -15,6 +15,7 @@ from tcad_agent.ide.paths import canonical_directory, resolve_workspace_path
 from tcad_agent.recovery.proposals import RecoveryComparison
 from tcad_agent.results.catalog import DatasetCatalogEntry, build_dataset_catalog
 from tcad_agent.results.models import CanonicalResult
+from tcad_agent.results.presentation import display_projection
 from tcad_agent.science.models import ScientificCompletenessReport
 from tcad_agent.validation.models import ValidationReport
 
@@ -33,6 +34,7 @@ class WorkspaceResultView(StrictModel):
     catalog: tuple[DatasetCatalogEntry, ...]
     completeness: ScientificCompletenessReport | None = None
     recovery_comparison: RecoveryComparison | None = None
+    display_projection: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class WorkspaceResultComparison(StrictModel):
@@ -42,7 +44,7 @@ class WorkspaceResultComparison(StrictModel):
 class WorkspaceResultReader:
     """Read and verify the canonical artifacts behind a workbench view."""
 
-    json_limit = 8 * 1024 * 1024
+    json_limit = 32 * 1024 * 1024
     required_artifacts = (
         "experiment.json",
         "results/canonical.json",
@@ -178,6 +180,9 @@ class WorkspaceResultReader:
             catalog=build_dataset_catalog(result),
             completeness=completeness,
             recovery_comparison=recovery_comparison,
+            display_projection=display_projection(
+                result, experiment.display_units, allow_missing=True
+            ),
         )
 
     def _read_object(self, path: Path) -> dict[str, Any]:

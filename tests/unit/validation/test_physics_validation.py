@@ -230,9 +230,7 @@ def test_band_ordering_accepts_semantically_equal_axes_with_different_ids() -> N
 
 
 def test_recombination_components_and_generation_are_checked() -> None:
-    axis = ScientificAxis(
-        id="x", kind="position", label="Position", unit="m", values=(0.0, 1.0)
-    )
+    axis = ScientificAxis(id="x", kind="position", label="Position", unit="m", values=(0.0, 1.0))
 
     def rate(identifier: str, values: tuple[float, float]) -> Dataset:
         return Dataset(
@@ -292,9 +290,7 @@ def test_recombination_balance_accepts_semantically_equal_axes_with_different_id
         status="completed",
         axes=axes,
         datasets={
-            "srh_recombination_rate": rate(
-                "srh_recombination_rate", "srh_position", (2.0, 3.0)
-            ),
+            "srh_recombination_rate": rate("srh_recombination_rate", "srh_position", (2.0, 3.0)),
             "auger_recombination_rate": rate(
                 "auger_recombination_rate", "auger_position", (1.0, 1.0)
             ),
@@ -458,12 +454,32 @@ def test_sweep_continuity_detects_isolated_canonical_outlier() -> None:
         )
 
     continuous = ValidationEngine().validate(result_with((-2.0, -1.0, 0.0, 1.0, 2.0)))
-    discontinuous = ValidationEngine().validate(
-        result_with((-2.0, -1.0, 10000.0, 1.0, 2.0))
-    )
+    discontinuous = ValidationEngine().validate(result_with((-2.0, -1.0, 10000.0, 1.0, 2.0)))
 
     assert continuous.checks_by_id["sweep-continuity"].status == "passed"
     assert discontinuous.checks_by_id["sweep-continuity"].status == "failed"
+
+
+def test_sweep_screen_does_not_amplify_current_roundoff_below_recorded_acceptance():
+    values = tuple(1e-16 * value for value in (-2.0, -1.0, 10000.0, 1.0, 2.0))
+    result = _canonical_sweep((-2.0, -1.0, 0.0, 1.0, 2.0), values)
+    check = ValidationEngine().validate(result).checks_by_id["sweep-continuity"]
+    assert check.status == "not_applicable"
+    assert "absolute" in check.message
+    # A researcher-specified strict policy still screens the exact same numbers.
+    strict = ValidationEngine(current_atol=0).validate(result).checks_by_id["sweep-continuity"]
+    assert strict.status == "failed"
+    assert strict.limit == 1000
+
+
+def test_sweep_screen_retains_above_tolerance_current_spikes_and_unconfigured_units():
+    biases = (-2.0, -1.0, 0.0, 1.0, 2.0)
+    for scale, unit in ((1e-9, "A/m^2"), (1e-16, "F/m^2")):
+        values = tuple(scale * value for value in (-2.0, -1.0, 10000.0, 1.0, 2.0))
+        result = _canonical_sweep(biases, values, value_unit=unit)
+        check = ValidationEngine().validate(result).checks_by_id["sweep-continuity"]
+        assert check.status == "failed"
+        assert check.limit == 1000
 
 
 def _canonical_sweep(
@@ -663,9 +679,9 @@ def test_ac_and_quasistatic_capacitance_are_compared_when_pair_is_present() -> N
         update={
             "datasets": {
                 **result.datasets,
-                "ac_capacitance__gate": result.datasets[
-                    "ac_capacitance__gate"
-                ].model_copy(update={"values": (4.0e-3, 3.8e-3)}),
+                "ac_capacitance__gate": result.datasets["ac_capacitance__gate"].model_copy(
+                    update={"values": (4.0e-3, 3.8e-3)}
+                ),
             }
         }
     )

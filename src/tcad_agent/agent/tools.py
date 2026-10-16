@@ -295,6 +295,19 @@ class DomainTools:
     def prepare_experiment(self, payload: dict[str, object], *, backend: str) -> ToolResponse:
         try:
             spec = ExperimentSpec.model_validate(payload)
+            if self.research_intent:
+                requested_units = dict(spec.display_units)
+                for field in self.research_intent.fields:
+                    if field.origin not in {"researcher", "repository"}:
+                        continue
+                    if field.path == "display_units" and isinstance(field.value, dict):
+                        requested_units.update(field.value)
+                    elif field.path.startswith("display_units.") and isinstance(field.value, str):
+                        requested_units[field.path.removeprefix("display_units.")] = field.value
+                if requested_units != spec.display_units:
+                    spec = ExperimentSpec.model_validate(
+                        {**spec.model_dump(mode="json"), "display_units": requested_units}
+                    )
             area_refusal = self._contact_area_authority_response(spec)
             if area_refusal is not None:
                 return area_refusal
@@ -463,7 +476,9 @@ class DomainTools:
             # studies. This is a resource allowance, not scientific acceptance.
             # Explicit caller budgets still win and are recorded by the engine
             # ledger; timeout never substitutes scientific output.
-            timeout_value = request.get("timeout_seconds", 600)
+            # Reserve time for the mandatory independent mesh solves as well
+            # as the original solve. Explicit caller budgets remain unchanged.
+            timeout_value = request.get("timeout_seconds", 1200)
             if not isinstance(timeout_value, (str, int, float)):
                 raise TypeError("timeout_seconds must be numeric")
             budget = RunBudget(seconds=float(timeout_value))

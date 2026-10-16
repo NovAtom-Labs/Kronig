@@ -17,7 +17,7 @@ from typing import Any
 
 COORDINATES = {"Electrons": "ElectronDensityPotential", "Holes": "HoleDensityPotential"}
 CARRIER_EQUATIONS = {"Electrons": "ElectronContinuityEquation", "Holes": "HoleContinuityEquation"}
-VERSION = "kronig.positive-density.conservative-dc.v1"
+VERSION = "kronig.positive-density.conservative-dc.v2"
 
 
 def replace_conservation_rows(
@@ -198,13 +198,10 @@ class NativeDensitySolver:
 
     def _prepare_balance_eligibility(self) -> None:
         d = self.backend
-        # An integrated row requires a connected conducting stack with flux
-        # boundaries. Dirichlet carriers and interface source semantics retain
-        # the ordinary equation assembly until their row operation is proven.
-        if len(self.regions) != len(self.payload["regions"]) or not all(
-            c["kind"] == "metal_work_function" for c in self.payload["contacts"]
-        ):
-            return
+        # Sum physical continuity rows, never Dirichlet carrier constraints.
+        # Insulating contacts have no carrier equation or terminal flux.
+        self.dirichlet_nodes: dict[str, set[int]] = {region: set() for region in self.regions}
+        flux_boundary = False
         for interface in d.get_interface_list(device=self.device):
             kw = {"device": self.device, "interface": interface}
             for name in d.get_interface_equation_list(**kw):
@@ -215,27 +212,57 @@ class NativeDensitySolver:
                     return
         for contact in self.payload["contacts"]:
             for name in CARRIER_EQUATIONS.values():
+                if name not in d.get_contact_equation_list(
+                    device=self.device, contact=contact["backend_id"]
+                ):
+                    continue
                 command = d.get_contact_equation_command(
                     device=self.device, contact=contact["backend_id"], name=name
                 )
                 if (
-                    command["node_model"]
-                    or not command["edge_model"]
+                    not (command["edge_model"] or command["edge_current_model"])
                     or command["edge_volume_model"]
                     or command["element_model"]
                     or command["circuit_node"]
                 ):
                     return
+                if command["node_model"]:
+                    if contact["kind"] != "ohmic":
+                        return
+                    region = d.get_region_list(
+                        device=self.device, contact=contact["backend_id"]
+                    )[0]
+                    count = len(d.get_node_model_values(**self._kw(region), name="NodeVolume"))
+                    self.dirichlet_nodes[region].add(
+                        0 if contact["location"] == "x_min" else count - 1
+                    )
+                else:
+                    flux_boundary = True
+        original_flux_scope = len(self.regions) == len(self.payload["regions"]) and all(
+            contact["kind"] == "metal_work_function" for contact in self.payload["contacts"]
+        )
+        single_reservoir_scope = (
+            len(self.regions) == 1
+            and sum(map(len, self.dirichlet_nodes.values())) == 1
+            and not flux_boundary
+        )
+        # Mixed flux/Dirichlet boundaries retain ordinary assembly. Their
+        # contact-source conventions are not the single-reservoir balance.
+        if not (original_flux_scope or single_reservoir_scope):
+            return
         assembled = d.get_matrix_and_rhs(format="csc")
         for equation in CARRIER_EQUATIONS.values():
-            self.eligible[equation] = [
+            eligible = [
                 (region, index)
                 for region in self.regions
                 for index, number in enumerate(
                     d.get_equation_numbers(**self._kw(region), equation=equation)
                 )
                 if assembled["permutation"]["row"][number] == number
+                and index not in self.dirichlet_nodes[region]
             ]
+            if eligible:
+                self.eligible[equation] = eligible
 
     def _unknowns(self) -> dict[str, dict[str, list[int]]]:
         d = self.backend
@@ -268,6 +295,8 @@ class NativeDensitySolver:
                 command["node_model"],
                 list(d.get_node_model_values(**kw, name="NodeVolume")),
             )
+            for index in self.dirichlet_nodes[region]:
+                volume[index] = 0
             if model:
                 values = d.get_node_model_values(**kw, name=model)
                 terms.extend(a * b for a, b in zip(values, volume, strict=True))
@@ -279,12 +308,16 @@ class NativeDensitySolver:
                         for column, a, b in zip(numbers, values, volume, strict=True):
                             add(column, a * b)
         for contact in self.payload["contacts"]:
+            if equation not in d.get_contact_equation_list(
+                device=self.device, contact=contact["backend_id"]
+            ):
+                continue
             region = d.get_region_list(device=self.device, contact=contact["backend_id"])[0]
             kw = self._kw(region)
             command = d.get_contact_equation_command(
                 device=self.device, contact=contact["backend_id"], name=equation
             )
-            model = command["edge_model"]
+            model = command["edge_model"] or command["edge_current_model"]
             count = len(next(iter(unknowns[region].values())))
             edge, sign = (0, 1) if contact["location"] == "x_min" else (count - 2, -1)
             couple = sign * d.get_edge_model_values(**kw, name="EdgeCouple")[edge]

@@ -30,6 +30,16 @@ def test_workspace_reference_document_is_available_as_bounded_data(tmp_path):
     assert context.files[0].sha256
 
 
+def test_single_study_keeps_trailing_units_within_shared_context_budget(tmp_path):
+    text = "Scientific study parameters.\n" * 190 + '\n{"display_units":{"capacitance":"nF/cm^2"}}'
+    (tmp_path / "study.md").write_text(text)
+
+    context = WorkspaceContextCollector().collect(tmp_path)
+
+    assert context.files[0].text_excerpt == text
+    assert sum(len(item.text_excerpt or "") for item in context.files) <= 16000
+
+
 def test_workspace_excerpts_have_a_shared_budget_and_do_not_read_symlinks(tmp_path):
     for index in range(8):
         (tmp_path / f"notes-{index}.md").write_text("research " * 3000)
@@ -108,6 +118,8 @@ def test_inventory_tolerates_a_file_removed_during_collection(tmp_path, monkeypa
     (tmp_path / "temporary.txt").write_text("ephemeral")
     collector = WorkspaceContextCollector()
     monkeypatch.setattr(
-        collector, "_file_context", lambda *args: (_ for _ in ()).throw(FileNotFoundError())
+        collector,
+        "_file_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError()),
     )
     assert collector.collect(tmp_path).files == ()

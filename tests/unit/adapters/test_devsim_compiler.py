@@ -10,6 +10,11 @@ from tcad_agent.domain.models import ExperimentSpec, Observable
 from tcad_agent.domain.profiles import GaussianProfile
 
 
+def test_two_operating_points_do_not_claim_a_local_capacitance_curve():
+    assert DevsimAdapter._finite_difference((-2.0, 2.0), (0.0, 8.0)) is None
+    assert DevsimAdapter._finite_difference((-1.0, 0.0, 1.0), (0.0, 4.0, 8.0)) == (4, 4, 4)
+
+
 def test_compiled_workspace_carries_its_statistical_kernel_without_project_install(
     valid_spec, tmp_path
 ):

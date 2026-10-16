@@ -14,6 +14,35 @@ ROOT = Path(__file__).parents[2]
 
 
 @pytest.mark.integration
+def test_refined_fermi_sweep_converges_without_adding_recombination(tmp_path):
+    from tcad_agent.validation.engine import ValidationEngine
+
+    spec = ExperimentSpec.model_validate_json(
+        (ROOT / "tests/fixtures/devsim/insulated-gate-fermi.json").read_text()
+    )
+    adapter = DevsimAdapter.from_defaults()
+    native = LocalRunner(resolve_devsim_python(ROOT)).run(
+        adapter.compile(spec, tmp_path / "native"), RunBudget(seconds=400)
+    )
+    result = adapter.normalize(native)
+    assert result.status == "completed", native.stderr_path.read_text()
+    assert len(result.bias_points) == 101
+    assert all(point.converged for point in result.bias_points)
+    assert result.metadata["physics_models"] == ["fermi"]
+    for name in ("electron_quasi_fermi_level", "hole_quasi_fermi_level"):
+        values = result.datasets[name].values
+        assert max(values) - min(values) < 1e-6
+    report = ValidationEngine().validate(result, spec=spec)
+    for name in (
+        "terminal-current-conservation",
+        "electric-field-potential-gradient",
+        "poisson-residual-consistency",
+        "contact-charge-balance",
+    ):
+        assert report.checks_by_id[name].status == "passed", report.checks_by_id[name]
+
+
+@pytest.mark.integration
 def test_fermi_gate_predictor_restores_positive_density_coordinates_and_converges(tmp_path):
     spec = ExperimentSpec.model_validate(
         {

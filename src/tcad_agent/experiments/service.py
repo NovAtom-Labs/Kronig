@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
@@ -31,6 +33,7 @@ from tcad_agent.recovery.proposals import RecoveryProposal, RecoveryProposalServ
 from tcad_agent.runners.models import RunBudget
 from tcad_agent.science.completeness import ScientificCompletenessEngine
 from tcad_agent.validation.engine import ValidationEngine
+from tcad_agent.validation.refinement import mesh_comparison, refined_spec
 
 
 class ExperimentEngine:
@@ -137,6 +140,114 @@ class ExperimentEngine:
             )
             native = binding.runner.run(job, budget)
             result = binding.adapter.normalize(native)
+            mesh_root = None
+            if result.status == "completed" and result.operating_points:
+                mesh_root = work / "mesh-verification"
+                mesh_root.mkdir()
+                original = mesh_root / "level-00"
+                original.mkdir()
+                (original / "experiment.json").write_text(prepared.spec.model_dump_json(indent=2))
+                (original / "canonical.json").write_text(result.model_dump_json(indent=2))
+                shutil.copytree(job.entrypoint.parent, original / "compiled")
+                (original / "provenance.json").write_text(
+                    json.dumps(
+                        {
+                            "input_digest": job.input_digest,
+                            "runtime_digest": job.runtime_digest,
+                            "compiler_version": job.compiler_version,
+                            "simulator_version": result.simulator_version,
+                            "execution_state": native.status,
+                            "elapsed_seconds": native.elapsed_seconds,
+                        },
+                        indent=2,
+                    )
+                )
+                coarse_spec = prepared.spec
+                record = {
+                    "status": "failed",
+                    "relative_tolerance": 0.03,
+                    "reason": "Execution budget exhausted before mesh verification.",
+                }
+                elapsed = native.elapsed_seconds
+                history = []
+                for level in range(1, 5):
+                    remaining = budget.seconds - elapsed
+                    if remaining <= 0:
+                        record = {
+                            **record,
+                            "status": "failed",
+                            "reason": "Mesh verification exhausted its total execution budget.",
+                        }
+                        break
+                    fine_spec = refined_spec(coarse_spec)
+                    level_root = mesh_root / f"level-{level:02d}"
+                    level_root.mkdir()
+                    (level_root / "experiment.json").write_text(fine_spec.model_dump_json(indent=2))
+                    started = time.monotonic()
+                    try:
+                        fine_job = binding.adapter.compile(fine_spec, level_root / "compiled")
+                        fine_native = binding.runner.run(
+                            fine_job, RunBudget(seconds=min(remaining, 3600))
+                        )
+                        fine_result = binding.adapter.normalize(fine_native)
+                        (level_root / "canonical.json").write_text(
+                            fine_result.model_dump_json(indent=2)
+                        )
+                        record = mesh_comparison(
+                            result, fine_result,
+                            equilibrium=prepared.spec.study.kind == "equilibrium",
+                            current_absolute_tolerance=min(
+                                validation_engine.current_atol,
+                                validation_engine.equilibrium_current_atol,
+                            ),
+                        )
+                        record.update(
+                            {
+                                "input_digest": fine_job.input_digest,
+                                "runtime_digest": fine_job.runtime_digest,
+                                "compiler_version": fine_job.compiler_version,
+                                "simulator_version": fine_result.simulator_version,
+                                "execution_state": fine_native.status,
+                                "elapsed_seconds": time.monotonic() - started,
+                                "selected_input_digest": job.input_digest,
+                                "selected_mesh_level": level - 1,
+                            }
+                        )
+                    except Exception as exc:
+                        record = {
+                            **record,
+                            "status": "failed",
+                            "reason": f"Mesh verification did not complete ({type(exc).__name__}).",
+                        }
+                        break
+                    elapsed += time.monotonic() - started
+                    history.append(record)
+                    (level_root / "provenance.json").write_text(json.dumps(record, indent=2))
+                    if record["status"] == "passed" or fine_result.status != "completed":
+                        break
+                    if level < 4 and all(
+                        p.state == "converged" for p in fine_result.operating_points
+                    ):
+                        coarse_spec, result, native, job = (
+                            fine_spec,
+                            fine_result,
+                            fine_native,
+                            fine_job,
+                        )
+                    else:
+                        break
+                record = {**record, "comparisons": history}
+                (mesh_root / "experiment.json").write_text(coarse_spec.model_dump_json(indent=2))
+                (mesh_root / "provenance.json").write_text(json.dumps(record, indent=2))
+                result = result.model_copy(
+                    update={
+                        "metadata": {
+                            **result.metadata,
+                            "mesh_verification": record,
+                            "resolved_mesh_spec": coarse_spec.model_dump(mode="json"),
+                        }
+                    }
+                )
             validation = validation_engine.validate(
                 result,
                 expected_bias_points=expected_bias_points(prepared.spec),
@@ -164,6 +275,7 @@ class ExperimentEngine:
                     validation=validation,
                     events_path=ledger.path,
                     completeness=prepared.completeness,
+                    mesh_verification_root=mesh_root,
                     recovery_comparison=RecoveryProposalService().record_comparison(
                         prepared.recovery_proposal,
                         reviewed_spec=prepared.spec,

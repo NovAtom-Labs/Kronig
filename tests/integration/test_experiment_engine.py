@@ -52,6 +52,12 @@ def test_engine_executes_real_devsim_and_writes_verified_bundle(
     )
     assert view.manifest.run_id == bundle.run_id
     assert view.validation.overall == "passed"
+    assert view.result.metadata["mesh_verification"]["status"] == "passed"
+    assert "verification/mesh/experiment.json" in manifest["artifacts"]
+    assert "verification/mesh/provenance.json" in manifest["artifacts"]
+    assert "verification/mesh/level-00/canonical.json" in manifest["artifacts"]
+    assert "verification/mesh/level-00/compiled/input.json" in manifest["artifacts"]
+    assert view.validation.checks_by_id["mesh-refinement-stability"].status == "passed"
     assert not (tmp_path / "runs/.work/run-engine-real-devsim").exists()
 
 

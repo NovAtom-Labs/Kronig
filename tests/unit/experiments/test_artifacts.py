@@ -3,10 +3,36 @@ from pathlib import Path
 
 import pytest
 
-from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.domain.models import ContactKind, ExperimentSpec
+from tcad_agent.domain.units import QuantityValue
 from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter, project_slug
 from tcad_agent.experiments.service import ExperimentEngine
 from tcad_agent.validation.policy import validation_policy_digest
+
+
+def test_compound_quantity_units_render_as_literal_code_in_plan(tmp_path, valid_spec):
+    from markdown_it import MarkdownIt
+
+    contact = valid_spec.contacts[0].model_copy(
+        update={
+            "kind": ContactKind.METAL_WORK_FUNCTION,
+            "work_function": QuantityValue.model_validate("4.10 eV"),
+        }
+    )
+    spec = ExperimentSpec.model_validate(
+        valid_spec.model_copy(update={"contacts": (contact, *valid_spec.contacts[1:])})
+        .model_dump(mode="json")
+    )
+    artifact = ExperimentPlanArtifactWriter(tmp_path).write(
+        ExperimentEngine().prepare(spec, "devsim")
+    )
+    code = [
+        child.content
+        for block in MarkdownIt().parse(artifact.markdown_path.read_text())
+        for child in block.children or ()
+        if child.type == "code_inline"
+    ]
+    assert any("kilogram * meter ** 2 / second ** 2" in value for value in code)
 
 
 def test_recovery_plan_has_distinct_project_and_visible_numeric_diff(tmp_path, valid_spec):
@@ -84,3 +110,12 @@ def test_plan_writer_rejects_symlink_escape(
 
     with pytest.raises(ValueError, match="symlink"):
         ExperimentPlanArtifactWriter(tmp_path / "workspace").write(prepared)
+
+
+def test_plan_quantity_text_preserves_canonical_precision_for_repository_reuse():
+    from tcad_agent.domain.units import QuantityValue
+    from tcad_agent.experiments.artifacts import _display
+
+    original = QuantityValue.model_validate("4.35 eV")
+    literal = _display(original.model_dump()).strip("`")
+    assert QuantityValue.model_validate(literal) == original

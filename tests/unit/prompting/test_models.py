@@ -90,3 +90,30 @@ def test_evidence_excerpt_is_hash_and_version_bearing() -> None:
     )
 
     assert excerpt.content_hash == "a" * 64
+
+
+def test_existing_unresolved_metadata_can_be_loaded_before_model_reconciliation():
+    from tcad_agent.prompting.models import PreparationDecision
+
+    decision = PreparationDecision.model_validate(
+        {
+            "status": "clarification",
+            "summary": "Resolve the thickness unit",
+            "questions": [
+                {
+                    "id": "thickness",
+                    "field_path": "regions.geometry.thickness",
+                    "prompt": "What thickness and unit?",
+                    "reason": "Physical dimension",
+                }
+            ],
+            "unresolved_critical": ["regions.geometry.thickness"],
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Analyze a layered structure",
+                "unresolved_critical": ["Thickness unit ('original unit is ambiguous')"],
+            },
+        }
+    )
+    assert decision.questions[0].field_path == "regions.geometry.thickness"
+    assert decision.intent.unresolved_critical == ("Thickness unit ('original unit is ambiguous')",)

@@ -12,6 +12,9 @@ def test_saved_results_survive_without_chat_records(tmp_path, monkeypatch, resul
     workspace = tmp_path / "repo"
     workspace.mkdir()
     result_bundle_factory(RuntimePaths.from_workspace(workspace).bundle_root)
+    # In-progress staging is always present in real managed bundle storage.
+    staging = RuntimePaths.from_workspace(workspace).bundle_root / ".work" / "unfinished-run"
+    staging.mkdir(parents=True)
     project = workspace / "experiments" / "reviewed-study"
     project.mkdir(parents=True)
     (project / "project.json").write_text(json.dumps({"run_id": "run-0001"}))

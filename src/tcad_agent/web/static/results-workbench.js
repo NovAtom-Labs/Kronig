@@ -47,6 +47,10 @@
         || axis.values.some((value) => !Number.isFinite(Number(value)))
       ))) return [];
       const imaginary = dataset.imaginary_values;
+      const projection = payload?.display_projection?.[name];
+      const scale = Number(projection?.scale ?? 1);
+      const offset = Number(projection?.offset ?? 0);
+      if (!Number.isFinite(scale) || !Number.isFinite(offset)) return [];
       if (
         imaginary !== null
         && imaginary !== undefined
@@ -72,14 +76,15 @@
         name,
         id: String(dataset.id || name),
         label: String(dataset.label || label(name)),
-        unit: String(dataset.unit || "1"),
+        unit: String(projection?.unit || dataset.unit || "1"),
+        canonicalUnit: String(dataset.unit || "1"),
         axes: resolvedAxes.map((axis) => ({
           ...axis,
           values: axis.values.map(Number),
         })),
         shape,
-        values,
-        imaginaryValues: imaginary ? imaginary.map(Number) : null,
+        values: values.map((value) => value * scale + offset),
+        imaginaryValues: imaginary ? imaginary.map((value) => Number(value) * scale) : null,
         validity: validity ? validity.map(Boolean) : null,
         centering: String(dataset.centering || "node"),
         source: String(dataset.source || "simulator"),
@@ -107,13 +112,16 @@
   function compatibleOverlayOptions(primary, datasets) {
     if (!primary) return [];
     const axisSignature = JSON.stringify(
-      primary.axes.map((axis) => ({id: axis.id, values: axis.values})),
+      primary.axes.map((axis) => ({kind: axis.kind, unit: axis.unit, values: axis.values})),
     );
     return datasets.filter((candidate) => (
       candidate.id !== primary.id
       && candidate.unit === primary.unit
+      && candidate.centering === primary.centering
       && JSON.stringify(candidate.shape) === JSON.stringify(primary.shape)
-      && JSON.stringify(candidate.axes.map((axis) => ({id: axis.id, values: axis.values})))
+      && JSON.stringify(candidate.axes.map((axis) => (
+        {kind: axis.kind, unit: axis.unit, values: axis.values}
+      )))
         === axisSignature
       && candidate.plotKind === primary.plotKind
     ));
@@ -550,7 +558,7 @@
     const values = summarize(payload);
     const grid = element("section", "result-metrics");
     grid.append(
-      metricCard("Potential range", formatNumber(values.potentialRange), values.potentialRange === null ? "" : "V"),
+      metricCard("Potential span · all points", formatNumber(values.potentialRange), values.potentialRange === null ? "" : "V"),
       metricCard("Peak electric field", formatNumber(values.peakElectricField), values.peakElectricField === null ? "" : "V/m"),
       metricCard("Maximum terminal current", formatNumber(values.maximumTerminalCurrent), values.maximumTerminalCurrent === null ? "" : "A/m²"),
       metricCard(
@@ -656,10 +664,15 @@
       svgNode("text", {x: 18, y: 160, transform: "rotate(-90 18 160)", class: "result-chart-label", "text-anchor": "middle"}, useLog ? `log₁₀(${field.unit})` : useSignedLog ? `signed log₁₀(${field.unit})` : field.unit),
     );
     markers.filter((marker) => marker.value >= xMinimum && marker.value <= xMaximum).forEach(
-      (marker) => svg.append(
+      (marker) => {
+        const rightSide = x(marker.value) > dimensions.left + dimensions.width / 2;
+        svg.append(
         svgNode("line", {x1: x(marker.value), y1: dimensions.top, x2: x(marker.value), y2: dimensions.top + dimensions.height, class: marker.kind === "contact" ? "result-chart-contact" : "result-chart-interface"}),
-        svgNode("text", {x: x(marker.value) + 4, y: dimensions.top + 12, class: "result-chart-tick"}, marker.label),
-      ),
+        svgNode("text", {x: x(marker.value) + (rightSide ? -4 : 4),
+          y: dimensions.top + 12, class: "result-chart-tick",
+          "text-anchor": rightSide ? "end" : "start"}, marker.label),
+        );
+      },
     );
     segments.forEach((segment) => svg.append(svgNode("path", {
       d: segment.map((point, index) => `${index ? "L" : "M"} ${x(point.x)} ${y(point.value)}`).join(" "),
@@ -849,6 +862,26 @@
     link.href = URL.createObjectURL(new Blob([content], {type}));
     link.click();
     URL.revokeObjectURL(link.href);
+  }
+
+  function serializedPlot(svg) {
+    const copy = svg.cloneNode(true);
+    const originals = [svg, ...svg.querySelectorAll("*")];
+    const copies = [copy, ...copy.querySelectorAll("*")];
+    const properties = ["fill", "stroke", "stroke-width", "stroke-dasharray",
+      "stroke-linecap", "stroke-linejoin", "font-family", "font-size", "font-weight",
+      "opacity", "display", "visibility"];
+    originals.forEach((node, index) => {
+      const style = getComputedStyle(node);
+      properties.forEach((property) => copies[index].style.setProperty(
+        property, style.getPropertyValue(property),
+      ));
+    });
+    copy.prepend(svgNode("rect", {width: "100%", height: "100%",
+      fill: getComputedStyle(document.body).backgroundColor}));
+    copy.setAttribute("width", String(svg.viewBox.baseVal.width));
+    copy.setAttribute("height", String(svg.viewBox.baseVal.height));
+    return new XMLSerializer().serializeToString(copy);
   }
 
   function renderHeatmap(svg, dataset) {
@@ -1063,12 +1096,12 @@
     });
     exportSvg.addEventListener("click", () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
-      const source = new XMLSerializer().serializeToString(svg);
+      const source = serializedPlot(svg);
       triggerDownload(`${dataset.id}.svg`, source, "image/svg+xml;charset=utf-8");
     });
     exportPng.addEventListener("click", () => {
       const dataset = datasets.find((candidate) => candidate.name === select.value) || datasets[0];
-      const source = new XMLSerializer().serializeToString(svg);
+      const source = serializedPlot(svg);
       const image = new Image();
       const blobUrl = URL.createObjectURL(new Blob([source], {type: "image/svg+xml"}));
       image.onload = () => {
