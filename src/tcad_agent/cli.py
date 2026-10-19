@@ -27,8 +27,6 @@ from tcad_agent.runners.models import RunBudget
 from tcad_agent.runners.remote import BackendUnconfiguredError, RemoteProtocolError
 from tcad_agent.validation.engine import ValidationEngine
 
-load_dotenv()
-
 app = typer.Typer(help="Validate, compile, run, and report simulator-neutral TCAD studies.")
 knowledge_app = typer.Typer(help="Search the authorized versioned TCAD knowledge index.")
 evaluation_app = typer.Typer(help="Inspect versioned TCAD agent evaluation prompts.")
@@ -240,3 +238,13 @@ def build_knowledge_command(
         typer.echo(f"knowledge build failed: {exc}", err=True)
         raise typer.Exit(2) from exc
     typer.echo(f"indexed {len(passages)} passages at {index}")
+
+
+def main() -> None:
+    """Load local environment configuration and launch the CLI."""
+    load_dotenv()
+    app()
+
+
+if __name__ == "__main__":
+    main()
