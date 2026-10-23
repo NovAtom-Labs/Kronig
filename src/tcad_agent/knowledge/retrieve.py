@@ -7,6 +7,7 @@ import math
 import re
 import sqlite3
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 from typing import Protocol
 
@@ -51,7 +52,7 @@ class KnowledgeIndex:
             embeddings = tuple(embedder.embed([passage.content for passage in passages]))
             if len(embeddings) != len(passages):
                 raise ValueError("embedding provider returned the wrong number of vectors")
-        with sqlite3.connect(path) as connection:
+        with closing(sqlite3.connect(path)) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE passages (

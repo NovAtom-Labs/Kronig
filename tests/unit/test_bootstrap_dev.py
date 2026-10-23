@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -167,3 +168,130 @@ def test_bootstrap_help_is_available_without_modifying_the_checkout() -> None:
     parser = bootstrap.build_parser()
 
     assert "Prepare an Agent Kronig source checkout" in parser.description
+
+
+def test_application_install_constrains_transitive_versions(tmp_path, monkeypatch):
+    bootstrap = load_script("bootstrap_dev")
+    paths = bootstrap.development_paths(tmp_path / "checkout", "Linux")
+    paths.application_python.parent.mkdir(parents=True)
+    paths.application_python.touch()
+    (paths.repository / "requirements.lock").write_text(
+        "# generated lock\nhttpx[socks]==0.28.1\nnumpy==2.5.3\n"
+    )
+    commands = []
+
+    def run(command, root):
+        commands.append(tuple(command))
+        if "-c" in command and "-r" in command:
+            constraint = Path(command[command.index("-c") + 1])
+            assert constraint.read_text() == ("# generated lock\nhttpx==0.28.1\nnumpy==2.5.3\n"), (
+                "pip constraints must retain versions without requesting extras"
+            )
+
+    monkeypatch.setattr(bootstrap, "_run", run)
+
+    bootstrap._prepare_application(paths)
+
+    install = next(command for command in commands if "-r" in command)
+    assert "-c" in install
+    constraint = Path(install[install.index("-c") + 1])
+    assert not constraint.exists(), "temporary projection must not bloat the checkout"
+    assert "httpx[socks]" in (paths.repository / "requirements.lock").read_text()
+
+
+def test_desktop_setup_installs_missing_trusted_electron_binary(tmp_path, monkeypatch):
+    bootstrap = load_script("bootstrap_dev")
+    paths = bootstrap.development_paths(tmp_path / "checkout", "Linux")
+    installer = paths.repository / "desktop/node_modules/electron/install.js"
+
+    def run(command, root):
+        if "install" in command:
+            installer.parent.mkdir(parents=True, exist_ok=True)
+            installer.touch()
+        if str(installer) in command:
+            paths.electron.parent.mkdir(parents=True, exist_ok=True)
+            paths.electron.touch()
+
+    monkeypatch.setattr(bootstrap, "_run", run)
+    bootstrap._prepare_desktop(paths, "pnpm")
+    assert paths.electron.is_file(), "pnpm may skip dependency lifecycle scripts"
+
+
+def test_application_fingerprint_includes_the_complete_lock(tmp_path):
+    bootstrap = load_script("bootstrap_dev")
+    root = tmp_path / "checkout"
+    root.mkdir()
+    for name in ("requirements.txt", "requirements.lock", "pyproject.toml"):
+        (root / name).write_text("first\n")
+    paths = bootstrap.development_paths(root, "Linux")
+    first = bootstrap.application_fingerprint(paths, ("python=3.13",))
+    (root / "requirements.lock").write_text("changed transitive dependency\n")
+    assert first != bootstrap.application_fingerprint(paths, ("python=3.13",))
+
+
+def test_windows_simulator_setup_installs_its_math_runtime(tmp_path, monkeypatch):
+    bootstrap = load_script("bootstrap_dev")
+    paths = bootstrap.development_paths(tmp_path / "checkout", "Windows")
+    paths.devsim_python.parent.mkdir(parents=True)
+    paths.devsim_python.touch()
+    commands = []
+    monkeypatch.setattr(bootstrap, "_run", lambda command, root: commands.append(tuple(command)))
+    bootstrap._prepare_devsim(paths)
+    assert any("mkl==2025.2.0" in command for command in commands)
+
+
+def test_cached_setup_repairs_an_unhealthy_environment(tmp_path):
+    bootstrap = load_script("bootstrap_dev")
+    output = tmp_path / "python"
+    output.touch()
+    cache = bootstrap.BootstrapCache(tmp_path / "bootstrap.json")
+    cache.record("application", "same")
+    state = {"healthy": False}
+    bootstrap._stage(
+        name="application",
+        label="application",
+        fingerprint="same",
+        outputs=(output,),
+        cache=cache,
+        force=False,
+        prepare=lambda: state.update(healthy=True),
+        verify=lambda: state["healthy"],
+    )
+    assert state["healthy"]
+
+
+def test_python_health_probe_rejects_missing_or_wrong_dependencies():
+    bootstrap = load_script("bootstrap_dev")
+    assert bootstrap.python_ready(Path(sys.executable), {"pytest": "0.0.0"}) is False
+    assert bootstrap.python_ready(Path(sys.executable), {"not-a-kronig-dependency": "1"}) is False
+
+
+def test_python_health_probe_accepts_normalized_project_release_version():
+    bootstrap = load_script("bootstrap_dev")
+    assert bootstrap.python_ready(Path(sys.executable), {"novatom-tcad-agent": "0.1.0-alpha.12"})
+
+
+def test_python_health_probe_rejects_missing_transitive_dependency(tmp_path):
+    bootstrap = load_script("bootstrap_dev")
+    environment = tmp_path / "environment"
+    subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+    python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    site_packages = Path(
+        subprocess.check_output(
+            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True
+        ).strip()
+    )
+    metadata = site_packages / "setup_probe-1.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: setup-probe\nVersion: 1.0\n"
+        "Requires-Dist: missing-kronig-test-dependency>=1\n"
+    )
+    assert bootstrap.python_ready(python, {"setup-probe": "1.0"}) is False
+
+
+def test_python_health_probe_rejects_installed_transitive_lock_drift(tmp_path):
+    bootstrap = load_script("bootstrap_dev")
+    lock = tmp_path / "requirements.lock"
+    lock.write_text("# reviewed lock\nnumpy==0.0.0\n")
+    assert bootstrap.python_ready(Path(sys.executable), {}, lock=lock) is False

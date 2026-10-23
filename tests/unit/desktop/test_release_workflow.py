@@ -17,7 +17,7 @@ def load_workflow() -> dict[str, object]:
 def test_linux_package_metadata_identifies_the_project_and_maintainer() -> None:
     package = json.loads((ROOT / "desktop" / "package.json").read_text())
 
-    assert package["homepage"] == "https://github.com/NovAtom-Labs/Quiloo"
+    assert package["homepage"] == "https://github.com/NovAtom-Labs/Kronig"
     assert package["author"] == {
         "name": "NovAtom Labs",
         "email": "admin@novatomlabs.com",

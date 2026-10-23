@@ -11,11 +11,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import tomllib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-BOOTSTRAP_SCHEMA = "1"
+BOOTSTRAP_SCHEMA = "2"
 DEVSIM_VERSION = "2.9.1"
 
 
@@ -128,6 +130,70 @@ def dependency_fingerprint(paths: Sequence[Path], metadata: Sequence[str]) -> st
     return digest.hexdigest()
 
 
+def application_fingerprint(paths: DevelopmentPaths, metadata: Sequence[str]) -> str:
+    return dependency_fingerprint(
+        tuple(
+            paths.repository / name
+            for name in ("requirements.txt", "requirements.lock", "pyproject.toml")
+        ),
+        (*metadata, "editable-install=true"),
+    )
+
+
+def _application_versions(paths: DevelopmentPaths) -> dict[str, str]:
+    versions = dict(
+        re.findall(
+            r"^([A-Za-z0-9][A-Za-z0-9_.-]*)==([^ ;\n]+)$",
+            (paths.repository / "requirements.txt").read_text(),
+            re.MULTILINE,
+        )
+    )
+    project = tomllib.loads((paths.repository / "pyproject.toml").read_text())["project"]
+    versions[project["name"]] = project["version"]
+    return versions
+
+
+def python_ready(python: Path, versions: dict[str, str], *, lock: Path | None = None) -> bool:
+    """Check cached interpreter and dependency identities without loading a model."""
+    # pip is present in both isolated environments, including the minimal simulator
+    # environment. Its vendored parser avoids adding an application dependency there.
+    program = """
+import json, subprocess, sys
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+from pip._vendor.packaging.requirements import Requirement
+from pip._vendor.packaging.version import Version
+assert sys.version_info[:2] == (3, 13)
+assert all(Version(version(name)) == Version(wanted)
+           for name, wanted in json.loads(sys.argv[1]).items())
+if sys.argv[2]:
+    for line in Path(sys.argv[2]).read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith('#'):
+            continue
+        requirement = Requirement(line)
+        if requirement.marker and not requirement.marker.evaluate():
+            continue
+        try:
+            installed = version(requirement.name)
+        except PackageNotFoundError:
+            continue  # An OS-specific or unselected extra need not be installed.
+        assert requirement.specifier.contains(installed, prereleases=True)
+subprocess.run([sys.executable, '-m', 'pip', 'check'], check=True, capture_output=True)
+"""
+    try:
+        return (
+            subprocess.run(
+                [str(python), "-c", program, json.dumps(versions), str(lock) if lock else ""],
+                capture_output=True,
+                check=False,
+                timeout=30,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 class BootstrapCache:
     """Small credential-free record of completed dependency stages."""
 
@@ -154,9 +220,7 @@ class BootstrapCache:
         fingerprint: str,
         outputs: Sequence[Path],
     ) -> bool:
-        return self._read().get(stage) == fingerprint and all(
-            output.exists() for output in outputs
-        )
+        return self._read().get(stage) == fingerprint and all(output.exists() for output in outputs)
 
     def record(self, stage: str, fingerprint: str) -> None:
         stages = self._read()
@@ -199,15 +263,38 @@ def _prepare_application(paths: DevelopmentPaths) -> None:
     if not paths.application_python.exists():
         _run((sys.executable, "-m", "venv", str(paths.repository / ".venv")), paths.repository)
     python = str(paths.application_python)
+    _run((python, "-c", "import sys; assert sys.version_info[:2] == (3,13)"), paths.repository)
     _run((python, "-m", "pip", "install", "--upgrade", "pip"), paths.repository)
-    _run(
-        (python, "-m", "pip", "install", "-r", str(paths.repository / "requirements.txt")),
-        paths.repository,
-    )
+    # pip-compile retains dependency extras, but pip forbids them in constraints.
+    # Keep the reviewed lock intact and project only the constraint package names.
+    with tempfile.TemporaryDirectory(prefix="kronig-constraints-") as temporary:
+        constraints = Path(temporary) / "constraints.txt"
+        constraints.write_text(
+            re.sub(
+                r"^([A-Za-z0-9][A-Za-z0-9_.-]*)\[[^\]\n]+\](?===)",
+                r"\1",
+                (paths.repository / "requirements.lock").read_text(),
+                flags=re.MULTILINE,
+            )
+        )
+        _run(
+            (
+                python,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                str(paths.repository / "requirements.txt"),
+                "-c",
+                str(constraints),
+            ),
+            paths.repository,
+        )
     _run(
         (python, "-m", "pip", "install", "--editable", str(paths.repository), "--no-deps"),
         paths.repository,
     )
+    _run((python, "-m", "pip", "check"), paths.repository)
 
 
 def _prepare_devsim(paths: DevelopmentPaths) -> None:
@@ -218,7 +305,17 @@ def _prepare_devsim(paths: DevelopmentPaths) -> None:
     python = str(paths.devsim_python)
     _run((python, "-m", "pip", "install", "--upgrade", "pip"), paths.repository)
     _run(
-        (python, "-m", "pip", "install", f"devsim=={DEVSIM_VERSION}", "numpy"),
+        (
+            python,
+            "-m",
+            "pip",
+            "install",
+            f"devsim=={DEVSIM_VERSION}",
+            "numpy",
+            "-c",
+            str(paths.repository / "requirements.txt"),
+            *(("mkl==2025.2.0",) if paths.devsim_python.suffix == ".exe" else ()),
+        ),
         paths.repository,
     )
 
@@ -228,6 +325,14 @@ def _prepare_desktop(paths: DevelopmentPaths, pnpm: str) -> None:
         (pnpm, "--dir", str(paths.repository / "desktop"), "install", "--frozen-lockfile"),
         paths.repository,
     )
+    if not paths.electron.is_file():
+        _run(
+            (
+                shutil.which("node") or "node",
+                str(paths.repository / "desktop/node_modules/electron/install.js"),
+            ),
+            paths.repository,
+        )
 
 
 def _stage(
@@ -239,8 +344,9 @@ def _stage(
     cache: BootstrapCache,
     force: bool,
     prepare: Callable[[], None],
+    verify: Callable[[], bool] | None = None,
 ) -> None:
-    if not force and cache.is_current(name, fingerprint, outputs):
+    if not force and cache.is_current(name, fingerprint, outputs) and (verify is None or verify()):
         print(f"[ready] {label}")
         return
     print(f"[setup] {label}")
@@ -248,6 +354,8 @@ def _stage(
     missing = [str(output) for output in outputs if not output.exists()]
     if missing:
         raise BootstrapError(f"{label} did not create: {', '.join(missing)}")
+    if verify is not None and not verify():
+        raise BootstrapError(f"{label} failed its runtime check; no ready state was recorded")
     cache.record(name, fingerprint)
     print(f"[ready] {label}")
 
@@ -298,13 +406,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"schema={BOOTSTRAP_SCHEMA}",
         f"python={platform.python_version()}",
         f"system={system}",
+        f"architecture={platform.machine()}",
     )
-    application_fingerprint = dependency_fingerprint(
-        (repository / "requirements.txt", repository / "pyproject.toml"),
-        (*common, "editable-install=true"),
-    )
+    application_digest = application_fingerprint(paths, common)
     devsim_fingerprint = dependency_fingerprint(
-        (),
+        (repository / "requirements.txt",),
         (*common, f"devsim={DEVSIM_VERSION}"),
     )
     desktop_fingerprint = dependency_fingerprint(
@@ -313,14 +419,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     cache = BootstrapCache(paths.cache)
     try:
+        application_versions = _application_versions(paths)
         _stage(
             name="application",
             label="Python application environment",
-            fingerprint=application_fingerprint,
+            fingerprint=application_digest,
             outputs=(paths.application_python,),
             cache=cache,
             force=arguments.force,
             prepare=lambda: _prepare_application(paths),
+            verify=lambda: python_ready(
+                paths.application_python,
+                application_versions,
+                lock=repository / "requirements.lock",
+            ),
         )
         _stage(
             name="devsim",
@@ -330,6 +442,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             cache=cache,
             force=arguments.force,
             prepare=lambda: _prepare_devsim(paths),
+            verify=lambda: python_ready(
+                paths.devsim_python,
+                {
+                    "devsim": DEVSIM_VERSION,
+                    "numpy": application_versions["numpy"],
+                    **({"mkl": "2025.2.0"} if system == "Windows" else {}),
+                },
+            ),
         )
         _stage(
             name="desktop",
@@ -340,15 +460,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             force=arguments.force,
             prepare=lambda: _prepare_desktop(paths, pnpm),
         )
+        _run(
+            (
+                str(paths.application_python),
+                str(repository / "scripts/rebuild_knowledge_index.py"),
+                "--project-root",
+                str(repository),
+                "--fetch-sources",
+                "--if-stale",
+            ),
+            repository,
+        )
     except (BootstrapError, subprocess.CalledProcessError, OSError) as error:
         print(f"Setup stopped: {error}", file=sys.stderr)
         return 1
 
-    launch = (
-        ".\\scripts\\run_desktop_dev.ps1"
-        if system == "Windows"
-        else "scripts/run_desktop_dev.sh"
-    )
+    launch = {
+        "Windows": ".\\scripts\\run_desktop_dev.ps1",
+        "Darwin": './"Launch Agent Kronig Dev.command"',
+        "Linux": "./scripts/run_desktop_dev.sh",
+    }[system]
     print("\nAgent Kronig development setup is ready.")
     print(f"Launch with: {launch}")
     print("Configure Bedrock through Settings after the application opens.")

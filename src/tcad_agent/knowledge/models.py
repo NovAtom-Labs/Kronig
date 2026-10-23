@@ -23,6 +23,7 @@ class SourceManifest(StrictModel):
     compatible_versions: tuple[str, ...] = ()
     reviewed: bool = False
     local_path: str | None = None
+    repository_path: str | None = None
 
 
 class Passage(StrictModel):

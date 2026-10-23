@@ -31,6 +31,7 @@ sources:
     version: "2.9.1"
     reviewed: true
     local_path: devsim/source
+    repository_path: devsim/source
   - id: devsim-documentation-2.9.0
     title: DEVSIM official documentation and command reference
     url: https://github.com/devsim/devsim_documentation/tree/8fbe81b5719307d654f37d630cf043dc6ae0512e
@@ -42,6 +43,7 @@ sources:
     compatible_versions: ["2.9.1"]
     reviewed: true
     local_path: devsim/documentation/pydoc
+    repository_path: devsim/documentation
   - id: devsim-upstream-release-2.11.0-rc5
     title: DEVSIM upstream release 2.11.0.rc5
     url: https://github.com/devsim/devsim/releases/tag/v2.11.0.rc5

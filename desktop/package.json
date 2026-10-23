@@ -4,7 +4,7 @@
   "version": "0.1.0-alpha.12",
   "private": true,
   "description": "Native desktop shell for the Agent Kronig scientific workspace",
-  "homepage": "https://github.com/NovAtom-Labs/Quiloo",
+  "homepage": "https://github.com/NovAtom-Labs/Kronig",
   "author": {
     "name": "NovAtom Labs",
     "email": "admin@novatomlabs.com"

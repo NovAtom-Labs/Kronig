@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/NovAtom-Labs/Quiloo/releases/tag/v0.1.0-alpha.12">Alpha release</a>
+  <a href="https://github.com/NovAtom-Labs/Kronig/releases/tag/v0.1.0-alpha.12">Alpha release</a>
   · <a href="INSTALLATION.md">Installation</a>
   · <a href="docs/architecture.md">Architecture</a>
   · <a href="docs/operations/desktop-application.md">Desktop operations</a>
@@ -17,16 +17,18 @@
 
 > **Alpha software:** Agent Kronig 0.1.0 Alpha 12 is an early research pilot. Packages are currently unsigned, updates are manual, and scientific output must be reviewed by a qualified researcher before it informs device, process, or fabrication decisions.
 
+This README describes current source capabilities. Published Alpha 12 installers are older, immutable snapshots and do not include later `main` fixes. Use the source setup below for active development. Updating source does not rebuild an installer.
+
 ## Download the native application
 
 Agent Kronig is a self-contained Native desktop application. A release includes the private local backend, the repository agent, and the reviewed DEVSIM runtime. End users do not need Python, Node.js, Electron, DEVSIM, or a browser.
 
 | Platform | Installer | Portable package |
 | --- | --- | --- |
-| Linux x86-64 | [AppImage](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-linux-x64.AppImage) or [Debian package](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-linux-x64.deb) | AppImage is self-contained |
-| Windows x86-64 | [NSIS installer](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-win-x64.exe) | [ZIP](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-win-x64.zip) |
-| Intel Mac | [DMG](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-x64.dmg) | [ZIP](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-x64.zip) |
-| Apple Silicon | [DMG](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-arm64.dmg) | [ZIP](https://github.com/NovAtom-Labs/Quiloo/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-arm64.zip) |
+| Linux x86-64 | [AppImage](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-linux-x64.AppImage) or [Debian package](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-linux-x64.deb) | AppImage is self-contained |
+| Windows x86-64 | [NSIS installer](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-win-x64.exe) | [ZIP](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-win-x64.zip) |
+| Intel Mac | [DMG](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-x64.dmg) | [ZIP](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-x64.zip) |
+| Apple Silicon | [DMG](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-arm64.dmg) | [ZIP](https://github.com/NovAtom-Labs/Kronig/releases/download/v0.1.0-alpha.12/Agent-Kronig-0.1.0-alpha.12-mac-arm64.zip) |
 
 Verify a download against `SHA256SUMS.txt` from the same release. See the [installation guide](INSTALLATION.md) for platform instructions and unsigned-package warnings.
 
@@ -338,13 +340,20 @@ Source development uses the same native Electron application as an installed rel
 Prerequisites are Python 3.13, Node.js 24, pnpm 11.19, Git, and a graphical desktop session. Then:
 
 ```bash
-git clone git@github.com:NovAtom-Labs/Quiloo.git
-cd Quiloo
+git clone git@github.com:NovAtom-Labs/Kronig.git
+cd Kronig
 python3.13 scripts/bootstrap_dev.py
-scripts/run_desktop_dev.sh
 ```
 
-On Windows, replace the last two commands with `py -3.13 scripts\bootstrap_dev.py` and `.\scripts\run_desktop_dev.ps1`. The bootstrap creates isolated application and DEVSIM environments, installs desktop dependencies, and caches dependency fingerprints so unchanged reruns finish quickly. Configure Bedrock through Settings after launch.
+On Windows use `py -3.13 scripts\bootstrap_dev.py`. Bootstrap prepares isolated application and DEVSIM environments, locked desktop dependencies, pinned public knowledge sources and one reusable knowledge index. Healthy unchanged stages are reused.
+
+| System | Launch current source |
+| --- | --- |
+| macOS | Double-click **Launch Agent Kronig Dev.command**, or run `./"Launch Agent Kronig Dev.command"` |
+| Linux | `./scripts/run_desktop_dev.sh` |
+| Windows PowerShell | `.\scripts\run_desktop_dev.ps1` |
+
+Configure your own Bedrock access through Settings. No environment activation or installer build is needed. After pulling code, rerun bootstrap and use the same shortcut. Do not copy another machine's credentials, virtual environments or research outputs.
 
 The launcher loads an ignored local `.env` when present, starts Electron, and lets Electron supervise the authenticated private backend. Credentials, proprietary Sentaurus material, private signing keys, and licensed examples must never be committed.
 
@@ -355,13 +364,14 @@ For the full setup, DEVSIM environment, Bedrock configuration, validation, and t
 ```bash
 OPENHANDS_SUPPRESS_BANNER=1 .venv/bin/pytest -q
 .venv/bin/ruff check src tests scripts
-.venv/bin/mypy --strict src
 pnpm --dir desktop test
 .venv/bin/python scripts/sync_requirements.py --check
 git diff --check
 ```
 
 Live Bedrock and licensed Sentaurus tests are opt-in. Ordinary local verification does not require either service.
+
+Run `.venv/bin/mypy --strict src` as a separate static audit. Current `main` has existing typing errors; do not mistake that baseline for an installation failure or suppress it to claim a clean check. Optional browser and parallel test tooling is documented in [INSTALLATION.md](INSTALLATION.md).
 
 The synthetic scientific suite exercises complete, incomplete, ambiguous, contradictory,
 and unsupported natural researcher prompts. Real DEVSIM coverage spans mixed silicon and oxide
@@ -389,11 +399,7 @@ checks a real DEVSIM run, unsupported-physics refusal, and an ordinary repositor
 same desktop agent runtime:
 
 ```bash
-set -a && source .env && set +a
-.venv/bin/pytest -q \
-  tests/e2e/test_live_unified_backend.py \
-  tests/e2e/test_live_expanded_devsim.py \
-  --run-live-bedrock
+.venv/bin/python -c 'from dotenv import load_dotenv; import pytest; load_dotenv(); raise SystemExit(pytest.main(["-q", "tests/e2e/test_live_unified_backend.py", "tests/e2e/test_live_expanded_devsim.py", "--run-live-bedrock"]))'
 ```
 
 ## Project documents

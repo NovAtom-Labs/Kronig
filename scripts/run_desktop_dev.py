@@ -51,6 +51,25 @@ def resolve_launch(
         for name, value in dotenv_values(dotenv_path).items():
             if value is not None:
                 environment[name] = value
+    # The backend's working directory is not necessarily the source root.
+    # Do not depend on a machine-specific .env to find the isolated simulator.
+    if not environment.get("TCAD_DEVSIM_PYTHON"):
+        parts = ("Scripts", "python.exe") if system == "Windows" else ("bin", "python")
+        environment["TCAD_DEVSIM_PYTHON"] = str(
+            repository.parent.joinpath("devsim", ".venv", *parts)
+        )
+    if system == "Windows" and not environment.get("DEVSIM_MATH_LIBS"):
+        prefix = Path(environment["TCAD_DEVSIM_PYTHON"]).parent.parent
+        runtime_directory = prefix / "Library" / "bin"
+        candidates = [
+            runtime_directory / "mkl_rt.dll",
+            *sorted(runtime_directory.glob("mkl_rt.*.dll")),
+        ]
+        runtime = next((item for item in candidates if item.is_file()), None)
+        if runtime is not None:
+            environment["DEVSIM_MATH_LIBS"] = str(runtime)
+            environment["PATH"] = str(runtime_directory) + ";" + environment.get("PATH", "")
+    environment.pop("ELECTRON_RUN_AS_NODE", None)
     environment.setdefault("TCAD_WORKSPACE", str(repository / ".tcad-agent-desktop"))
     environment["OPENHANDS_SUPPRESS_BANNER"] = "1"
     return DesktopLaunch(
