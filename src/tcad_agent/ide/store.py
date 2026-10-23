@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from types import TracebackType
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
@@ -73,6 +74,21 @@ class ConversationNotFoundError(IDEStoreError):
 
 class MessageNotFoundError(IDEStoreError):
     pass
+
+
+class _ClosingConnection(sqlite3.Connection):
+    """Keep SQLite transaction semantics and release the per-operation handle."""
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> Literal[False]:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
 
 
 class SqliteIDEStore:
@@ -1555,7 +1571,9 @@ class SqliteIDEStore:
         return tuple(self._event(row) for row in rows)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        connection = sqlite3.connect(
+            self.path, timeout=10, isolation_level=None, factory=_ClosingConnection
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA foreign_keys = ON")

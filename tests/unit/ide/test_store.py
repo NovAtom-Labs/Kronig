@@ -1,6 +1,7 @@
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -20,6 +21,32 @@ from tcad_agent.ide.models import (
 )
 from tcad_agent.ide.store import RUN_OWNED_TABLES, IDEStoreError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
+
+
+def test_store_operations_close_database_handles_without_garbage_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Retaining real connections exposes leaks deterministically on every OS.
+    # Windows cannot remove session files while any of these handles is open.
+    connections = []
+    native_connect = sqlite3.connect
+
+    def connect(*args, **kwargs):
+        connection = native_connect(*args, **kwargs)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    store = SqliteIDEStore(tmp_path / "ide.sqlite3")
+    workspace = WorkspaceManager(store).open(tmp_path)
+    assert store.get_workspace(workspace.id).root == tmp_path.resolve()
+    with pytest.raises(IDEStoreError):
+        store.get_workspace(uuid4())
+
+    assert connections
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            connection.execute("SELECT 1")
 
 
 def test_workspace_survives_store_reconstruction(tmp_path: Path) -> None:

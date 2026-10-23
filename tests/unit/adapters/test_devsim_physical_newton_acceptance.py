@@ -40,6 +40,9 @@ class NativeBoundary:
     def get_parameter(self, **scope):
         return (lambda **arguments: {}) if scope["name"] == "solver_callback" else 0.025
 
+    def get_parameter_list(self):
+        return ("solver_callback",)
+
     def get_node_model_values(self, **scope):
         if scope["name"] in {"Electrons", "Holes"}:
             return [1e17, 1e17]

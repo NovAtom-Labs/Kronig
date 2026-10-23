@@ -15,6 +15,8 @@ The [source bootstrap](../../INSTALLATION.md) prepares this isolated runtime. If
 
 On Windows the desktop launcher locates the pinned MKL runtime inside the simulator environment. For direct diagnostic CLI use, set `TCAD_DEVSIM_PYTHON` to the absolute simulator Python, set `DEVSIM_MATH_LIBS` to its `Library\bin\mkl_rt.dll` or `mkl_rt.*.dll`, and prepend that `Library\bin` directory to the process `PATH`. These are process-local environment values, not files to copy between machines.
 
+The conditioned Fermi DC path explicitly selects DEVSIM's bundled UMFPACK callback on every OS, including Windows builds that otherwise default to MKL's native sparse solver. MKL still provides Windows math-library functions. This is linear-solver configuration, not a change to the requested physics, convergence tolerances or scientific validation.
+
 ## Internal validation wrapper
 
 DEVSIM remains the complete local test backend while Sentaurus is being connected. Every ordinary code change must keep the DEVSIM end-to-end tests green.

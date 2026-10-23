@@ -12,6 +12,7 @@ import math
 import shlex
 import tempfile
 from collections.abc import Callable
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -88,7 +89,12 @@ class NativeDensitySolver:
         )
         self.regions = [r["id"] for r in payload["regions"] if r["material"] == "silicon"]
         self.last_scale = 1.0
-        self.original_callback = backend.get_parameter(name="solver_callback")
+        if "solver_callback" in backend.get_parameter_list():
+            self.original_callback = backend.get_parameter(name="solver_callback")
+        else:
+            # MKL builds do not install a Python callback automatically. Use the
+            # same bundled sparse solver that backs conditioned POSIX solves.
+            self.original_callback = import_module("devsim.umfpack.umfshim").local_solver_callback
         self.original_solve = backend.solve
         self.balances: dict[int, float] = {}
         self.eligible: dict[str, list[tuple[str, int]]] = {}
@@ -195,6 +201,7 @@ class NativeDensitySolver:
         self._prepare_balance_eligibility()
         self._prepare_predictor()
         d.set_parameter(name="solver_callback", value=self._callback)
+        d.set_parameter(name="direct_solver", value="custom")
 
     def _prepare_balance_eligibility(self) -> None:
         d = self.backend

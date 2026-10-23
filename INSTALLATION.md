@@ -31,6 +31,7 @@ Check `git --version`, `node --version` and `pnpm --version`. Python should repo
 | Simulator Python packages | DEVSIM and NumPy | DEVSIM, NumPy and pinned MKL | DEVSIM and NumPy | `requirements/devsim.txt`, with a Windows environment marker; NumPy uses the shared constraint |
 | Simulator native math | System OpenBLAS | MKL DLL inside simulator environment | Native macOS math runtime | OS prerequisites; Windows MKL installed by bootstrap |
 | Desktop packages | Native Electron binary | Native Electron executable | Native Electron application | `desktop/package.json` and `desktop/pnpm-lock.yaml` |
+| Agent terminal | Bash; tmux recommended | PowerShell available on PATH | Bash; tmux recommended | Pinned OpenHands native terminal backend |
 | Developer tools | Python 3.13, Node 24, pnpm 11.19, Git | Same, native x64 installs | Same, matching CPU architecture | Version checks in bootstrap |
 
 Do not install the simulator requirements into the application environment. Do not make a full hand-maintained requirements copy for each OS. The bootstrap applies the platform marker automatically and uses two intentionally separate Python environments. The Linux lock constrains shared packages on every OS; Windows/macOS-only transitives are resolved on their native platform, not claimed to be an identical Linux environment.
@@ -61,6 +62,8 @@ git --version
 ```
 
 Keep Linux and Windows checkouts/environments separate when also using WSL. Do not reuse a WSL `.venv` or `node_modules` from native Windows. On policy-managed machines, use an approved PowerShell policy. If `.ps1` execution is restricted, the equivalent native launch after setup is `.\.venv\Scripts\python.exe .\scripts\run_desktop_dev.py`; it does not require changing the policy.
+
+The pinned agent SDK selects a native PowerShell terminal on Windows, so PowerShell must remain available on PATH even when you launch through Python. It does not require WSL or Git Bash. Linux and macOS use the Unix terminal backend, with tmux recommended and a subprocess fallback when tmux is absent.
 
 ## 2. Clone and prepare
 

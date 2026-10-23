@@ -68,6 +68,8 @@ jobs:
         run: '"${{ matrix.python }}" scripts/configure_ci_environment.py --python "${{ matrix.simulator }}"'
       - name: Verify abrupt desktop shutdown
         run: '"${{ matrix.python }}" scripts/run_ci_pytest.py tests/unit/desktop/test_owner_monitor.py --tb=short'
+      - name: Verify solver callbacks and session cleanup
+        run: '"${{ matrix.python }}" scripts/run_ci_pytest.py tests/integration/test_devsim_linear_callback.py tests/e2e/test_ephemeral_workspace_session.py --tb=short'
       - name: Verify Python application
         run: '"${{ matrix.python }}" scripts/run_ci_pytest.py'
       - name: Verify desktop shell
