@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 
 import pytest
 
@@ -103,9 +105,12 @@ worker = SimpleNamespace(pid=int(pidfile.read_text()))
     backend_source = f"""
 import json, os, signal, subprocess, sys, time
 from tcad_agent.desktop.owner_monitor import start_owner_monitor
+print('fixture backend: starting monitor', file=sys.stderr, flush=True)
 monitor = start_owner_monitor()
+print('fixture backend: monitor ready', file=sys.stderr, flush=True)
 { "os.kill(monitor.pid, signal.SIGSTOP)" if unobserved else "" }
 { worker_creation }
+print('fixture backend: worker ready', file=sys.stderr, flush=True)
 { "" if unobserved else "time.sleep(.3)" }
 print(json.dumps({{'backend':os.getpid(),'worker':worker.pid,'monitor':monitor.pid}}),flush=True)
 { abrupt_exit if unobserved else "" }
@@ -114,9 +119,10 @@ time.sleep(60)
     script = tmp_path / "backend.py"
     script.write_text(backend_source)
     owner_source = f"""
-import subprocess, sys, time
+import os, subprocess, sys, time
 backend = subprocess.Popen([sys.executable, {str(script)!r}], stdin=subprocess.PIPE,
                            stdout=subprocess.PIPE, text=True, start_new_session=True)
+print(f'fixture owner: pid={{os.getpid()}} backend={{backend.pid}}', file=sys.stderr, flush=True)
 print(backend.stdout.readline().strip(),flush=True)
 time.sleep(60)
 """
@@ -126,15 +132,22 @@ time.sleep(60)
         "AGENT_KRONIG_DESKTOP_OWNER_PIPE": "1",
     }
     unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    owner = subprocess.Popen(
-        [sys.executable, "-c", owner_source], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        text=True, env=environment,
-    )
+    diagnostics = tmp_path / "fixture-stderr.log"
+    with diagnostics.open("w") as trace:
+        owner = subprocess.Popen(
+            [sys.executable, "-c", owner_source], stdout=subprocess.PIPE, stderr=trace,
+            text=True, env=environment,
+        )
     records: dict[str, int] = {}
     try:
         assert owner.stdout is not None
-        line = owner.stdout.readline()
-        assert line.strip(), "backend did not establish independent ownership"
+        ready: Queue[str] = Queue()
+        Thread(target=lambda: ready.put(owner.stdout.readline()), daemon=True).start()
+        try:
+            line = ready.get(timeout=15)
+        except Empty:
+            pytest.fail(f"fixture startup timed out: {diagnostics.read_text()}")
+        assert line.strip(), f"backend did not establish ownership: {diagnostics.read_text()}"
         records = json.loads(line)
         if unobserved:
             # Force the orphaned/stopped-group ordering, rather than racing a
@@ -152,7 +165,9 @@ time.sleep(60)
         try:
             _wait_until_stopped(list(records.values()))
         except AssertionError as error:
-            raise AssertionError(f"{error}; fixture process roles: {records}") from error
+            raise AssertionError(
+                f"{error}; fixture process roles: {records}; {diagnostics.read_text()}"
+            ) from error
         assert unrelated.poll() is None, "cleanup must not affect unrelated processes"
     finally:
         for pid in records.values():
@@ -162,7 +177,13 @@ time.sleep(60)
                 except ProcessLookupError:
                     pass  # A monitor can finish between inspection and teardown.
         if owner.poll() is None:
-            owner.kill()
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(owner.pid), "/T", "/F"],
+                    capture_output=True, check=False, timeout=5,
+                )
+            else:
+                owner.kill()
         owner.wait(timeout=5)
         unrelated.kill()
         unrelated.wait(timeout=5)
