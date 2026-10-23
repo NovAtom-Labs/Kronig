@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const {execFile} = require("node:child_process");
 
 const {
   BackendSupervisor,
@@ -216,20 +217,61 @@ test("a failed cleanup retains ownership so stop can be retried", async (context
     setInterval(() => {}, 1000);
   `);
   context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
-  const supervisor = supervisorFor(script);
+  let denyCleanup = true;
+  const supervisor = supervisorFor(script, {execFileImpl: (...args) => {
+    if (args[0] === "taskkill.exe" && denyCleanup) {
+      args.at(-1)(Object.assign(new Error("cleanup denied"), {code:"EPERM"}));
+    } else {
+      execFile(...args);
+    }
+  }});
   await supervisor.start();
   const child = supervisor.child;
   const originalKill = process.kill;
-  process.kill = () => {throw Object.assign(new Error("cleanup denied"), {code:"EPERM"});};
+  if (process.platform !== "win32") {
+    process.kill = () => {throw Object.assign(new Error("cleanup denied"), {code:"EPERM"});};
+  }
   try {
     await assert.rejects(supervisor.stop(), /cleanup denied/);
     assert.equal(supervisor.child, child, "failed cleanup must retain the process identity");
     await assert.rejects(supervisor.start(), /cleanup|already.*started/i);
   } finally {
+    denyCleanup = false;
     process.kill = originalKill;
     await supervisor.stop();
   }
   assert.throws(() => process.kill(child.pid, 0), /ESRCH/);
+});
+
+test("Windows forced-cleanup failure retains a real backend for retry", async (context) => {
+  const {directory, script} = fixture(`
+    process.stdout.write(JSON.stringify({protocol:1,url:"http://127.0.0.1:43127",pid:process.pid,runtime_fingerprint:"abc123"}) + "\\n");
+    setInterval(() => {},1000);
+  `);
+  context.after(() => fs.rmSync(directory, {recursive:true,force:true}));
+  let denied = true;
+  let child;
+  const supervisor = supervisorFor(script, {execFileImpl: (command, args, options, callback) => {
+    assert.equal(command, "taskkill.exe");
+    assert.deepEqual(args.slice(0, 3), ["/PID", String(child.pid), "/T"]);
+    if (denied) callback(Object.assign(new Error("cleanup denied"), {code:"EPERM"}));
+    else {child.kill(); callback(null);}
+  }});
+  await supervisor.start();
+  child = supervisor.child;
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", {...platform, value:"win32"});
+  try {
+    await assert.rejects(supervisor.stop(), /cleanup denied/);
+    assert.equal(supervisor.child, child);
+    assert.equal(child.exitCode, null);
+    denied = false;
+    await supervisor.stop();
+    assert.equal(supervisor.child, null);
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+    await supervisor.stop();
+  }
 });
 
 test("cleanup escalates for a resistant worker even after the backend exits", async (context) => {

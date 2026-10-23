@@ -78,6 +78,7 @@ class BackendSupervisor extends EventEmitter {
     this.startupTimeoutMs = options.startupTimeoutMs || 15000;
     this.healthCheck = options.healthCheck || defaultHealthCheck;
     this.spawnImpl = options.spawnImpl || spawn;
+    this.execFileImpl = options.execFileImpl || execFile;
     this.environment = {
       ...(options.environment || process.env),
       ...(launch.environment || {}),
@@ -259,8 +260,14 @@ class BackendSupervisor extends EventEmitter {
     if (process.platform === "win32") {
       const arguments_ = ["/PID", String(child.pid), "/T"];
       if (signal === "SIGKILL") arguments_.push("/F");
-      await new Promise((resolve) => {
-        execFile("taskkill.exe", arguments_, {windowsHide: true}, () => resolve());
+      await new Promise((resolve, reject) => {
+        this.execFileImpl("taskkill.exe", arguments_, {windowsHide: true}, (error) => {
+          // A failed graceful request may still need force escalation. A failed
+          // forced request must retain ownership and its cause for a retry.
+          if (error && signal === "SIGKILL"
+            && child.exitCode === null && child.signalCode === null) reject(error);
+          else resolve();
+        });
       });
       return;
     }

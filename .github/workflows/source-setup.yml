@@ -79,10 +79,16 @@ jobs:
           tests/unit/runners/test_cancellation.py
           tests/integration/test_devsim_numerical_precision.py::test_transport_ac_native_boundary_reports_factorization_failure
           --tb=short
-      - name: Verify Python application
-        run: '"${{ matrix.python }}" scripts/run_ci_pytest.py'
       - name: Verify desktop shell
         run: '"${{ matrix.python }}" scripts/run_ci_desktop_tests.py'
+      - name: Repeat full scheduled AC benchmark
+        if: runner.os == 'Windows'
+        run: |
+          for attempt in 1 2; do
+            "${{ matrix.python }}" scripts/run_ci_pytest.py 'tests/integration/test_devsim_numerical_precision.py::test_adaptive_transport_preserves_state_across_full_gate_bias_schedule[True]' --tb=short || exit 1
+          done
+      - name: Verify Python application
+        run: '"${{ matrix.python }}" scripts/run_ci_pytest.py'
       - name: Record setup evidence
         if: always()
         uses: actions/upload-artifact@v7
