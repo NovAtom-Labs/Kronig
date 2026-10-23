@@ -63,8 +63,12 @@ def test_independent_monitor_cleans_workers_after_abrupt_death(
 ) -> None:
     """Deleting independent owner supervision leaves resistant detached workers running."""
     worker = (
-        "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
-        "print('worker-ready',flush=True); time.sleep(60)"
+        "import faulthandler; faulthandler.dump_traceback_later(5); "
+        "import os,signal,sys,time; print('fixture worker: entered '+str(os.getpid()),"
+        "file=sys.stderr,flush=True); signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "print('fixture worker: handler ready',file=sys.stderr,flush=True); "
+        "print('worker-ready',flush=True); faulthandler.cancel_dump_traceback_later(); "
+        "time.sleep(60)"
     )
     unobserved = lost_process.startswith("unobserved_")
     abrupt_exit = (
@@ -75,6 +79,7 @@ def test_independent_monitor_cleans_workers_after_abrupt_death(
     worker_creation = f"""
 worker = subprocess.Popen([sys.executable, '-c', {worker!r}], stdout=subprocess.PIPE,
                           start_new_session={not unobserved!r} and os.name != 'nt', text=True)
+print(f'fixture backend: worker spawned {{worker.pid}}', file=sys.stderr, flush=True)
 assert worker.stdout.readline().strip() == 'worker-ready'
 """
     if lost_process == "unobserved_local_runner":
@@ -103,14 +108,16 @@ while not pidfile.exists() or not pidfile.read_text().strip().isdecimal():
 worker = SimpleNamespace(pid=int(pidfile.read_text()))
 """
     backend_source = f"""
-import json, os, signal, subprocess, sys, time
+import faulthandler, json, os, signal, subprocess, sys, time
 from tcad_agent.desktop.owner_monitor import start_owner_monitor
+faulthandler.dump_traceback_later(5)
 print('fixture backend: starting monitor', file=sys.stderr, flush=True)
 monitor = start_owner_monitor()
 print('fixture backend: monitor ready', file=sys.stderr, flush=True)
 { "os.kill(monitor.pid, signal.SIGSTOP)" if unobserved else "" }
 { worker_creation }
 print('fixture backend: worker ready', file=sys.stderr, flush=True)
+faulthandler.cancel_dump_traceback_later()
 { "" if unobserved else "time.sleep(.3)" }
 print(json.dumps({{'backend':os.getpid(),'worker':worker.pid,'monitor':monitor.pid}}),flush=True)
 { abrupt_exit if unobserved else "" }
@@ -130,6 +137,7 @@ time.sleep(60)
         **os.environ,
         "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "src"),
         "AGENT_KRONIG_DESKTOP_OWNER_PIPE": "1",
+        **({"PYLAUNCHER_DEBUG": "1"} if os.name == "nt" else {}),
     }
     unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     diagnostics = tmp_path / "fixture-stderr.log"
@@ -146,7 +154,7 @@ time.sleep(60)
         try:
             line = ready.get(timeout=15)
         except Empty:
-            pytest.fail(f"fixture startup timed out: {diagnostics.read_text()}")
+            pytest.fail(f"fixture startup timed out: {diagnostics.read_text()[-3000:]}")
         assert line.strip(), f"backend did not establish ownership: {diagnostics.read_text()}"
         records = json.loads(line)
         if unobserved:
