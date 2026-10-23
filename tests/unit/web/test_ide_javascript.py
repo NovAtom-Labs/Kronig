@@ -12,10 +12,7 @@ def _javascript_runner() -> str | None:
         (
             str(path)
             for path in (
-                Path(
-                    "/System/Library/Frameworks/JavaScriptCore.framework/"
-                    "Versions/A/Helpers/jsc"
-                ),
+                Path("/System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc"),
                 Path("/usr/bin/jsc"),
             )
             if path.is_file()
@@ -24,172 +21,114 @@ def _javascript_runner() -> str | None:
     )
 
 
-@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_navigation_guard_prevents_stale_browser_updates() -> None:
-    project_root = Path(__file__).parents[3]
-    source = (
-        project_root / "src/tcad_agent/web/static/ide-state.js"
-    ).read_text()
-    assertions = (
-        project_root / "tests/js/ide_navigation_guard.test.js"
-    ).read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
+def _run_javascript(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
+    # File-based execution avoids the Windows command-line length limit.
+    script = tmp_path / "assertions.js"
+    script.write_text(source, encoding="utf-8")
+    return subprocess.run(
+        [_javascript_runner() or "", str(script)],
         check=False,
         capture_output=True,
         text=True,
     )
 
-    assert completed.returncode == 0, completed.stderr
-
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_file_viewer_helpers_preserve_scientific_data_and_safe_markdown() -> None:
+def test_navigation_guard_prevents_stale_browser_updates(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (
-        project_root / "src/tcad_agent/web/static/file-viewer.js"
-    ).read_text()
-    assertions = (
-        project_root / "tests/js/file_viewer.test.js"
-    ).read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    source = (project_root / "src/tcad_agent/web/static/ide-state.js").read_text()
+    assertions = (project_root / "tests/js/ide_navigation_guard.test.js").read_text()
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_results_workbench_recognizes_and_summarizes_canonical_results() -> None:
+def test_file_viewer_helpers_preserve_scientific_data_and_safe_markdown(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (
-        project_root / "src/tcad_agent/web/static/results-workbench.js"
-    ).read_text()
-    assertions = (
-        project_root / "tests/js/results_workbench.test.js"
-    ).read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    source = (project_root / "src/tcad_agent/web/static/file-viewer.js").read_text()
+    assertions = (project_root / "tests/js/file_viewer.test.js").read_text()
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_scientific_chart_helpers_are_dataset_and_device_neutral() -> None:
+def test_results_workbench_recognizes_and_summarizes_canonical_results(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (
-        project_root / "src/tcad_agent/web/static/scientific-chart.js"
-    ).read_text()
-    assertions = (
-        project_root / "tests/js/scientific_chart.test.js"
-    ).read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    source = (project_root / "src/tcad_agent/web/static/results-workbench.js").read_text()
+    assertions = (project_root / "tests/js/results_workbench.test.js").read_text()
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_agent_events_reduce_restored_and_live_activity_deterministically() -> None:
+def test_scientific_chart_helpers_are_dataset_and_device_neutral(tmp_path: Path) -> None:
+    project_root = Path(__file__).parents[3]
+    source = (project_root / "src/tcad_agent/web/static/scientific-chart.js").read_text()
+    assertions = (project_root / "tests/js/scientific_chart.test.js").read_text()
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
+def test_agent_events_reduce_restored_and_live_activity_deterministically(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-events.js").read_text()
     assertions = (project_root / "tests/js/ide_events.test.js").read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_agent_markdown_constructs_safe_document_nodes() -> None:
+def test_agent_markdown_constructs_safe_document_nodes(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-markdown.js").read_text()
     assertions = (project_root / "tests/js/ide_markdown.test.js").read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_workbench_layout_preserves_editor_space_and_recovers_preferences() -> None:
+def test_workbench_layout_preserves_editor_space_and_recovers_preferences(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-layout.js").read_text()
     assertions = (project_root / "tests/js/ide_layout.test.js").read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_agent_view_models_group_activity_permissions_and_outcomes() -> None:
+def test_agent_view_models_group_activity_permissions_and_outcomes(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-agent.js").read_text()
     assertions = (project_root / "tests/js/ide_agent.test.js").read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_changes_view_model_handles_text_binary_and_rename_operations() -> None:
+def test_changes_view_model_handles_text_binary_and_rename_operations(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide-changes.js").read_text()
     assertions = (project_root / "tests/js/ide_changes.test.js").read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
-def test_prompt_clarification_view_preserves_generic_questions_and_answers() -> None:
+def test_prompt_clarification_view_preserves_generic_questions_and_answers(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (
-        project_root / "src/tcad_agent/web/static/prompt-clarification.js"
-    ).read_text()
-    assertions = (
-        project_root / "tests/js/prompt_clarification.test.js"
-    ).read_text()
-    completed = subprocess.run(
-        [_javascript_runner() or "", "-e", f"{source}\n{assertions}"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    source = (project_root / "src/tcad_agent/web/static/prompt-clarification.js").read_text()
+    assertions = (project_root / "tests/js/prompt_clarification.test.js").read_text()
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
 
@@ -213,9 +152,7 @@ def test_production_ide_script_parses(tmp_path: Path) -> None:
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_desktop_bridge_script_parses(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (
-        project_root / "src/tcad_agent/web/static/desktop-bridge.js"
-    ).read_text()
+    source = (project_root / "src/tcad_agent/web/static/desktop-bridge.js").read_text()
     parser = tmp_path / "parse-desktop-bridge.js"
     parser.write_text(f"new Function({json.dumps(source)});", encoding="utf-8")
     completed = subprocess.run(
@@ -231,9 +168,7 @@ def test_desktop_bridge_script_parses(tmp_path: Path) -> None:
 def test_production_ide_wires_chat_recovery_file_editing_and_panel_controls() -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
-    permission_source = (
-        project_root / "src/tcad_agent/web/static/ide-agent.js"
-    ).read_text()
+    permission_source = (project_root / "src/tcad_agent/web/static/ide-agent.js").read_text()
 
     for required in (
         "refreshCoordinator.request",
@@ -352,12 +287,8 @@ def test_desktop_shell_keeps_the_center_canvas_dominant() -> None:
 
     shell = re.search(r"(?m)^\.ide-shell\s*\{([^}]*)\}", source, re.DOTALL)
     header = re.search(r"(?m)^\.ide-header\s*\{([^}]*)\}", source, re.DOTALL)
-    workspace_main = re.search(
-        r"(?m)^\.workspace-main\s*\{([^}]*)\}", source, re.DOTALL
-    )
-    resizer_marker = re.search(
-        r"(?m)^\.pane-resizer::after\s*\{([^}]*)\}", source, re.DOTALL
-    )
+    workspace_main = re.search(r"(?m)^\.workspace-main\s*\{([^}]*)\}", source, re.DOTALL)
+    resizer_marker = re.search(r"(?m)^\.pane-resizer::after\s*\{([^}]*)\}", source, re.DOTALL)
 
     assert shell is not None
     assert "--pane-gap: 6px" in shell.group(1)
@@ -388,9 +319,7 @@ def test_internal_workbench_hierarchy_is_minimal_and_sidebars_are_secondary() ->
     source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
 
     def rule(selector: str) -> str:
-        match = re.search(
-            rf"(?m)^{re.escape(selector)}\s*\{{([^}}]*)\}}", source, re.DOTALL
-        )
+        match = re.search(rf"(?m)^{re.escape(selector)}\s*\{{([^}}]*)\}}", source, re.DOTALL)
         assert match is not None, selector
         return match.group(1)
 

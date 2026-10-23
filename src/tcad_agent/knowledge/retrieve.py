@@ -128,7 +128,7 @@ class KnowledgeIndex:
             parameters.extend((active_filters["version"], active_filters["version"]))
         where = " AND " + " AND ".join(clauses) if clauses else ""
         fts_query = " OR ".join(f'"{token}"' for token in tokens)
-        with sqlite3.connect(self.path) as connection:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
             connection.row_factory = sqlite3.Row
             lexical = connection.execute(
                 """SELECT p.*, bm25(passages_fts) AS lexical_score

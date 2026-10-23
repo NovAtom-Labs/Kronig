@@ -213,5 +213,6 @@ def test_index_connections_are_closed_before_atomic_replacement(tmp_path, monkey
     monkeypatch.setattr(sqlite3, "connect", tracked_connect)
     monkeypatch.setattr(Path, "replace", windows_replace)
     module.rebuild_index(root, index, if_stale=True)
+    assert KnowledgeIndex(index).search("charge balance")
     guide.write_text("Changed scientific evidence\n")
     module.rebuild_index(root, index, if_stale=True)

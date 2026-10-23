@@ -36,3 +36,16 @@ def test_failed_test_annotations_report_a_missing_junit_file(tmp_path: Path) -> 
     assert failed_test_annotations(tmp_path / "missing.xml") == (
         "::error title=Pytest failed before reporting::No JUnit report was produced",
     )
+
+
+def test_long_failure_retains_final_traceback_not_only_test_source(tmp_path: Path) -> None:
+    report = tmp_path / "pytest.xml"
+    report.write_text(
+        '<testsuite><testcase name="native_boundary"><failure message="native error">'
+        + "test source line\n" * 1000
+        + "actual_driver.py:42: NativeError: exact diagnostic</failure></testcase></testsuite>"
+    )
+    annotation = failed_test_annotations(report)[0]
+    assert "exact diagnostic" in annotation
+    assert "native error" in annotation
+    assert len(annotation) < 5000

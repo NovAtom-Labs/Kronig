@@ -1,3 +1,5 @@
+import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,38 @@ from tcad_agent.runners.local import LocalRunner
 from tcad_agent.runners.models import RunBudget
 
 ROOT = Path(__file__).parents[2]
+
+
+@pytest.mark.integration
+def test_ac_failure_retains_native_error_without_claiming_valid_results(tmp_path):
+    spec = dielectric_ac_spec(
+        {"kind": "ac", "contact": "control", "frequency": "1 kHz", "amplitude": "10 mV"}
+    )
+    adapter = DevsimAdapter.from_defaults()
+    job = adapter.compile(spec, tmp_path / "failed-ac")
+    program = """
+import devsim as d,runpy,sys
+native=d.solve
+def solve(**options):
+    if options.get('type')=='ac':
+        raise RuntimeError('synthetic native sparse-factorization error')
+    return native(**options)
+d.solve=solve
+sys.argv=['run_devsim.py','input.json']
+assert runpy.run_path('run_devsim.py')['main']()==0
+"""
+    completed = subprocess.run(
+        [str(resolve_devsim_python(ROOT)), "-c", program],
+        cwd=job.entrypoint.parent,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads((job.entrypoint.parent / "native_result.json").read_text())
+    assert not any(point["valid"] for point in result["frequency_points"])
+    failures = [event for event in result["solver_events"] if event["phase"] == "small_signal_ac"]
+    assert failures[0]["error"] == "synthetic native sparse-factorization error"
 
 
 def dielectric_ac_spec(study: dict[str, object]) -> ExperimentSpec:

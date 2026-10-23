@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import psutil
 import pytest
 from openhands.sdk.conversation.cancellation import CancellationToken
 
@@ -239,15 +240,14 @@ def test_stop_token_terminates_native_process_without_harming_other_run(
         assert not thread.is_alive(), "Stop left the native solve running"
         assert not errors, errors
         assert responses[0].code == "experiment_cancelled", responses[0]
-        with pytest.raises(ProcessLookupError):
-            os.kill(worker_pid, 0)
+        assert not psutil.pid_exists(worker_pid), "Stop left the native PID alive"
         assert unrelated.poll() is None
         assert not list((tmp_path / "data").rglob("manifest.json"))
         assert not list((tmp_path / "data").rglob("worker.py"))
     finally:
         if thread.is_alive() and worker_pid:
             try:
-                os.kill(worker_pid, signal.SIGKILL)
+                os.kill(worker_pid, signal.SIGTERM if os.name == "nt" else signal.SIGKILL)
             except ProcessLookupError:
                 pass
         thread.join(timeout=3)

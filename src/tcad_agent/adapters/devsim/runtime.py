@@ -2807,6 +2807,7 @@ def main() -> int:
         for frequency in study["frequencies_hz"]:
             valid = dc_valid
             real = imaginary = 0.0
+            ac_error = None
             if valid:
                 try:
                     solve(type="ac", frequency=float(frequency))
@@ -2820,8 +2821,9 @@ def main() -> int:
                             node=f"{circuit_source_name}.I", solution="ssac_imag"
                         )
                     )
-                except Exception:
+                except Exception as error:
                     valid = False
+                    ac_error = str(error)[:2000]
             solver_events.append(
                 {
                     "phase": "small_signal_ac",
@@ -2829,6 +2831,7 @@ def main() -> int:
                     "bias_v": bias,
                     "attempt": 1,
                     "outcome": "converged" if valid else "failed",
+                    **({"error": ac_error} if ac_error is not None else {}),
                 }
             )
             frequency_points.append(

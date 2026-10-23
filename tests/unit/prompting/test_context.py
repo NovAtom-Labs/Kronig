@@ -14,7 +14,7 @@ def test_reference_excerpts_redact_configured_and_conventional_credentials(tmp_p
         "Study at 300 K\nAWS_BEARER_TOKEN_BEDROCK=synthetic-secret-value\n"
         "OPENAI_API_KEY=synthetic-openai-value\nAWS_SECRET_ACCESS_KEY=other-secret\n"
     )
-    (tmp_path / "reference.md").write_text(text)
+    (tmp_path / "reference.md").write_bytes(text.encode())
     item = WorkspaceContextCollector().collect(tmp_path).files[0]
     assert "synthetic-secret-value" not in item.text_excerpt
     assert "synthetic-openai-value" not in item.text_excerpt
@@ -32,7 +32,7 @@ def test_workspace_reference_document_is_available_as_bounded_data(tmp_path):
 
 def test_single_study_keeps_trailing_units_within_shared_context_budget(tmp_path):
     text = "Scientific study parameters.\n" * 190 + '\n{"display_units":{"capacitance":"nF/cm^2"}}'
-    (tmp_path / "study.md").write_text(text)
+    (tmp_path / "study.md").write_bytes(text.encode())
 
     context = WorkspaceContextCollector().collect(tmp_path)
 

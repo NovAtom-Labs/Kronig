@@ -63,6 +63,64 @@ def asymmetric_spec(spacing_nm: float = 5.0) -> ExperimentSpec:
 
 
 @pytest.mark.integration
+def test_transport_ac_native_boundary_reports_factorization_failure(tmp_path):
+    payload = _gate_transport_spec(True).model_dump(mode="json", warnings=False)
+    payload["study"]["bias_schedule"] = {
+        "kind": "dc_points",
+        "contact": "gate",
+        "values": ["-5 V"],
+        "strategy": "adaptive",
+        "minimum_step": "1 mV",
+        "maximum_retries": 16,
+    }
+    spec = ExperimentSpec.model_validate(payload)
+    adapter = DevsimAdapter.from_defaults()
+    runner = LocalRunner(resolve_devsim_python(ROOT))
+    native = runner.run(adapter.compile(spec, tmp_path / "native"), RunBudget(seconds=60))
+    result = adapter.normalize(native)
+    assert result.status == "completed", native.stderr_path.read_text()
+    if all(result.datasets["ac_capacitance__gate"].validity):
+        return
+
+    # A controlled test-only comparison identifies a backend factorization
+    # difference without accepting the failed default result or changing physics.
+    control = adapter.compile(spec, tmp_path / "callback-control")
+    launcher = control.entrypoint.parent / "probe.py"
+    launcher.write_text(
+        """
+import runpy,sys,devsim as d
+from importlib import import_module
+native=d.solve
+def solve(**options):
+    if options.get('type')=='ac':
+        callback=import_module('devsim.umfpack.umfshim').local_solver_callback
+        d.set_parameter(name='solver_callback',value=callback)
+        d.set_parameter(name='direct_solver',value='custom')
+    return native(**options)
+d.solve=solve
+sys.argv=['run_devsim.py','input.json']
+raise SystemExit(runpy.run_path('run_devsim.py')['main']())
+""",
+        encoding="utf-8",
+    )
+    control_native = runner.run(
+        control.model_copy(update={"entrypoint": launcher}), RunBudget(seconds=60)
+    )
+    controlled = adapter.normalize(control_native)
+    failures = [e for e in result.metadata["solver_events"] if e.get("phase") == "small_signal_ac"]
+    assert all(result.datasets["ac_capacitance__gate"].validity), {
+        "default_ac": failures,
+        "callback_control_status": controlled.status,
+        "callback_control_validity": (
+            controlled.datasets["ac_capacitance__gate"].validity
+            if "ac_capacitance__gate" in controlled.datasets
+            else None
+        ),
+        "callback_control_stderr": control_native.stderr_path.read_text()[-1000:],
+    }
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("spacing_nm", [5.0, 2.5])
 def test_default_precision_conserves_small_terminal_currents(
     tmp_path: Path,
@@ -90,11 +148,7 @@ def test_default_precision_conserves_small_terminal_currents(
     }
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize("ac", [False, True])
-def test_adaptive_transport_preserves_state_across_full_gate_bias_schedule(
-    tmp_path: Path, ac: bool
-):
+def _gate_transport_spec(ac: bool) -> ExperimentSpec:
     schedule = {
         "kind": "dc",
         "contact": "gate",
@@ -105,7 +159,7 @@ def test_adaptive_transport_preserves_state_across_full_gate_bias_schedule(
         "minimum_step": "1 mV",
         "maximum_retries": 16,
     }
-    spec = ExperimentSpec.model_validate(
+    return ExperimentSpec.model_validate(
         {
             "schema_version": "1.0",
             "name": "bounded-recovery-regression",
@@ -167,6 +221,14 @@ def test_adaptive_transport_preserves_state_across_full_gate_bias_schedule(
             ],
         }
     )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("ac", [False, True])
+def test_adaptive_transport_preserves_state_across_full_gate_bias_schedule(
+    tmp_path: Path, ac: bool
+):
+    spec = _gate_transport_spec(ac)
     adapter = DevsimAdapter.from_defaults()
     native = LocalRunner(resolve_devsim_python(ROOT)).run(
         adapter.compile(spec, tmp_path / "transport-schedule"),
@@ -195,7 +257,11 @@ def test_adaptive_transport_preserves_state_across_full_gate_bias_schedule(
     if ac:
         dataset = result.datasets["ac_capacitance__gate"]
         assert dataset.shape == (101, 1)
-        assert all(dataset.validity)
+        assert all(dataset.validity), [
+            event
+            for event in events
+            if event["phase"] == "small_signal_ac" and event["outcome"] == "failed"
+        ][:2]
         assert report.checks_by_id["small-signal-grid-complete"].status == "passed"
         # At strong inversion the finite-frequency carrier response must differ
         # from the stationary charge derivative. Leaving the predictor's

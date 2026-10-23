@@ -21,16 +21,11 @@ def failed_test_annotations(report: Path) -> tuple[str, ...]:
     """Return GitHub workflow error commands for failures in one JUnit report."""
 
     if not report.is_file():
-        return (
-            "::error title=Pytest failed before reporting::No JUnit report was produced",
-        )
+        return ("::error title=Pytest failed before reporting::No JUnit report was produced",)
     try:
         root = ET.parse(report).getroot()
     except ET.ParseError as exc:
-        return (
-            "::error title=Pytest report is invalid::"
-            + _command_value(str(exc)[:2000]),
-        )
+        return ("::error title=Pytest report is invalid::" + _command_value(str(exc)[:2000]),)
 
     annotations: list[str] = []
     for case in root.iter("testcase"):
@@ -41,9 +36,7 @@ def failed_test_annotations(report: Path) -> tuple[str, ...]:
             continue
         classname = case.get("classname", "unknown")
         name = case.get("name", "unknown")
-        title = _command_value(
-            f"Pytest failure: {classname}.{name}", property_value=True
-        )
+        title = _command_value(f"Pytest failure: {classname}.{name}", property_value=True)
         properties = [f"title={title}"]
         file_name = case.get("file")
         if file_name:
@@ -54,7 +47,10 @@ def failed_test_annotations(report: Path) -> tuple[str, ...]:
         message_parts = [outcome.get("message", "Test failed")]
         if outcome.text and outcome.text.strip():
             message_parts.append(outcome.text.strip())
-        message = _command_value("\n".join(message_parts)[:4000])
+        message = "\n".join(message_parts)
+        if len(message) > 4000:
+            message = message[:1000] + "\n[... bounded traceback ...]\n" + message[-2900:]
+        message = _command_value(message)
         annotations.append(f"::error {','.join(properties)}::{message}")
     if not annotations:
         annotations.append(
