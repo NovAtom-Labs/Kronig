@@ -67,7 +67,7 @@ Keep Linux and Windows checkouts/environments separate when also using WSL. Do n
 macOS or Linux:
 
 ```bash
-git clone git@github.com:NovAtom-Labs/Kronig.git
+git clone https://github.com/NovAtom-Labs/Kronig.git
 cd Kronig
 python3.13 scripts/bootstrap_dev.py
 ```
@@ -75,12 +75,12 @@ python3.13 scripts/bootstrap_dev.py
 Windows PowerShell:
 
 ```powershell
-git clone git@github.com:NovAtom-Labs/Kronig.git
+git clone https://github.com/NovAtom-Labs/Kronig.git
 cd Kronig
 py -3.13 scripts\bootstrap_dev.py
 ```
 
-HTTPS cloning also works: `https://github.com/NovAtom-Labs/Kronig.git`. Use your own authorized account if the repository is private. Never put a personal access token in the URL or a tracked file.
+The public HTTPS URL needs no SSH-key setup. If you already have authorized GitHub SSH access, `git clone git@github.com:NovAtom-Labs/Kronig.git` is an alternative. Use your own authorized account if the repository is private. Never put a personal access token in the URL or a tracked file.
 
 One bootstrap command prepares:
 

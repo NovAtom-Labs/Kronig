@@ -137,18 +137,30 @@ time.sleep(60)
         assert line.strip(), "backend did not establish independent ownership"
         records = json.loads(line)
         if unobserved:
-            os.kill(records["monitor"], signal.SIGCONT)
+            # Force the orphaned/stopped-group ordering, rather than racing a
+            # resume against backend exit and accidentally hiding SIGHUP.
+            _wait_until_stopped([records["backend"]])
+            try:
+                os.kill(records["monitor"], signal.SIGCONT)
+            except ProcessLookupError:
+                pass  # The strict owned-process assertion below still applies.
         elif lost_process == "owner":
             owner.kill()
             owner.wait(timeout=5)
         else:
             os.kill(records["backend"], getattr(signal, "SIGKILL", signal.SIGTERM))
-        _wait_until_stopped(list(records.values()))
+        try:
+            _wait_until_stopped(list(records.values()))
+        except AssertionError as error:
+            raise AssertionError(f"{error}; fixture process roles: {records}") from error
         assert unrelated.poll() is None, "cleanup must not affect unrelated processes"
     finally:
         for pid in records.values():
             if _live(pid):
-                os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+                try:
+                    os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+                except ProcessLookupError:
+                    pass  # A monitor can finish between inspection and teardown.
         if owner.poll() is None:
             owner.kill()
         owner.wait(timeout=5)

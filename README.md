@@ -340,7 +340,7 @@ Source development uses the same native Electron application as an installed rel
 Prerequisites are Python 3.13, Node.js 24, pnpm 11.19, Git, and a graphical desktop session. Then:
 
 ```bash
-git clone git@github.com:NovAtom-Labs/Kronig.git
+git clone https://github.com/NovAtom-Labs/Kronig.git
 cd Kronig
 python3.13 scripts/bootstrap_dev.py
 ```

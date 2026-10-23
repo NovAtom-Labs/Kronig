@@ -229,6 +229,11 @@ def _monitor_windows(backend_pid: int, lost: threading.Event) -> None:
 
 
 def monitor_main(backend_pid: int) -> None:
+    if os.name != "nt":
+        # A stopped group receives SIGHUP when backend death orphans it. The
+        # independent monitor must survive to reap workers after it resumes.
+        # EOF and process identity still determine when owned work is stopped.
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
     lost = threading.Event()
     threading.Thread(target=_watch_eof, args=(sys.stdin.buffer, lost), daemon=True).start()
     if os.name == "nt":

@@ -66,6 +66,8 @@ jobs:
         run: '"${{ matrix.python }}" scripts/verify_source_setup.py --repeat-bootstrap --output output/source-setup/evidence.json'
       - name: Configure isolated simulator for subsequent tests
         run: '"${{ matrix.python }}" scripts/configure_ci_environment.py --python "${{ matrix.simulator }}"'
+      - name: Verify abrupt desktop shutdown
+        run: '"${{ matrix.python }}" scripts/run_ci_pytest.py tests/unit/desktop/test_owner_monitor.py --tb=short'
       - name: Verify Python application
         run: '"${{ matrix.python }}" scripts/run_ci_pytest.py'
       - name: Verify desktop shell
