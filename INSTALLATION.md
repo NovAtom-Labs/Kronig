@@ -161,6 +161,8 @@ The verifier needs no model credential. It checks dependency consistency, unchan
 
 The separate [Native source setup workflow](https://github.com/NovAtom-Labs/Kronig/actions/workflows/source-setup.yml) runs this same path in fresh Linux, Windows and macOS jobs, including a checkout path with spaces, then runs Python and desktop tests. Evidence is uploaded per OS. A failed or queued job is not a passed setup. It does not build installers, publish a release or use model/signing secrets. See the job linked to your commit for current native verification status.
 
+Verified reference: source revision `8998e90` passed clean setup and all applicable native runtime, Python and desktop gates on **Windows 2025 x64, Ubuntu 24.04 x64 and macOS 15 Apple Silicon** in [this verification run](https://github.com/NovAtom-Labs/Kronig/actions/runs/40004493585). Windows also passed two repeated complete scheduled AC benchmarks. This identifies the tested source revision, not a newer installer release or certification of every OS version.
+
 Browser-driven test tooling is optional and is not downloaded by bootstrap. To run those additional tests, install `pytest-xdist==3.8.0` and `playwright==1.63.0` into the application environment, then run `.venv/bin/python -m playwright install chromium`. This adds test-only packages and a browser cache. It is not required for the native application or ordinary serial tests.
 
 ## 6. Update a developer checkout
