@@ -1,0 +1,6 @@
+# Isolated simulator dependencies, not application dependencies.
+# NumPy resolves against the shared requirements.txt constraint supplied by bootstrap.
+devsim==2.9.1
+numpy
+# Linux uses system OpenBLAS; macOS uses its native math libraries.
+mkl==2025.2.0; sys_platform == "win32"

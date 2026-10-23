@@ -237,7 +237,30 @@ def test_windows_simulator_setup_installs_its_math_runtime(tmp_path, monkeypatch
     commands = []
     monkeypatch.setattr(bootstrap, "_run", lambda command, root: commands.append(tuple(command)))
     bootstrap._prepare_devsim(paths)
-    assert any("mkl==2025.2.0" in command for command in commands)
+    install = next(command for command in commands if "-r" in command)
+    assert install[install.index("-r") + 1] == str(paths.repository / "requirements/devsim.txt")
+    assert "-c" in install, "NumPy must follow the shared application pin"
+
+
+def test_simulator_requirement_markers_select_only_windows_math_runtime():
+    from packaging.requirements import Requirement
+
+    dependencies = [
+        Requirement(line)
+        for line in (ROOT / "requirements/devsim.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    for system, expected in (
+        ("win32", {"devsim", "numpy", "mkl"}),
+        ("linux", {"devsim", "numpy"}),
+        ("darwin", {"devsim", "numpy"}),
+    ):
+        selected = {
+            item.name
+            for item in dependencies
+            if item.marker is None or item.marker.evaluate({"sys_platform": system})
+        }
+        assert selected == expected
 
 
 def test_cached_setup_repairs_an_unhealthy_environment(tmp_path):
@@ -295,3 +318,19 @@ def test_python_health_probe_rejects_installed_transitive_lock_drift(tmp_path):
     lock = tmp_path / "requirements.lock"
     lock.write_text("# reviewed lock\nnumpy==0.0.0\n")
     assert bootstrap.python_ready(Path(sys.executable), {}, lock=lock) is False
+
+
+def test_simulator_health_does_not_inherit_application_pythonpath(tmp_path, monkeypatch):
+    bootstrap = load_script("bootstrap_dev")
+    environment = tmp_path / "simulator"
+    subprocess.run([sys.executable, "-m", "venv", str(environment)], check=True)
+    python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    foreign = tmp_path / "application-src"
+    metadata = foreign / "foreign_application.egg-info"
+    metadata.mkdir(parents=True)
+    (metadata / "PKG-INFO").write_text(
+        "Metadata-Version: 2.1\nName: foreign-application\nVersion: 1.0\n"
+        "Requires-Dist: missing-application-dependency>=1\n"
+    )
+    monkeypatch.setenv("PYTHONPATH", str(foreign))
+    assert bootstrap.python_ready(python, {})

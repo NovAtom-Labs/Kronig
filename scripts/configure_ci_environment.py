@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -46,7 +47,10 @@ def configure_environment(
             handle.write(f"{runtime_directory.resolve()}\n")
 
 
-def main() -> int:
+def main(arguments: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--python", type=Path, help="isolated simulator Python executable")
+    args = parser.parse_args(arguments)
     target = os.getenv("GITHUB_ENV")
     if not target:
         raise RuntimeError("GITHUB_ENV is required")
@@ -54,6 +58,9 @@ def main() -> int:
     configure_environment(
         Path(target),
         github_path=Path(path_target) if path_target else None,
+        python_executable=args.python.resolve() if args.python else Path(sys.executable),
+        python_prefix=args.python.resolve().parent.parent if args.python else Path(sys.prefix),
+        platform_name=sys.platform,
     )
     return 0
 

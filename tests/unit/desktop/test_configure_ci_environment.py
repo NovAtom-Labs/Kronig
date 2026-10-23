@@ -38,7 +38,17 @@ def test_windows_environment_exports_the_installed_mkl_runtime_and_path(
     )
 
     assert github_environment.read_text(encoding="utf-8") == (
-        f"TCAD_DEVSIM_PYTHON={tmp_path / 'python' / 'python.exe'}\n"
-        f"DEVSIM_MATH_LIBS={runtime}\n"
+        f"TCAD_DEVSIM_PYTHON={tmp_path / 'python' / 'python.exe'}\nDEVSIM_MATH_LIBS={runtime}\n"
     )
     assert github_path.read_text(encoding="utf-8") == f"{runtime_directory}\n"
+
+
+def test_ci_cli_selects_the_isolated_simulator_instead_of_application_python(tmp_path, monkeypatch):
+    from scripts.configure_ci_environment import main
+
+    target = tmp_path / "github-env"
+    simulator = tmp_path / "devsim/bin/python"
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setenv("GITHUB_ENV", str(target))
+    assert main(["--python", str(simulator)]) == 0
+    assert target.read_text() == f"TCAD_DEVSIM_PYTHON={simulator}\n"

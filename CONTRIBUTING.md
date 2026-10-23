@@ -71,6 +71,8 @@ Edit constraints in `pyproject.toml`, then regenerate `requirements.txt` and `re
 
 Never edit generated requirement files by hand. Desktop packages must remain locked in `desktop/pnpm-lock.yaml`.
 
+Isolated simulator requirements live in `requirements/devsim.txt`. Use environment markers for OS-only Python packages, not copied application dependency lists. Keep NumPy constrained by the shared application pin. Linux OpenBLAS is a system prerequisite, not a pip package. After changing setup, run `scripts/verify_source_setup.py` with the application environment and review the native source-setup jobs for Windows and Linux; a macOS path test is not native platform proof.
+
 ## Security reports
 
 Do not disclose vulnerabilities, credentials, proprietary simulator content, or sensitive research data in a public issue. Follow [SECURITY.md](SECURITY.md).

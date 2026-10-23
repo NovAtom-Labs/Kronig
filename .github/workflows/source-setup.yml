@@ -1,0 +1,80 @@
+name: Native source setup
+
+"on":
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-setup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup:
+    name: Clean ${{ matrix.name }} setup
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            python: .venv/bin/python
+            simulator: ../devsim/.venv/bin/python
+          - name: Windows x64
+            runner: windows-2025
+            python: .venv/Scripts/python.exe
+            simulator: ../devsim/.venv/Scripts/python.exe
+          - name: macOS Apple Silicon
+            runner: macos-15
+            python: .venv/bin/python
+            simulator: ../devsim/.venv/bin/python
+    defaults:
+      run:
+        shell: bash
+        working-directory: source checkout
+    env:
+      OPENHANDS_SUPPRESS_BANNER: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: source checkout
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Linux native prerequisites
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libopenblas-dev libgtk-3-0t64 libnss3 libgbm1 libasound2t64 xvfb tmux
+      - name: Bootstrap from a clean checkout
+        run: python scripts/bootstrap_dev.py
+      - name: Verify repeat setup and native runtimes
+        run: '"${{ matrix.python }}" scripts/verify_source_setup.py --repeat-bootstrap --output output/source-setup/evidence.json'
+      - name: Configure isolated simulator for subsequent tests
+        run: '"${{ matrix.python }}" scripts/configure_ci_environment.py --python "${{ matrix.simulator }}"'
+      - name: Verify Python application
+        run: '"${{ matrix.python }}" scripts/run_ci_pytest.py'
+      - name: Verify desktop shell
+        run: '"${{ matrix.python }}" scripts/run_ci_desktop_tests.py'
+      - name: Record setup evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-setup-${{ matrix.runner }}
+          path: source checkout/output/source-setup/evidence.json
+          if-no-files-found: warn
+          retention-days: 14

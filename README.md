@@ -359,6 +359,8 @@ The launcher loads an ignored local `.env` when present, starts Electron, and le
 
 For the full setup, DEVSIM environment, Bedrock configuration, validation, and test-workspace procedure, follow [INSTALLATION.md](INSTALLATION.md).
 
+The guide includes separate Linux and Windows prerequisites and a dependency-ownership matrix. Shared application pins remain in the root requirements files; the isolated simulator uses `requirements/devsim.txt` with Windows-only MKL selection. [Native source setup checks](https://github.com/NovAtom-Labs/Kronig/actions/workflows/source-setup.yml) exercise fresh OS installations independently of installer releases.
+
 ## Verify a checkout
 
 ```bash

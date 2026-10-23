@@ -11,6 +11,8 @@ DEVSIM has its own virtual environment so product dependencies and simulator dep
 
 The [source bootstrap](../../INSTALLATION.md) prepares this isolated runtime. If the simulator is elsewhere, set `TCAD_DEVSIM_PYTHON` to its absolute executable path. No DEVSIM version upgrade is needed for the current adapter expansion.
 
+`requirements/devsim.txt` owns simulator pip dependencies across platforms. Its MKL requirement is selected only on Windows. Linux uses system OpenBLAS; macOS uses native math libraries. The application list supplies the shared NumPy constraint. Native setup checks and OS-specific prerequisites are in [Installation](../../INSTALLATION.md#dependency-ownership-by-operating-system).
+
 On Windows the desktop launcher locates the pinned MKL runtime inside the simulator environment. For direct diagnostic CLI use, set `TCAD_DEVSIM_PYTHON` to the absolute simulator Python, set `DEVSIM_MATH_LIBS` to its `Library\bin\mkl_rt.dll` or `mkl_rt.*.dll`, and prepend that `Library\bin` directory to the process `PATH`. These are process-local environment values, not files to copy between machines.
 
 ## Internal validation wrapper

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import re
 import shutil
@@ -18,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BOOTSTRAP_SCHEMA = "2"
-DEVSIM_VERSION = "2.9.1"
 
 
 class BootstrapError(RuntimeError):
@@ -153,6 +153,25 @@ def _application_versions(paths: DevelopmentPaths) -> dict[str, str]:
     return versions
 
 
+def simulator_versions(paths: DevelopmentPaths, system: str) -> dict[str, str]:
+    from pip._vendor.packaging.requirements import Requirement
+
+    environment = {
+        "sys_platform": {"Windows": "win32", "Linux": "linux", "Darwin": "darwin"}[system]
+    }
+    versions = {"numpy": _application_versions(paths)["numpy"]}
+    for line in (paths.repository / "requirements/devsim.txt").read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        requirement = Requirement(line)
+        if requirement.marker is not None and not requirement.marker.evaluate(environment):
+            continue
+        for specifier in requirement.specifier:
+            if specifier.operator == "==":
+                versions[requirement.name] = specifier.version
+    return versions
+
+
 def python_ready(python: Path, versions: dict[str, str], *, lock: Path | None = None) -> bool:
     """Check cached interpreter and dependency identities without loading a model."""
     # pip is present in both isolated environments, including the minimal simulator
@@ -180,6 +199,9 @@ if sys.argv[2]:
         assert requirement.specifier.contains(installed, prereleases=True)
 subprocess.run([sys.executable, '-m', 'pip', 'check'], check=True, capture_output=True)
 """
+    probe_environment = dict(os.environ)
+    for name in ("PYTHONPATH", "PYTHONHOME"):
+        probe_environment.pop(name, None)
     try:
         return (
             subprocess.run(
@@ -187,6 +209,7 @@ subprocess.run([sys.executable, '-m', 'pip', 'check'], check=True, capture_outpu
                 capture_output=True,
                 check=False,
                 timeout=30,
+                env=probe_environment,
             ).returncode
             == 0
         )
@@ -310,11 +333,10 @@ def _prepare_devsim(paths: DevelopmentPaths) -> None:
             "-m",
             "pip",
             "install",
-            f"devsim=={DEVSIM_VERSION}",
-            "numpy",
+            "-r",
+            str(paths.repository / "requirements/devsim.txt"),
             "-c",
             str(paths.repository / "requirements.txt"),
-            *(("mkl==2025.2.0",) if paths.devsim_python.suffix == ".exe" else ()),
         ),
         paths.repository,
     )
@@ -410,8 +432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     application_digest = application_fingerprint(paths, common)
     devsim_fingerprint = dependency_fingerprint(
-        (repository / "requirements.txt",),
-        (*common, f"devsim={DEVSIM_VERSION}"),
+        (repository / "requirements.txt", repository / "requirements/devsim.txt"),
+        common,
     )
     desktop_fingerprint = dependency_fingerprint(
         (repository / "desktop/package.json", repository / "desktop/pnpm-lock.yaml"),
@@ -444,11 +466,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             prepare=lambda: _prepare_devsim(paths),
             verify=lambda: python_ready(
                 paths.devsim_python,
-                {
-                    "devsim": DEVSIM_VERSION,
-                    "numpy": application_versions["numpy"],
-                    **({"mkl": "2025.2.0"} if system == "Windows" else {}),
-                },
+                simulator_versions(paths, system),
             ),
         )
         _stage(
