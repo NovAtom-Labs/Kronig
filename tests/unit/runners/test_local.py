@@ -12,6 +12,50 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("runner_kind", [
+    "local",
+    pytest.param("sidecar", marks=pytest.mark.skipif(
+        os.name == "nt", reason="POSIX fixture executable"
+    )),
+])
+def test_noninteractive_jobs_cannot_inherit_the_desktop_control_input(tmp_path, runner_kind):
+    worker = tmp_path / "worker.py"
+    worker.write_text(
+        f"#!{Path(sys.executable).resolve()}\nimport pathlib,sys\n"
+        "pathlib.Path('observed-input').write_text(sys.stdin.read())\n"
+        "pathlib.Path('native_result.json').write_text('{}')\n"
+    )
+    worker.chmod(0o700)
+    source = f"""
+import sys
+from pathlib import Path
+from tcad_agent.runners.local import LocalRunner
+from tcad_agent.desktop.devsim_runner import DevsimSidecarRunner
+from tcad_agent.runners.models import CompiledJob, RunBudget
+worker = Path({str(worker)!r})
+job = CompiledJob(backend='devsim', entrypoint=worker, arguments=(), input_files=(worker,),
+                  input_digest='a'*64, runtime_digest='b'*64, compiler_version='fixture')
+runner = (LocalRunner(Path(sys.executable)) if {runner_kind!r} == 'local'
+          else DevsimSidecarRunner(worker))
+print(runner.run(job, RunBudget(seconds=1)).status, flush=True)
+"""
+    backend = subprocess.Popen(
+        [sys.executable, "-c", source], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "AGENT_KRONIG_DESKTOP_OWNER_PIPE": "1",
+             "PYTHONPATH": str(Path(__file__).resolve().parents[3] / "src")},
+    )
+    try:
+        backend.wait(timeout=5)  # Keep the parent's write end open during execution.
+        assert backend.stdout.read().strip() == "completed", backend.stderr.read()
+        assert (tmp_path / "observed-input").read_text() == ""
+    finally:
+        if backend.poll() is None:
+            backend.kill()
+        backend.wait(timeout=5)
+        backend.stdin.close()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process group ownership")
 @pytest.mark.parametrize("timeout", [False, True])
 @pytest.mark.parametrize("desktop_owned", [False, True])

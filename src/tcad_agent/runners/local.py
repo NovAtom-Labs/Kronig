@@ -43,6 +43,7 @@ class LocalRunner:
                 command,
                 cwd=workspace,
                 env=environment,
+                stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
                 text=True,

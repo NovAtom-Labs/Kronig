@@ -77,7 +77,8 @@ def test_independent_monitor_cleans_workers_after_abrupt_death(
         else "os.kill(os.getpid(), signal.SIGKILL)"
     )
     worker_creation = f"""
-worker = subprocess.Popen([sys.executable, '-c', {worker!r}], stdout=subprocess.PIPE,
+worker = subprocess.Popen([sys.executable, '-c', {worker!r}], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE,
                           start_new_session={not unobserved!r} and os.name != 'nt', text=True)
 print(f'fixture backend: worker spawned {{worker.pid}}', file=sys.stderr, flush=True)
 assert worker.stdout.readline().strip() == 'worker-ready'

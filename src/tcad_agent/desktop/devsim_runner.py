@@ -231,6 +231,7 @@ class DevsimSidecarRunner:
                 [str(self.executable), str(manifest_path)],
                 cwd=workspace,
                 env=environment,
+                stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
                 text=True,
