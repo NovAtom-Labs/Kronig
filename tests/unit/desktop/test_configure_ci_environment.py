@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from scripts.configure_ci_environment import configure_environment
 
@@ -52,3 +57,17 @@ def test_ci_cli_selects_the_isolated_simulator_instead_of_application_python(tmp
     monkeypatch.setenv("GITHUB_ENV", str(target))
     assert main(["--python", str(simulator)]) == 0
     assert target.read_text() == f"TCAD_DEVSIM_PYTHON={simulator}\n"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX venv interpreter symlink regression")
+def test_ci_export_preserves_virtual_environment_interpreter_identity(tmp_path, monkeypatch):
+    from scripts.configure_ci_environment import main
+
+    environment = tmp_path / "isolated simulator"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True)
+    target = tmp_path / "github-env"
+    monkeypatch.setenv("GITHUB_ENV", str(target))
+    assert main(["--python", str(environment / "bin/python")]) == 0
+    executable = target.read_text().strip().split("=", 1)[1]
+    prefix = subprocess.check_output([executable, "-c", "import sys; print(sys.prefix)"], text=True)
+    assert Path(prefix.strip()) == environment

@@ -55,11 +55,14 @@ def main(arguments: list[str] | None = None) -> int:
     if not target:
         raise RuntimeError("GITHUB_ENV is required")
     path_target = os.getenv("GITHUB_PATH")
+    # Resolving a venv's executable symlink selects the base interpreter and loses
+    # its installed packages. Make the path absolute without dereferencing it.
+    simulator = args.python.expanduser().absolute() if args.python else Path(sys.executable)
     configure_environment(
         Path(target),
         github_path=Path(path_target) if path_target else None,
-        python_executable=args.python.resolve() if args.python else Path(sys.executable),
-        python_prefix=args.python.resolve().parent.parent if args.python else Path(sys.prefix),
+        python_executable=simulator,
+        python_prefix=simulator.parent.parent if args.python else Path(sys.prefix),
         platform_name=sys.platform,
     )
     return 0
