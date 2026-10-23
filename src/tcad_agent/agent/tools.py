@@ -24,6 +24,8 @@ from pydantic import Field, ValidationError
 
 from tcad_agent.bundles.models import ExperimentBundle, require_run_id
 from tcad_agent.bundles.reader import BundleIntegrityError, BundleReader
+from tcad_agent.capabilities.descriptors import CapabilityCatalog
+from tcad_agent.capabilities.models import CapabilityManifest
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
 from tcad_agent.domain.studies import (
     ACStudy,
@@ -314,7 +316,16 @@ class DomainTools:
             if area_refusal is not None:
                 return area_refusal
             if self.research_intent:
-                issues = plan_authority_issues(spec, self.research_intent)
+                catalog = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend(backend))
+                structured_paths = {
+                    item.path
+                    for descriptor in catalog.descriptors
+                    for item in (*descriptor.required_inputs, *descriptor.optional_inputs)
+                    if item.completeness_check == "structured"
+                }
+                issues = plan_authority_issues(
+                    spec, self.research_intent, structured_paths=structured_paths
+                )
                 if issues:
                     return ToolResponse(
                         status="refused", code="scientific_input_authority_violation",

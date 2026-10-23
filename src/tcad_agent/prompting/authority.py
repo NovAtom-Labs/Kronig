@@ -36,6 +36,32 @@ def _schema_quantity_path(annotation, parts):
     return False
 
 
+def _schema_input_path(annotation, parts):
+    """Recognize typed intent even when its selected plan entity is absent."""
+    if not parts:
+        return True
+    origin = get_origin(annotation)
+    arguments = get_args(annotation)
+    if origin is Annotated:
+        return _schema_input_path(arguments[0], parts)
+    if origin in {tuple, list, dict}:
+        item = arguments[1] if origin is dict else arguments[0]
+        # A collection needs an entity selector and a property. Unqualified
+        # prose such as contacts.boundary_conditions is not a typed path.
+        return len(parts) > 1 and _schema_input_path(item, parts[1:])
+    if origin is not None:
+        return any(_schema_input_path(item, parts) for item in arguments)
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        fields = annotation.model_fields
+        if parts == ["thickness"] and {"x0", "x1"} <= fields.keys():
+            return True
+        if field := fields.get(parts[0]):
+            return _schema_input_path(field.annotation, parts[1:])
+        if parameters := fields.get("parameters"):
+            return _schema_input_path(parameters.annotation, parts)
+    return False
+
+
 def _quantity_paths(value, parts):
     if isinstance(value, bool):
         return
@@ -93,6 +119,7 @@ def _resolve(value, parts):
                 item
                 for item in value
                 if getattr(item, "id", None) == key
+                or getattr(item, "location", None) == key
                 or (boundary and getattr(item, "location", None) == boundary)
             ]
             selected = matches[0] if len(matches) == 1 else _UNMAPPED
@@ -132,14 +159,24 @@ def _equal(actual, expected):
     return actual == expected
 
 
-def plan_authority_issues(spec, intent):
+def plan_authority_issues(spec, intent, *, structured_paths=()):
     """Refuse changed typed inputs; never invent a mapping for free-text records."""
     issues = []
     unsupported = set(unsupported_physics_inputs(intent))
+    locations = {
+        field.path.removeprefix("contacts.").removesuffix(".location"): field.value
+        for field in intent.fields
+        if field.origin in {"researcher", "repository"}
+        and field.path.startswith("contacts.")
+        and field.path.endswith(".location")
+        and isinstance(field.value, str)
+    }
     for field in intent.fields:
         if field.origin not in {"researcher", "repository"}:
             continue
         parts = canonical_path(field.path, preserve_indices=True).split(".")
+        if len(parts) > 1 and parts[0] == "contacts":
+            parts[1] = locations.get(parts[1], parts[1])
         if parts == ["geometry", "length"]:
             length = max(r.x1.to("m") for r in spec.regions) - min(
                 r.x0.to("m") for r in spec.regions
@@ -156,13 +193,26 @@ def plan_authority_issues(spec, intent):
                 }
             )
             continue
-        # Physics/output set coverage and display/profile policies already have
-        # their dedicated checks; order there is not scientific identity.
+        # Existing checks own output coverage, display units and sampling policy.
         if (
-            actual is _UNMAPPED
-            or field.path in {"physics.models", "physics.equations", "observables", "display_units"}
+            field.path in {"physics.models", "physics.equations", "observables", "display_units"}
             or field.path.startswith(("display_units.", "profile_sampling."))
         ):
+            continue
+        if actual is _UNMAPPED:
+            if canonical_path(field.path) in structured_paths:
+                continue
+            paths = [parts]
+            if isinstance(field.value, dict):
+                paths.extend([*parts, key] for key in field.value)
+            if any(_schema_input_path(type(spec), path) for path in paths):
+                issues.append(
+                    {
+                        "intent_path": field.path,
+                        "reason": "missing_confirmed_input",
+                        "expected": field.value,
+                    }
+                )
             continue
         if not _equal(actual, field.value):
             issues.append(

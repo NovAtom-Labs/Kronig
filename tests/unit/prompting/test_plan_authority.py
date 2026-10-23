@@ -96,3 +96,105 @@ def test_aggregate_parameter_record_accepts_only_matching_declared_values(tmp_pa
     assert tools.prepare_experiment(payload, backend="devsim").code == (
         "scientific_input_authority_violation"
     )
+
+
+@pytest.mark.parametrize("origin", ["researcher", "repository"])
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        ("contacts.gate.voltage_offset", "0 V"),
+        ("contacts.gate.kind", "ohmic"),
+        ("contacts.2.voltage_offset", "0 V"),
+        ("contacts.gate", {"voltage_offset": "0 V"}),
+        ("regions.removed.x1", "0.5 um"),
+        ("regions.removed.thickness", "0.5 um"),
+        ("profiles.2.value", "1e17 cm^-3"),
+        ("interfaces.0.fixed_charge_density", "1e10 cm^-2"),
+    ],
+)
+def test_plan_refuses_missing_confirmed_entity(tmp_path, valid_spec, path, value, origin):
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep the confirmed entities and their inputs",
+        fields=(
+            IntentField(
+                path=path,
+                value=value,
+                origin=origin,
+                source_reference="experiment.yaml" if origin == "repository" else None,
+            ),
+        ),
+    )
+    response = DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+        valid_spec.model_dump(mode="json"), backend="devsim"
+    )
+    assert response.code == "scientific_input_authority_violation", response
+    assert response.data["issues"][0]["intent_path"] == path
+    assert response.data["issues"][0]["reason"] == "missing_confirmed_input"
+    assert not (tmp_path / "experiments").exists()
+
+
+def test_plan_refuses_renaming_confirmed_contact_even_with_the_same_value(tmp_path, valid_spec):
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep my anode contact",
+        fields=(
+            IntentField(path="contacts.anode.voltage_offset", value="0 V", origin="researcher"),
+        ),
+    )
+    payload = valid_spec.model_dump(mode="json")
+    payload["contacts"][0]["id"] = "renamed"
+    payload["study"]["contact"] = "renamed"
+    response = DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+        payload, backend="devsim"
+    )
+    assert response.code == "scientific_input_authority_violation", response
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        ("contacts.left.voltage_offset", "0 V"),
+        ("contacts.x_min.voltage_offset", "0 V"),
+        ("contacts.anode", {"voltage_offset": "0 V"}),
+        ("contacts.boundary_conditions", "Ohmic endpoint contacts"),
+        (
+            "contacts.boundary_conditions",
+            {"contact": "anode", "kind": "ohmic", "voltage_offset": "0 V"},
+        ),
+        ("regions.structure", "Two adjoining silicon regions"),
+        ("research.notes", "Check the electrical response"),
+    ],
+)
+def test_missing_entity_guard_preserves_valid_aliases_and_free_text(
+    tmp_path, valid_spec, path, value
+):
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Preserve typed inputs without inventing free-text mappings",
+        fields=(IntentField(path=path, value=value, origin="researcher"),),
+    )
+    response = DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+        valid_spec.model_dump(mode="json"), backend="devsim"
+    )
+    assert response.status == "ok", response
+
+
+@pytest.mark.parametrize("offset,expected", [("0 V", "ok"), ("1 V", "refused")])
+def test_explicit_contact_location_binds_values_without_losing_authority(
+    tmp_path, valid_spec, offset, expected
+):
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Use the supplied boundary role",
+        fields=(
+            IntentField(path="contacts.injecting.location", value="x_min", origin="researcher"),
+            IntentField(
+                path="contacts.injecting.voltage_offset", value=offset, origin="researcher"
+            ),
+        ),
+    )
+    response = DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+        valid_spec.model_dump(mode="json"), backend="devsim"
+    )
+    assert response.status == expected, response
