@@ -1,10 +1,14 @@
 """Research review regressions in an isolated browser, without a native window."""
 
+import json
 import os
 import re
 from pathlib import Path
 
 import pytest
+
+from tcad_agent.adapters.sentaurus.normalizer import SentaurusNormalizer
+from tcad_agent.runners.models import NativeRunResult
 
 
 @pytest.fixture
@@ -26,6 +30,106 @@ def research_page():
             page.add_script_tag(content=(web / "static" / name).read_text())
         yield page
         browser.close()
+
+
+def test_sentaurus_export_reaches_interactive_workbench(research_page, tmp_path):
+    """UI interoperability only. Values are synthetic, not a physics reference."""
+    payload = {
+        "schema_version": "2.0",
+        "simulator_version": "synthetic-ui-fixture",
+        "status": "completed",
+        "terminals": ["gate", "bulk"],
+        "provenance": {
+            "compiler_version": "fixture",
+            "experiment_sha256": "a" * 64,
+            "mesh_sha256": "b" * 64,
+        },
+        "sign_convention": {
+            "terminal_current": "positive_into_device",
+            "terminal_charge": "outward_displacement_flux",
+        },
+        "axes": {
+            "bias": {
+                "id": "bias",
+                "kind": "bias",
+                "label": "Bias",
+                "unit": "V",
+                "values": [-2, 0, 1],
+            },
+            "position": {
+                "id": "position",
+                "kind": "position",
+                "label": "Position",
+                "unit": "um",
+                "values": [0, 0.5, 1],
+            },
+        },
+        "datasets": {
+            "potential": {
+                "id": "potential",
+                "quantity": "potential",
+                "label": "Potential",
+                "unit": "V",
+                "axes": ["bias", "position"],
+                "shape": [3, 3],
+                "centering": "node",
+                "values": [0, 1, 2, 0, 2, 3, 0, 3, 5],
+            },
+            "capacitance": {
+                "id": "capacitance",
+                "quantity": "capacitance_density",
+                "label": "Capacitance density",
+                "unit": "F/cm^2",
+                "axes": ["bias"],
+                "shape": [3],
+                "centering": "operating_point",
+                "values": [1e-8, 2e-8, 4e-8],
+            },
+        },
+        "operating_points": [
+            {"index": index, "state": "converged", "coordinates": {"bias": bias}}
+            for index, bias in enumerate((-2, 0, 1))
+        ],
+    }
+    path = tmp_path / "sentaurus-result.json"
+    path.write_text(json.dumps(payload))
+    result = SentaurusNormalizer().normalize(
+        NativeRunResult(
+            backend="sentaurus",
+            status="completed",
+            return_code=0,
+            result_path=path,
+            stdout_path=tmp_path / "out",
+            stderr_path=tmp_path / "err",
+            elapsed_seconds=0,
+        )
+    )
+    research_page.evaluate(
+        """payload => {
+      const root=document.createElement('div');root.id='sentaurus-workbench';
+      root.style.width='560px';
+      document.querySelector('#workspace-welcome').replaceWith(root);
+      AgentKronigResults.render(root,payload);
+    }""",
+        {
+            "execution_state": "completed",
+            "experiment": {"regions": [], "contacts": []},
+            "result": result.model_dump(mode="json"),
+            "validation": {"overall": "not_applicable", "checks": []},
+        },
+    )
+    root = research_page.locator("#sentaurus-workbench")
+    line = root.locator(".result-chart-line").first
+    original = line.get_attribute("d")
+    root.locator('[aria-label="Displayed operating point"]').select_option("2")
+    assert line.get_attribute("d") != original
+    root.get_by_role("button", name="Zoom in", exact=True).click()
+    assert root.locator(".result-chart-viewport").inner_text() == "Zoomed range"
+    root.locator('[aria-label="Displayed result dataset"]').select_option(
+        label="Capacitance density · run 1"
+    )
+    assert "F/m" in root.inner_text()
+    assert root.evaluate("root => root.scrollWidth <= root.clientWidth")
 
 
 def test_plan_revision_submit_remains_reachable_in_short_pane(research_page):
@@ -152,7 +256,7 @@ def test_scientific_selectors_change_slice_and_zoom_in_narrow_result(research_pa
     point = root.locator('[aria-label="Displayed operating point"]')
     assert "requested profile" in point.locator("option").first.inner_text()
     line = root.locator(".result-chart-line").first
-    right_label = root.locator('svg text').filter(has_text="right_reference_contact")
+    right_label = root.locator("svg text").filter(has_text="right_reference_contact")
     assert right_label.evaluate("text => text.getBBox().x + text.getBBox().width <= 880")
     original_line = line.get_attribute("d")
     point.select_option("2")
@@ -185,7 +289,8 @@ def test_plot_png_export_retains_visible_curve_and_opaque_background(research_pa
     with page.expect_download() as exported:
         page.get_by_role("button", name="PNG", exact=True).click()
     encoded = base64.b64encode(Path(exported.value.path()).read_bytes()).decode()
-    pixels = page.evaluate("""async encoded => {
+    pixels = page.evaluate(
+        """async encoded => {
       const image=new Image();image.src='data:image/png;base64,'+encoded;await image.decode();
       const canvas=document.createElement('canvas');
       canvas.width=image.width;canvas.height=image.height;
@@ -193,7 +298,9 @@ def test_plot_png_export_retains_visible_curve_and_opaque_background(research_pa
       const p=context.getImageData(0,0,canvas.width,canvas.height).data;
       let blue=0;for(let i=0;i<p.length;i+=4)if(p[i+2]>p[i]+20&&p[i+2]>p[i+1]+5)blue++;
       return {backgroundAlpha:p[3],bluePixels:blue};
-    }""", encoded)
+    }""",
+        encoded,
+    )
     assert pixels["backgroundAlpha"] == 255
     assert pixels["bluePixels"] > 100
 

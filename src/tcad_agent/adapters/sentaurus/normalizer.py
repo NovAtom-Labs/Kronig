@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import math
 from typing import Literal, Self
 
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, model_validator
 
+from tcad_agent.adapters.sentaurus.tables import normalize_tables, quantity_conversion
 from tcad_agent.domain.models import StrictModel
 from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries
 from tcad_agent.runners.models import NativeRunResult
@@ -65,8 +68,7 @@ class NativeField(StrictModel):
         if len(set(self.position)) != len(self.position):
             raise ValueError("position column contains duplicate coordinates")
         if any(
-            right <= left
-            for left, right in zip(self.position, self.position[1:], strict=False)
+            right <= left for left, right in zip(self.position, self.position[1:], strict=False)
         ):
             raise ValueError("position column must be strictly monotonic")
         if self.position_unit not in _POSITION_SCALE:
@@ -105,6 +107,15 @@ class NativeSentaurusExport(StrictModel):
             raise ValueError(f"field names are not allowlisted: {sorted(unknown)}")
         if self.current_density_unit not in {"A/m^2", "A/cm^2"}:
             raise ValueError("current density unit is not allowlisted")
+        if len(set(self.terminals)) != len(self.terminals) or any(
+            not item.strip() for item in self.terminals
+        ):
+            raise ValueError("terminal names must be nonempty and unique")
+        for point in self.bias_points:
+            if set(point.terminal_current_density) - set(self.terminals):
+                raise ValueError("unknown terminal in bias point")
+        for name, field in self.fields.items():
+            quantity_conversion(name, field.unit)
         return self
 
 
@@ -122,9 +133,19 @@ class SentaurusNormalizer:
         if native.result_path is None:
             raise SentaurusNormalizationError("completed run has no native result")
         try:
-            payload = json.loads(native.result_path.read_text())
+            if (
+                native.result_path.is_symlink()
+                or native.result_path.stat().st_size > 64 * 1024 * 1024
+            ):
+                raise ValueError("native export must be a bounded regular file, not a symlink")
+            raw = native.result_path.read_bytes()
+            payload = json.loads(raw)
+            if isinstance(payload, dict) and payload.get("schema_version") == "2.0":
+                return normalize_tables(
+                    payload, native.result_path, hashlib.sha256(raw).hexdigest()
+                )
             export = NativeSentaurusExport.model_validate(payload)
-        except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        except (OSError, ValueError, UnicodeError, csv.Error) as exc:
             raise SentaurusNormalizationError(f"invalid schema: {exc}") from exc
 
         current_scale = _VALUE_UNITS[export.current_density_unit][1]
@@ -156,4 +177,5 @@ class SentaurusNormalizer:
             bias_points=bias_points,
             fields=fields,
             native_result_path=native.result_path,
+            metadata={"native_export_sha256": hashlib.sha256(raw).hexdigest()},
         )

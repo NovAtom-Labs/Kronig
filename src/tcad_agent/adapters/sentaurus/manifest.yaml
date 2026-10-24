@@ -1,15 +1,15 @@
 schema_version: "1.0"
 backend: sentaurus
-adapter_version: "0.1.0"
+adapter_version: "0.2.0"
 execution_state: unconfigured
 dimensions: [1]
 equations: [poisson, electron_continuity, hole_continuity]
 models: [boltzmann, fermi, constant_mobility, srh, auger, band_gap_narrowing]
 materials: [silicon]
 profiles: [constant]
-interfaces: [continuity, fixed_charge]
+interfaces: [continuity]
 contacts: [ohmic, metal_work_function]
-studies: [equilibrium, dc]
+studies: [equilibrium, dc, dc_points]
 observables:
   - terminal_current
   - terminal_current_density

@@ -125,9 +125,9 @@ def test_exec_records_actual_nonzero_exit_code(tmp_path: Path) -> None:
 
     events = read_audit(runner)["events"]
     result_event = next(
-        event for event in events
-        if event["action"] == "sentaurus.execute"
-        and event["status"] == "failed"
+        event
+        for event in events
+        if event["action"] == "sentaurus.execute" and event["status"] == "failed"
     )
 
     assert result_event["details"]["exit_code"] == 23
@@ -145,9 +145,9 @@ def test_exec_records_and_reraises_ssh_exception(tmp_path: Path) -> None:
 
     events = read_audit(runner)["events"]
     failure = next(
-        event for event in events
-        if event["action"] == "remote.test"
-        and event["status"] == "failed"
+        event
+        for event in events
+        if event["action"] == "remote.test" and event["status"] == "failed"
     )
 
     assert "connection reset" in failure["details"]["error"]
@@ -172,9 +172,9 @@ def test_download_connection_error_is_recorded_as_failure(
 
     events = read_audit(runner)["events"]
     failure = next(
-        event for event in events
-        if event["action"] == "sftp.download"
-        and event["status"] == "failed"
+        event
+        for event in events
+        if event["action"] == "sftp.download" and event["status"] == "failed"
     )
 
     assert failure["details"]["filename"] == "device.tdr"
@@ -200,9 +200,9 @@ def test_missing_download_is_marked_unavailable(
 
     events = read_audit(runner)["events"]
     unavailable = next(
-        event for event in events
-        if event["action"] == "sftp.download"
-        and event["status"] == "unavailable"
+        event
+        for event in events
+        if event["action"] == "sftp.download" and event["status"] == "unavailable"
     )
 
     assert unavailable["details"]["filename"] == "optional.plt"
@@ -277,6 +277,9 @@ def test_run_returns_per_run_audit_paths_and_records_remote_work(
     (stale_dir / "ssh-audit.log").write_text("stale run\n", encoding="utf-8")
 
     class FakeSFTP:
+        def lstat(self, path):
+            raise FileNotFoundError(path)
+
         def put(self, local: str, remote: str) -> None:
             assert Path(local).is_file()
             assert remote.endswith(Path(local).name)
@@ -302,9 +305,7 @@ def test_run_returns_per_run_audit_paths_and_records_remote_work(
         def close(self) -> None:
             return None
 
-    runner = SSHSentaurusRunner(
-        host="test-host", user="test-user", remote_root="/remote/runs"
-    )
+    runner = SSHSentaurusRunner(host="test-host", user="test-user", remote_root="/remote/runs")
     runner._connect = lambda: FakeClient()  # type: ignore[method-assign]
 
     def fake_exec(client, command: str, action: str) -> tuple[int, str, str]:
@@ -328,7 +329,8 @@ def test_run_returns_per_run_audit_paths_and_records_remote_work(
 
     result = runner.run(job, RunBudget(seconds=10))
 
-    assert result.status == "completed"
+    assert result.status == "malformed_result"
+    assert "no native table export" in result.error
     assert result.audit_json_path is not None and result.audit_json_path.is_file()
     assert result.audit_log_path is not None and result.audit_log_path.is_file()
     document = json.loads(result.audit_json_path.read_text(encoding="utf-8"))
@@ -349,14 +351,21 @@ def test_failed_rerun_cannot_reuse_previous_return_code_or_results(tmp_path):
     runner = SSHSentaurusRunner(host="host", user="user", remote_root="/remote/runs")
     runner._connect = lambda: Mock()
     runner._exec = lambda client, command, action: (
-        (0, "/home/user", "") if action == "remote.get_home"
-        else (23, "", "failed") if action == "sentaurus.execute" else (0, "", "")
+        (0, "/home/user", "")
+        if action == "remote.get_home"
+        else (23, "", "failed")
+        if action == "sentaurus.execute"
+        else (0, "", "")
     )
     runner._upload_files = lambda *args: None
-    runner._download_files = lambda *args: None
+    runner._download_files = lambda *args, **kwargs: None
     job = CompiledJob(
-        backend="sentaurus", entrypoint=entrypoint, input_files=(entrypoint,),
-        input_digest="a" * 64, runtime_digest="b" * 64, compiler_version="test",
+        backend="sentaurus",
+        entrypoint=entrypoint,
+        input_files=(entrypoint,),
+        input_digest="a" * 64,
+        runtime_digest="b" * 64,
+        compiler_version="test",
     )
 
     result = runner.run(job, RunBudget(seconds=10))
@@ -373,15 +382,21 @@ def test_missing_downloaded_logs_preserve_failed_run_diagnostics(tmp_path):
     runner = SSHSentaurusRunner(host="host", user="user", remote_root="/remote/runs")
     runner._connect = lambda: Mock()
     runner._exec = lambda client, command, action: (
-        (0, "/home/user", "") if action == "remote.get_home"
+        (0, "/home/user", "")
+        if action == "remote.get_home"
         else (23, "starting\n", "site command failed\n")
-        if action == "sentaurus.execute" else (0, "", "")
+        if action == "sentaurus.execute"
+        else (0, "", "")
     )
     runner._upload_files = lambda *args: None
-    runner._download_files = lambda *args: None
+    runner._download_files = lambda *args, **kwargs: None
     job = CompiledJob(
-        backend="sentaurus", entrypoint=entrypoint, input_files=(entrypoint,),
-        input_digest="a" * 64, runtime_digest="b" * 64, compiler_version="test",
+        backend="sentaurus",
+        entrypoint=entrypoint,
+        input_files=(entrypoint,),
+        input_digest="a" * 64,
+        runtime_digest="b" * 64,
+        compiler_version="test",
     )
 
     result = runner.run(job, RunBudget(seconds=10))
@@ -409,23 +424,27 @@ def test_fractional_budget_is_not_rendered_as_disabled_timeout(tmp_path):
 
     runner._exec = remote_exec
     runner._upload_files = lambda *args: None
-    runner._download_files = lambda *args: None
+    runner._download_files = lambda *args, **kwargs: None
     job = CompiledJob(
-        backend="sentaurus", entrypoint=entrypoint, input_files=(entrypoint,),
-        input_digest="a" * 64, runtime_digest="b" * 64, compiler_version="test",
+        backend="sentaurus",
+        entrypoint=entrypoint,
+        input_files=(entrypoint,),
+        input_digest="a" * 64,
+        runtime_digest="b" * 64,
+        compiler_version="test",
     )
 
     result = runner.run(job, RunBudget(seconds=0.25))
     # run() catches remote failures; a malformed timeout must not be swallowed.
-    assert result.status == "completed", result.error
+    assert result.return_code == 0
+    assert result.status == "malformed_result"
+    assert "no native table export" in result.error
 
 
 def test_connect_closes_client_if_success_event_cannot_be_persisted(
     tmp_path: Path, monkeypatch
 ) -> None:
-    runner = SSHSentaurusRunner(
-        host="test-host", user="test-user", remote_root="/remote/runs"
-    )
+    runner = SSHSentaurusRunner(host="test-host", user="test-user", remote_root="/remote/runs")
     runner._password = "test-secret-password"
     runner._run_id = "test-run-001"
     runner._started_at = runner._timestamp()

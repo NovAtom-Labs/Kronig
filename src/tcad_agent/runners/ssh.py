@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shlex
+import stat
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -68,10 +70,7 @@ class SSHSentaurusRunner:
     def _sanitize(self, value: object) -> object:
         """Recursively make event details JSON-safe and redact secrets."""
         if isinstance(value, Mapping):
-            return {
-                self._safe_text(key): self._sanitize(item)
-                for key, item in value.items()
-            }
+            return {self._safe_text(key): self._sanitize(item) for key, item in value.items()}
         if isinstance(value, (list, tuple, set, frozenset)):
             return [self._sanitize(item) for item in value]
         if isinstance(value, (str, bytes, BaseException, Path)):
@@ -151,9 +150,7 @@ class SSHSentaurusRunner:
 
     def _connect(self) -> paramiko.SSHClient:
         if not self.host or not self.user:
-            raise SSHRunnerError(
-                "TCAD_HPSC_HOST and TCAD_HPSC_USER must be configured"
-            )
+            raise SSHRunnerError("TCAD_HPSC_HOST and TCAD_HPSC_USER must be configured")
 
         self._record(
             "ssh.connect",
@@ -237,9 +234,7 @@ class SSHSentaurusRunner:
                 exit_code=exit_code,
                 stdout_bytes=len(stdout_text.encode()),
                 stderr_bytes=len(stderr_text.encode()),
-                stderr=self._safe_text(stderr_text[-2000:])
-                if stderr_text.strip()
-                else "",
+                stderr=self._safe_text(stderr_text[-2000:]) if stderr_text.strip() else "",
             )
             return exit_code, stdout_text, stderr_text
         except Exception as exc:
@@ -317,6 +312,7 @@ class SSHSentaurusRunner:
         remote_dir: str,
         output_dir: Path,
         names: tuple[str, ...],
+        maximum_bytes: int | None = None,
     ) -> None:
         sftp = None
         try:
@@ -332,6 +328,7 @@ class SSHSentaurusRunner:
                 raise
             self._record("sftp.open_download", "succeeded")
 
+            downloaded = 0
             for name in names:
                 remote_path = f"{remote_dir}/{name}"
                 local_path = output_dir / name
@@ -343,7 +340,26 @@ class SSHSentaurusRunner:
                     remote_path=remote_path,
                 )
                 try:
-                    sftp.get(remote_path, str(local_path))
+                    if maximum_bytes is None:
+                        sftp.get(remote_path, str(local_path))
+                    else:
+                        attributes = sftp.lstat(remote_path)
+                        if (
+                            not stat.S_ISREG(attributes.st_mode)
+                            or attributes.st_size + downloaded > maximum_bytes
+                        ):
+                            raise SSHRunnerError(
+                                "export tables exceed size limit or are not regular files"
+                            )
+
+                        def check_size(
+                            transferred: int, total: int, prior: int = downloaded
+                        ) -> None:
+                            if transferred + prior > maximum_bytes:
+                                raise SSHRunnerError("export tables exceed transfer size limit")
+
+                        sftp.get(remote_path, str(local_path), callback=check_size)
+                        downloaded += local_path.stat().st_size
                     self._record(
                         "sftp.download",
                         "succeeded",
@@ -380,15 +396,30 @@ class SSHSentaurusRunner:
                 else:
                     self._record("sftp.close_download", "succeeded")
 
+    def _download_export_tables(self, client, remote_dir: str, output_dir: Path) -> None:
+        from tcad_agent.adapters.sentaurus.tables import TableExport
+
+        path = output_dir / "sentaurus-result.json"
+        if path.stat().st_size > 64 * 1024 * 1024:
+            raise SSHRunnerError("native export exceeds size limit")
+        payload = json.loads(path.read_bytes())
+        if isinstance(payload, dict) and payload.get("schema_version") == "2.0":
+            export = TableExport.model_validate(payload)
+            names = tuple(
+                sorted({item.table.file for item in export.datasets.values() if item.table})
+            )
+            if names:
+                self._download_files(
+                    client, remote_dir, output_dir, names, maximum_bytes=64 * 1024 * 1024
+                )
+
     def run(
         self,
         job: CompiledJob,
         budget: RunBudget,
     ) -> NativeRunResult:
         if job.backend != "sentaurus":
-            raise ValueError(
-                "SSH Sentaurus runner accepts only sentaurus jobs"
-            )
+            raise ValueError("SSH Sentaurus runner accepts only sentaurus jobs")
 
         workspace = job.entrypoint.parent.resolve()
         self._run_id = str(uuid4())
@@ -427,6 +458,14 @@ class SSHSentaurusRunner:
         )
 
         try:
+            manifest = None
+            if any(path.name == "job-manifest.json" for path in job.input_files):
+                from tcad_agent.adapters.sentaurus.runtime import validate_bundle
+
+                manifest = validate_bundle(
+                    job, simulator_version=os.getenv("TCAD_SENTAURUS_VERSION")
+                )
+                self._record("bundle.preflight", "succeeded", input_digest=job.input_digest)
             client = self._connect()
 
             exit_code, home_output, _ = self._exec(
@@ -436,9 +475,7 @@ class SSHSentaurusRunner:
             )
             home = home_output.strip()
             if exit_code != 0 or not home:
-                raise SSHRunnerError(
-                    "Could not determine remote home directory"
-                )
+                raise SSHRunnerError("Could not determine remote home directory")
 
             remote_root = self.remote_root
             if remote_root == "~":
@@ -453,9 +490,7 @@ class SSHSentaurusRunner:
                 remote_dir=remote_dir,
             )
 
-            mkdir_command = (
-                f"mkdir -p -- {shlex.quote(remote_dir)}"
-            )
+            mkdir_command = f"mkdir -p -- {shlex.quote(remote_dir)}"
             exit_code, _, stderr_text = self._exec(
                 client,
                 mkdir_command,
@@ -463,8 +498,7 @@ class SSHSentaurusRunner:
             )
             if exit_code != 0:
                 raise SSHRunnerError(
-                    f"Could not create remote directory: "
-                    f"{self._safe_text(stderr_text.strip())}"
+                    f"Could not create remote directory: {self._safe_text(stderr_text.strip())}"
                 )
             self._record(
                 "remote.workspace",
@@ -481,7 +515,7 @@ class SSHSentaurusRunner:
                 f"> runner.stdout.log 2> runner.stderr.log; "
                 f"rc=$?; "
                 f"printf '%s\\n' \"$rc\" > runner.return_code; "
-                f"exit \"$rc\""
+                f'exit "$rc"'
             )
 
             _exit_code, _stdout_text, _stderr_text = self._exec(
@@ -505,8 +539,14 @@ class SSHSentaurusRunner:
                     "sdevice.log",
                     "sdevice.tdr",
                     "sdevice.plt",
-                    "sentaurus-result.json",
                 ),
+            )
+            self._download_files(
+                client,
+                remote_dir,
+                output_dir,
+                ("sentaurus-result.json",),
+                maximum_bytes=64 * 1024 * 1024,
             )
 
             if return_code_path.exists():
@@ -544,6 +584,77 @@ class SSHSentaurusRunner:
                 if candidate.exists():
                     result_path = candidate
                     break
+
+            if status == "completed":
+                from tcad_agent.adapters.sentaurus.normalizer import SentaurusNormalizer
+
+                try:
+                    if result_path is None or result_path.name != "sentaurus-result.json":
+                        raise SSHRunnerError(
+                            "simulation exited successfully but no native table export "
+                            "was produced; "
+                            "binary TDR is not a canonical result"
+                        )
+                    self._download_export_tables(client, remote_dir, output_dir)
+                    normalized = SentaurusNormalizer().normalize(
+                        NativeRunResult(
+                            backend="sentaurus",
+                            status="completed",
+                            return_code=return_code,
+                            stdout_path=stdout_path,
+                            stderr_path=stderr_path,
+                            result_path=result_path,
+                            elapsed_seconds=time.monotonic() - start,
+                        )
+                    )
+                    if manifest and manifest.native_review:
+                        if normalized.simulator_version != manifest.native_review.simulator_version:
+                            raise SSHRunnerError(
+                                "native export release differs from the reviewed release"
+                            )
+                        provenance = normalized.metadata.get("declared_provenance")
+                        if provenance != {
+                            "compiler_version": manifest.compiler_version,
+                            "experiment_sha256": manifest.inputs["experiment.json"],
+                            "mesh_sha256": manifest.inputs["device.tdr"],
+                        }:
+                            raise SSHRunnerError(
+                                "native export provenance differs from the submitted bundle"
+                            )
+                        from tcad_agent.domain.models import ExperimentSpec
+
+                        spec = ExperimentSpec.model_validate_json(
+                            (workspace / "experiment.json").read_bytes()
+                        )
+                        if set(normalized.terminals) != {contact.id for contact in spec.contacts}:
+                            raise SSHRunnerError(
+                                "native export terminals differ from the submitted experiment"
+                            )
+                        points = normalized.operating_points
+                        expected = manifest.operating_points
+                        if expected:
+                            if len(points) != len(expected) or len(normalized.bias_points) != len(
+                                expected
+                            ):
+                                raise SSHRunnerError(
+                                    "native export point count differs from the submitted schedule"
+                                )
+                            for actual, requested in zip(
+                                normalized.bias_points, expected, strict=True
+                            ):
+                                if not math.isclose(
+                                    actual.bias_v, requested.bias_v, rel_tol=1e-12, abs_tol=1e-15
+                                ):
+                                    raise SSHRunnerError(
+                                        "native export bias differs from the submitted schedule"
+                                    )
+                        elif len(points) != 1:
+                            raise SSHRunnerError(
+                                "equilibrium export must contain exactly one operating point"
+                            )
+                except (OSError, ValueError, SSHRunnerError) as exc:
+                    status = "malformed_result"
+                    error = self._safe_text(exc)
 
             self._record(
                 "run.result",
