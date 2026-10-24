@@ -842,6 +842,24 @@ def test_tcad_domain_tool_declares_external_research_capability(
     assert tool.annotations.openWorldHint is True
 
 
+def test_ssh_audit_discovery_uses_the_opened_workspace_runtime(tmp_path, monkeypatch):
+    from tcad_agent.runtime.paths import RuntimePaths
+
+    monkeypatch.delenv("TCAD_WORKSPACE", raising=False)
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "managed"))
+    workspace = tmp_path / "selected-repo"
+    workspace.mkdir()
+    audit_dir = RuntimePaths.from_workspace(workspace).bundle_root / "run-current" / "logs"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / "ssh-audit.json").write_text(
+        '{"schema_version": 1, "run_id": "remote-run", "events": []}', encoding="utf-8"
+    )
+
+    tools = build_tools(workspace)
+    assert tools.read_ssh_audit().data["runs"][0]["bundle_run_id"] == "run-current"
+    assert tools.read_ssh_audit("run-current").data["audit"]["run_id"] == "remote-run"
+
+
 def test_llm_can_read_ssh_audit_from_experiment_bundle(
     tmp_path: Path, monkeypatch
 ) -> None:

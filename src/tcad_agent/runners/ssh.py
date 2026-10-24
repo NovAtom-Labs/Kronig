@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import getpass
 import json
 import os
 import shlex
 import time
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -52,7 +51,7 @@ class SSHSentaurusRunner:
 
     @staticmethod
     def _timestamp() -> str:
-        return datetime.now(timezone.utc).isoformat()
+        return datetime.now(UTC).isoformat()
 
     def _safe_text(self, value: object) -> str:
         """Convert a value to text while redacting the configured SSH password."""
@@ -150,20 +149,6 @@ class SSHSentaurusRunner:
                 f"Could not initialize SSH audit files ({type(exc).__name__})"
             ) from exc
 
-    def _get_password(self) -> str:
-        if not self._password:
-            if not self.user or not self.host:
-                raise SSHRunnerError(
-                    "TCAD_HPSC_HOST and TCAD_HPSC_USER must be configured"
-                )
-
-            self._password = getpass.getpass(
-                f"HPSC password for {self.user}@{self.host}: "
-            )
-            os.environ["TCAD_HPSC_PASSWORD"] = self._password
-
-        return self._password
-
     def _connect(self) -> paramiko.SSHClient:
         if not self.host or not self.user:
             raise SSHRunnerError(
@@ -179,14 +164,17 @@ class SSHSentaurusRunner:
         )
 
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
         try:
+            client.load_system_host_keys()
+            client.set_missing_host_key_policy(paramiko.RejectPolicy())
             client.connect(
                 hostname=self.host,
                 port=self.port,
                 username=self.user,
-                password=self._get_password(),
+                password=self._password,
+                allow_agent=True,
+                look_for_keys=True,
                 timeout=15,
                 banner_timeout=15,
                 auth_timeout=15,
@@ -407,7 +395,7 @@ class SSHSentaurusRunner:
         self._started_at = self._timestamp()
         self._audit_events = []
 
-        output_dir = workspace / "ssh-result"
+        output_dir = workspace / "ssh-result" / self._run_id
         output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._initialize_audit(output_dir)
         audit_json_path = self._audit_json_path
@@ -488,7 +476,7 @@ class SSHSentaurusRunner:
 
             command = (
                 f"cd {shlex.quote(remote_dir)} && "
-                f"timeout {int(budget.seconds)}s "
+                f"timeout {budget.seconds:g}s "
                 f"sdevice {shlex.quote(job.entrypoint.name)} "
                 f"> runner.stdout.log 2> runner.stderr.log; "
                 f"rc=$?; "
@@ -501,6 +489,10 @@ class SSHSentaurusRunner:
                 command,
                 "sentaurus.execute",
             )
+
+            # Retain shell diagnostics even if the remote logs cannot be fetched.
+            stdout_path.write_text(self._safe_text(_stdout_text), encoding="utf-8")
+            stderr_path.write_text(self._safe_text(_stderr_text), encoding="utf-8")
 
             self._download_files(
                 client,

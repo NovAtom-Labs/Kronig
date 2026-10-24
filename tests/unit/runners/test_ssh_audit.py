@@ -1,3 +1,4 @@
+import getpass
 import json
 from pathlib import Path
 from unittest.mock import Mock
@@ -23,6 +24,54 @@ def make_runner(tmp_path: Path) -> SSHSentaurusRunner:
 def read_audit(runner: SSHSentaurusRunner) -> dict:
     assert runner._audit_json_path is not None
     return json.loads(runner._audit_json_path.read_text(encoding="utf-8"))
+
+
+def test_connection_rejects_unknown_server_keys(tmp_path, monkeypatch):
+    import paramiko
+
+    runner = make_runner(tmp_path)
+    runner.host, runner.user, runner.port = "untrusted.invalid", "researcher", 22
+    client = paramiko.SSHClient()
+    monkeypatch.setattr(client, "_log", lambda *args: None)
+    monkeypatch.setattr(paramiko, "SSHClient", lambda: client)
+
+    def attempt_connection(**kwargs):
+        key = paramiko.RSAKey.generate(2048)
+        client._policy.missing_host_key(client, kwargs["hostname"], key)
+
+    monkeypatch.setattr(client, "connect", attempt_connection)
+    with pytest.raises(paramiko.SSHException, match="not found in known_hosts"):
+        runner._connect()
+
+
+def test_key_agent_auth_does_not_prompt_or_export_password(tmp_path, monkeypatch):
+    import os
+
+    import paramiko
+
+    runner = make_runner(tmp_path)
+    runner.host, runner.user, runner.port = "known.invalid", "researcher", 22
+    runner._password = None
+    monkeypatch.delenv("TCAD_HPSC_PASSWORD", raising=False)
+
+    def hidden_prompt(*args, **kwargs):
+        pytest.fail("Desktop SSH must not open a hidden password prompt")
+
+    monkeypatch.setattr(getpass, "getpass", hidden_prompt)
+    client = paramiko.SSHClient()
+    monkeypatch.setattr(paramiko, "SSHClient", lambda: client)
+
+    def key_agent_connection(**kwargs):
+        assert kwargs.get("password") is None
+        assert kwargs.get("allow_agent", True)
+        assert kwargs.get("look_for_keys", True)
+
+    monkeypatch.setattr(client, "connect", key_agent_connection)
+    try:
+        assert runner._connect() is client
+        assert "TCAD_HPSC_PASSWORD" not in os.environ
+    finally:
+        client.close()
 
 
 def test_record_writes_valid_json_and_readable_log(tmp_path: Path) -> None:
@@ -75,11 +124,11 @@ def test_exec_records_actual_nonzero_exit_code(tmp_path: Path) -> None:
     assert stderr_text == "Sentaurus failed"
 
     events = read_audit(runner)["events"]
-    result_event = [
+    result_event = next(
         event for event in events
         if event["action"] == "sentaurus.execute"
         and event["status"] == "failed"
-    ][0]
+    )
 
     assert result_event["details"]["exit_code"] == 23
     assert "Sentaurus failed" in result_event["details"]["stderr"]
@@ -95,11 +144,11 @@ def test_exec_records_and_reraises_ssh_exception(tmp_path: Path) -> None:
         runner._exec(client, "printf test", "remote.test")
 
     events = read_audit(runner)["events"]
-    failure = [
+    failure = next(
         event for event in events
         if event["action"] == "remote.test"
         and event["status"] == "failed"
-    ][0]
+    )
 
     assert "connection reset" in failure["details"]["error"]
 
@@ -122,11 +171,11 @@ def test_download_connection_error_is_recorded_as_failure(
         )
 
     events = read_audit(runner)["events"]
-    failure = [
+    failure = next(
         event for event in events
         if event["action"] == "sftp.download"
         and event["status"] == "failed"
-    ][0]
+    )
 
     assert failure["details"]["filename"] == "device.tdr"
     assert "connection reset" in failure["details"]["error"]
@@ -150,11 +199,11 @@ def test_missing_download_is_marked_unavailable(
     )
 
     events = read_audit(runner)["events"]
-    unavailable = [
+    unavailable = next(
         event for event in events
         if event["action"] == "sftp.download"
         and event["status"] == "unavailable"
-    ][0]
+    )
 
     assert unavailable["details"]["filename"] == "optional.plt"
 
@@ -288,6 +337,87 @@ def test_run_returns_per_run_audit_paths_and_records_remote_work(
     assert "sentaurus.execute" in actions
     assert actions[-1] == "run.finish"
     assert "stale run" not in result.audit_log_path.read_text(encoding="utf-8")
+
+
+def test_failed_rerun_cannot_reuse_previous_return_code_or_results(tmp_path):
+    entrypoint = tmp_path / "device.cmd"
+    entrypoint.write_text("solve\n", encoding="utf-8")
+    stale = tmp_path / "ssh-result"
+    stale.mkdir()
+    (stale / "runner.return_code").write_text("0\n", encoding="utf-8")
+    (stale / "sentaurus-result.json").write_text('{"old": true}', encoding="utf-8")
+    runner = SSHSentaurusRunner(host="host", user="user", remote_root="/remote/runs")
+    runner._connect = lambda: Mock()
+    runner._exec = lambda client, command, action: (
+        (0, "/home/user", "") if action == "remote.get_home"
+        else (23, "", "failed") if action == "sentaurus.execute" else (0, "", "")
+    )
+    runner._upload_files = lambda *args: None
+    runner._download_files = lambda *args: None
+    job = CompiledJob(
+        backend="sentaurus", entrypoint=entrypoint, input_files=(entrypoint,),
+        input_digest="a" * 64, runtime_digest="b" * 64, compiler_version="test",
+    )
+
+    result = runner.run(job, RunBudget(seconds=10))
+
+    assert result.return_code == 23
+    assert result.status == "execution_failed"
+    assert result.result_path is None
+    assert (stale / "sentaurus-result.json").read_text(encoding="utf-8") == '{"old": true}'
+
+
+def test_missing_downloaded_logs_preserve_failed_run_diagnostics(tmp_path):
+    entrypoint = tmp_path / "device.cmd"
+    entrypoint.write_text("solve\n", encoding="utf-8")
+    runner = SSHSentaurusRunner(host="host", user="user", remote_root="/remote/runs")
+    runner._connect = lambda: Mock()
+    runner._exec = lambda client, command, action: (
+        (0, "/home/user", "") if action == "remote.get_home"
+        else (23, "starting\n", "site command failed\n")
+        if action == "sentaurus.execute" else (0, "", "")
+    )
+    runner._upload_files = lambda *args: None
+    runner._download_files = lambda *args: None
+    job = CompiledJob(
+        backend="sentaurus", entrypoint=entrypoint, input_files=(entrypoint,),
+        input_digest="a" * 64, runtime_digest="b" * 64, compiler_version="test",
+    )
+
+    result = runner.run(job, RunBudget(seconds=10))
+
+    assert result.stdout_path.read_text(encoding="utf-8") == "starting\n"
+    assert result.stderr_path.read_text(encoding="utf-8") == "site command failed\n"
+    assert result.error == "site command failed\n"
+
+
+def test_fractional_budget_is_not_rendered_as_disabled_timeout(tmp_path):
+    import shlex
+
+    entrypoint = tmp_path / "device.cmd"
+    entrypoint.write_text("solve\n", encoding="utf-8")
+    runner = SSHSentaurusRunner(host="host", user="user", remote_root="/remote/runs")
+    runner._connect = lambda: Mock()
+
+    def remote_exec(client, command, action):
+        if action == "remote.get_home":
+            return 0, "/home/user", ""
+        if action == "sentaurus.execute":
+            tokens = shlex.split(command)
+            assert tokens[tokens.index("timeout") + 1] == "0.25s"
+        return 0, "", ""
+
+    runner._exec = remote_exec
+    runner._upload_files = lambda *args: None
+    runner._download_files = lambda *args: None
+    job = CompiledJob(
+        backend="sentaurus", entrypoint=entrypoint, input_files=(entrypoint,),
+        input_digest="a" * 64, runtime_digest="b" * 64, compiler_version="test",
+    )
+
+    result = runner.run(job, RunBudget(seconds=0.25))
+    # run() catches remote failures; a malformed timeout must not be swallowed.
+    assert result.status == "completed", result.error
 
 
 def test_connect_closes_client_if_success_event_cannot_be_persisted(

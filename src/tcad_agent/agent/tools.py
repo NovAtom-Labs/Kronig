@@ -816,10 +816,11 @@ class DomainTools:
     def read_ssh_audit(self, run_id: str | None = None) -> ToolResponse:
         """List available SSH audits or read one by experiment bundle run ID."""
         configured_root = os.getenv("TCAD_WORKSPACE")
-        workspace_root = Path(
-            configured_root or (Path.cwd() / ".tcad-agent")
-        ).expanduser().resolve()
-        bundles_root = (workspace_root / "bundles").resolve()
+        bundles_root = (
+            Path(configured_root).expanduser().resolve() / "bundles"
+            if configured_root
+            else RuntimePaths.from_workspace(self.workspace).bundle_root
+        ).resolve()
 
         if run_id is None or not run_id.strip():
             if not bundles_root.is_dir():

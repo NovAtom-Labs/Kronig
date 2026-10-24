@@ -8,6 +8,32 @@ The current compiler expects a reviewed `device.tdr` structure or mesh artifact 
 
 DEVSIM remains independent and runnable throughout this work.
 
+## SSH development branch
+
+The `feature/ssh-remote-tcad` branch also contains an SSH/SFTP execution bridge.
+It keeps the application local and does not require the HTTPS service or a modern
+Python installation on the remote host. It is not yet a generic remote agentic
+workspace. Remote repository browsing/editing, managed interactive jobs, scheduler
+support, verified cancellation and native result export remain development work.
+
+The bridge uses `TCAD_SENTAURUS_RUNNER=ssh`, `TCAD_HPSC_HOST`, `TCAD_HPSC_USER`,
+optional `TCAD_HPSC_PORT` and `TCAD_HPSC_REMOTE_ROOT`. It loads the current user's
+known-host keys and rejects unknown or changed server keys. Before using Kronig,
+verify the server fingerprint with the HPC administrator and establish the correct
+known-host entry through your normal authorized SSH login. Do not disable host-key
+checking or trust an unverified `ssh-keyscan` result.
+
+Existing SSH agent/default identity keys are supported. An explicitly supplied
+`TCAD_HPSC_PASSWORD` is accepted for compatibility but is never collected through
+an invisible terminal or written back into the process environment. No password is
+required when key authentication is available. Do not put credentials in tracked
+files. SSH-config aliases, ProxyJump and interactive MFA are not implemented by
+this Paramiko bridge; successful command-line SSH alone does not qualify them.
+
+The bridge does not generate a missing mesh, decode arbitrary TDR binaries, bypass
+license checks or prove that a disconnected remote process has stopped. Its
+presence does not mark Sentaurus configured or scientifically qualified.
+
 ## Stable switching boundary
 
 The natural-language request, clarification flow, `ExperimentSpec`, capability check, plan approval, validation, evidence bundle, and report do not depend on either simulator. Backend-specific code is limited to the adapter, runner, normalizer, and capability manifest.
