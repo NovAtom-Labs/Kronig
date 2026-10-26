@@ -128,3 +128,13 @@ def sentaurus_manifest():
     from tcad_agent.capabilities.models import CapabilityManifest
 
     return CapabilityManifest.from_backend("sentaurus")
+
+
+@pytest.fixture(autouse=True)
+def isolate_sentaurus_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent developer-specific Sentaurus settings from leaking into tests."""
+    import os
+
+    for key in tuple(os.environ):
+        if key.startswith("TCAD_SENTAURUS_"):
+            monkeypatch.delenv(key, raising=False)

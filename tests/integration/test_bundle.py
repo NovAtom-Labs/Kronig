@@ -248,3 +248,47 @@ def test_failed_bundle_write_removes_staging_directory(
         BundleWriter(root).write(inputs)
 
     assert not (root / ".run-0001.staging").exists()
+
+
+def test_bundle_includes_and_hashes_ssh_audit_artifacts(
+    tmp_path: Path, valid_spec: ExperimentSpec
+) -> None:
+    inputs = bundle_inputs(tmp_path, valid_spec)
+    audit_json = tmp_path / "ssh-audit.json"
+    audit_log = tmp_path / "ssh-audit.log"
+    audit_json.write_text(
+        json.dumps({"schema_version": 1, "run_id": "ssh-run", "events": []}),
+        encoding="utf-8",
+    )
+    audit_log.write_text("[SUCCEEDED] ssh.connect\n", encoding="utf-8")
+    native = inputs.native.model_copy(
+        update={"audit_json_path": audit_json, "audit_log_path": audit_log}
+    )
+    inputs = inputs.model_copy(update={"native": native})
+
+    bundle = BundleWriter(tmp_path / "bundles").write(inputs)
+    copied_json = bundle.root / "logs" / "ssh-audit.json"
+    copied_log = bundle.root / "logs" / "ssh-audit.log"
+    manifest = json.loads((bundle.root / "manifest.json").read_text(encoding="utf-8"))
+
+    assert json.loads(copied_json.read_text(encoding="utf-8"))["run_id"] == "ssh-run"
+    assert "ssh.connect" in copied_log.read_text(encoding="utf-8")
+    for relative in ("logs/ssh-audit.json", "logs/ssh-audit.log"):
+        item = manifest["artifacts"][relative]
+        data = (bundle.root / relative).read_bytes()
+        assert hashlib.sha256(data).hexdigest() == item["sha256"]
+
+
+def test_bundle_fails_if_declared_ssh_audit_is_missing(
+    tmp_path: Path, valid_spec: ExperimentSpec
+) -> None:
+    inputs = bundle_inputs(tmp_path, valid_spec)
+    native = inputs.native.model_copy(
+        update={"audit_json_path": tmp_path / "missing-ssh-audit.json"}
+    )
+    inputs = inputs.model_copy(update={"native": native})
+
+    bundle_root = tmp_path / "bundles"
+    with pytest.raises(FileNotFoundError, match="SSH JSON audit trail"):
+        BundleWriter(bundle_root).write(inputs)
+    assert not (bundle_root / ".run-0001.staging").exists()

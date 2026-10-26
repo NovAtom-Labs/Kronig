@@ -32,4 +32,6 @@ class NativeRunResult(StrictModel):
     result_path: Path | None = None
     elapsed_seconds: float = Field(ge=0)
     error: str | None = None
+    audit_json_path: Path | None = None
+    audit_log_path: Path | None = None
 

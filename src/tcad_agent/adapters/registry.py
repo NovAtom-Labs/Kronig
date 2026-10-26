@@ -13,6 +13,7 @@ from tcad_agent.desktop.devsim_runner import DevsimSidecarRunner
 from tcad_agent.runners.local import LocalRunner
 from tcad_agent.runners.models import CompiledJob, NativeRunResult, RunBudget
 from tcad_agent.runners.remote import RemoteRunnerConfig, RemoteSentaurusRunner
+from tcad_agent.runners.ssh import SSHSentaurusRunner
 
 
 class BackendAdapterUnavailable(RuntimeError):
@@ -42,6 +43,7 @@ def resolve_devsim_python(project_root: Path | None = None) -> Path:
         sibling_environment / "Scripts" / "python.exe",
         sibling_environment / "bin" / "python",
     )
+
     return next(
         (candidate.absolute() for candidate in candidates if candidate.is_file()),
         Path(sys.executable).absolute(),
@@ -50,20 +52,42 @@ def resolve_devsim_python(project_root: Path | None = None) -> Path:
 
 def get_backend(backend: str) -> BackendBinding:
     """Return the installed backend binding or refuse at one explicit seam."""
+
     if backend == "devsim":
         packaged_runner = os.getenv("AGENT_KRONIG_DEVSIM_RUNNER")
+
         if packaged_runner:
             return BackendBinding(
                 adapter=DevsimAdapter.from_defaults(),
                 runner=DevsimSidecarRunner(Path(packaged_runner)),
             )
+
         return BackendBinding(
             adapter=DevsimAdapter.from_defaults(),
             runner=LocalRunner(resolve_devsim_python()),
         )
+
     if backend == "sentaurus":
-        return BackendBinding(
-            adapter=SentaurusAdapter.from_defaults(),
-            runner=RemoteSentaurusRunner(RemoteRunnerConfig.from_environment()),
+        runner_type = os.getenv("TCAD_SENTAURUS_RUNNER", "remote").lower()
+
+        if runner_type == "ssh":
+            return BackendBinding(
+                adapter=SentaurusAdapter.from_defaults(),
+                runner=SSHSentaurusRunner(),
+            )
+
+        if runner_type == "remote":
+            return BackendBinding(
+                adapter=SentaurusAdapter.from_defaults(),
+                runner=RemoteSentaurusRunner(
+                    RemoteRunnerConfig.from_environment()
+                ),
+            )
+
+        raise BackendAdapterUnavailable(
+            f"unknown Sentaurus runner: {runner_type}"
         )
-    raise BackendAdapterUnavailable(f"{backend} adapter and runner are not installed")
+
+    raise BackendAdapterUnavailable(
+        f"{backend} adapter and runner are not installed"
+    )

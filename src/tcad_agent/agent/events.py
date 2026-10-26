@@ -99,6 +99,7 @@ def structured_action_metadata(event: ActionEvent) -> dict[str, JsonValue]:
             "read_canonical_summary": "inspect",
             "validate_bundle": "validate",
             "search_knowledge": "inspect",
+            "read_ssh_audit": "inspect",
             "search_web": "inspect",
             "fetch_source": "inspect",
             "build_report": "report",
@@ -231,6 +232,7 @@ class AgentEventBridge:
         self.events = events
         self.conversations = conversations
         self.workspace = workspace.resolve() if workspace is not None else None
+        self.original_request: str | None = None
         raw_grants = permission_grants if permission_grants is not None else set()
         normalized_grants = {PermissionCategory(value) for value in raw_grants}
         raw_grants.clear()

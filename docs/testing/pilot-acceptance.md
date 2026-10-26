@@ -82,14 +82,16 @@ requires the repaired repository to pass its deterministic 100-point scientific 
 1. Complete every item in `docs/operations/sentaurus-integration.md`.
 2. Run the same approved portable case through the signed remote service.
 3. Verify the exact simulator release, job signature, archive digest, result hashes, and retained audit record.
-4. Normalize the allowlisted native result and reject missing, duplicate, non-monotonic, or non-finite data.
-5. Run the conformance marker:
+4. For the SSH runner (`TCAD_SENTAURUS_RUNNER=ssh`), confirm the bundle contains `logs/ssh-audit.json` and `logs/ssh-audit.log`; verify connect/disconnect, remote commands and exit codes, uploads/downloads, and failures are recorded with timestamps.
+5. Use the `tcad_domain` `read_ssh_audit` operation with the bundle run ID and confirm the LLM receives the structured JSON events and readable log.
+6. Normalize the allowlisted native result and reject missing, duplicate, non-monotonic, or non-finite data.
+7. Run the conformance marker:
 
 ```bash
 .venv/bin/pytest -m sentaurus tests/integration/test_cross_backend_conformance.py -q
 ```
 
-6. Require the expert-reviewed per-case tolerances to pass. A skipped test, fixture-only pass, or locally compiled deck is not a real Sentaurus acceptance.
+8. Require the expert-reviewed per-case tolerances to pass. A skipped test, fixture-only pass, or locally compiled deck is not a real Sentaurus acceptance.
 
 ## Exit evidence
 

@@ -50,7 +50,6 @@ Agent Kronig artifact policy:
 """.strip()
 
 SCIENTIFIC_RESEARCH_POLICY = """
-
 Agent Kronig scientific research policy:
 - Use local knowledge first for TCAD physics, simulator behavior, model selection,
   numerical parameters, and scientific interpretation.
@@ -82,7 +81,7 @@ Agent Kronig scientific research policy:
   digest. Then pass that unchanged prepared record and digest to execute_experiment.
 - After execute_approved_plan returns, stop. The product records the typed outcome and
   opens the Results Workbench for the researcher, including failed executions.
-- Do not search Agent Kronig source, previous run bundles, application data, or external
+- Do not search Agent Kronik source, previous run bundles, application data, or external
   files to improvise a recovery after controlled execution. Numerical recovery belongs
   inside the deterministic adapter and its reviewed recovery budget.
 - Use inspect_bundle, read_canonical_summary, and validate_bundle only for an explicit
@@ -142,7 +141,8 @@ class WorkspaceTaskToolSet(TaskToolSet):
 
         def confirm_child_actions(_task_id: str, actions: list[ActionEvent]) -> bool:
             return all(
-                classify_action(workspace, action) is not SecurityRisk.HIGH for action in actions
+                classify_action(workspace, action) is not SecurityRisk.HIGH
+                for action in actions
             )
 
         return super().create(conv_state, confirmation_handler=confirm_child_actions)
@@ -174,7 +174,7 @@ def _load_runtime_skills(workspace: Path) -> list[Any]:
 def build_runtime(workspace: Path) -> OpenHandsRuntimeProfile:
     context = AgentContext(
         skills=_load_runtime_skills(workspace),
-        system_message_suffix=(f"{ARTIFACT_INTENT_POLICY}\n\n{SCIENTIFIC_RESEARCH_POLICY}"),
+        system_message_suffix=f"{ARTIFACT_INTENT_POLICY}\n\n{SCIENTIFIC_RESEARCH_POLICY}",
     )
     tools = get_default_tools(enable_browser=False, enable_sub_agents=False)
     tools.append(Tool(name=WorkspaceTaskToolSet.name))
@@ -202,30 +202,45 @@ class OpenHandsRuntimeFactory:
         callback: Callable[[Event], None],
     ) -> RuntimeConversation:
         profile = build_runtime(workspace)
+
         intent = getattr(callback, "research_intent", None)
+        original_request = getattr(callback, "original_request", None)
+
         tools = [
             tool.model_copy(
                 update={
-                    "params": {**tool.params, "research_intent": intent.model_dump(mode="json")}
+                    "params": {
+                        **tool.params,
+                        "research_intent": (
+                            intent.model_dump(mode="json") if intent else None
+                        ),
+                        "original_request": original_request,
+                    }
                 }
             )
-            if tool.name == TcadDomainTool.name and intent
+            if tool.name == TcadDomainTool.name
             else tool
             for tool in profile.tools
         ]
+
         register_builtins_agents(enable_browser=False)
         register_file_agents(PROJECT_ROOT)
         register_file_agents(workspace)
+
         llm = self.llm or llm_from_environment()
         agent = Agent(
             llm=llm,
             tools=tools,
             agent_context=profile.context,
-            condenser=get_default_condenser(llm.model_copy(update={"usage_id": "condenser"})),
+            condenser=get_default_condenser(
+                llm.model_copy(update={"usage_id": "condenser"})
+            ),
             tool_concurrency_limit=2,
         )
+
         persistence_dir = self.runtime_root / "openhands"
         persistence_dir.mkdir(parents=True, exist_ok=True)
+
         on_stream = getattr(callback, "on_stream", None)
         conversation = LocalConversation(
             agent=agent,
@@ -238,8 +253,10 @@ class OpenHandsRuntimeFactory:
             visualizer=None,
             delete_on_close=False,
         )
+
         permission_grants = cast(
-            set[PermissionCategory], getattr(callback, "permission_grants", set())
+            set[PermissionCategory],
+            getattr(callback, "permission_grants", set()),
         )
         conversation.set_security_analyzer(
             WorkspaceSecurityAnalyzer(

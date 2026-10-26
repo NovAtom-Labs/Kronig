@@ -169,6 +169,89 @@ def test_unsupported_observable_is_refused(tmp_path: Path) -> None:
 def test_metal_work_function_contacts_are_explicit(tmp_path: Path) -> None:
     SentaurusAdapter.from_defaults().compile(equilibrium_spec(), tmp_path / "job")
     deck = (tmp_path / "job" / "sdevice.cmd").read_text()
-    assert '{ Name="anode" Voltage=0 WorkFunction=4.1 }' in deck
-    assert '{ Name="cathode" Voltage=0 WorkFunction=4.1 }' in deck
+    assert '{ Name="anode" Voltage=0 Schottky WorkFunction=4.1 }' in deck
+    assert '{ Name="cathode" Voltage=0 Schottky WorkFunction=4.1 }' in deck
     assert "Barrier" not in deck
+
+
+def test_region_count_is_not_a_device_template(tmp_path):
+    data = equilibrium_spec().model_dump(mode="json")
+    data["regions"][1]["x1"] = "1.5 um"
+    data["regions"].append({"id": "cap", "material": "silicon", "x0": "1.5 um", "x1": "2 um"})
+    spec = ExperimentSpec.model_validate(data)
+    job = SentaurusAdapter.from_defaults().compile(spec, tmp_path / "job")
+    assert len(json.loads((job.entrypoint.parent / "experiment.json").read_text())["regions"]) == 3
+
+
+def test_selected_equations_and_contact_offsets_are_preserved(tmp_path):
+    data = equilibrium_spec().model_dump(mode="json")
+    data["physics"] = {"equations": ["poisson"], "models": ["boltzmann"], "temperature": "325 K"}
+    data["observables"] = ["potential"]
+    data["contacts"][0]["voltage_offset"] = "0.15 V"
+    spec = ExperimentSpec.model_validate(data)
+    job = SentaurusAdapter.from_defaults().compile(spec, tmp_path / "job")
+    deck = job.entrypoint.read_text()
+    assert 'Name="anode" Voltage=0.15' in deck
+    assert "Coupled { Poisson }" in deck
+    assert "Coupled { Poisson Electron Hole }" not in deck
+    assert "Temperature=325" in deck
+
+
+@pytest.mark.parametrize(
+    "study, targets",
+    [
+        (
+            {"kind": "dc", "contact": "anode", "start": "0.4 V", "stop": "-0.1 V", "step": "0.3 V"},
+            ["0.4", "0.1", "-0.1"],
+        ),
+        (
+            {"kind": "dc_points", "contact": "cathode", "values": ["-2 V", "0 V", "2 V"]},
+            ["-2", "0", "2"],
+        ),
+    ],
+)
+def test_dc_ramps_reach_exact_targets_and_write_distinct_profiles(tmp_path, study, targets):
+    data = equilibrium_spec().model_dump(mode="json")
+    data["study"] = study
+    data["observables"].remove("fermi_level")
+    job = SentaurusAdapter.from_defaults().compile(
+        ExperimentSpec.model_validate(data), tmp_path / "job"
+    )
+    deck = job.entrypoint.read_text()
+    goals = [line.strip() for line in deck.splitlines() if "Goal {" in line]
+    assert goals == [f'Goal {{ Name="{study["contact"]}" Voltage={target} }}' for target in targets]
+    assert deck.count("InitialStep=0.1 MinStep=1e-6 MaxStep=0.1") == 3
+    for index in range(3):
+        assert f'Plot(FilePrefix="point_{index:04d}" NoOverWrite)' in deck
+    manifest = json.loads((job.entrypoint.parent / "job-manifest.json").read_text())
+    assert [point["bias_v"] for point in manifest["operating_points"]] == pytest.approx(
+        [float(x) for x in targets]
+    )
+
+
+def test_unmapped_physics_parameters_fail_before_writing(tmp_path):
+    data = equilibrium_spec().model_dump(mode="json")
+    data["physics"]["parameters"] = {"electron_lifetime": "1 us"}
+    with pytest.raises(SentaurusCompilerSafetyError, match="parameters"):
+        SentaurusAdapter.from_defaults().compile(
+            ExperimentSpec.model_validate(data), tmp_path / "job"
+        )
+    assert not (tmp_path / "job").exists()
+
+
+def test_solver_iteration_limit_is_mapped(tmp_path):
+    data = equilibrium_spec().model_dump(mode="json")
+    data["solver"]["maximum_iterations"] = 123
+    job = SentaurusAdapter.from_defaults().compile(
+        ExperimentSpec.model_validate(data), tmp_path / "job"
+    )
+    assert "Iterations=123" in job.entrypoint.read_text()
+
+
+def test_hole_only_richardson_override_is_not_silently_ignored(tmp_path):
+    data = equilibrium_spec().model_dump(mode="json")
+    data["contacts"][0]["hole_richardson_constant"] = "20 A/cm^2/K^2"
+    with pytest.raises(SentaurusCompilerSafetyError, match="Richardson"):
+        SentaurusAdapter.from_defaults().compile(
+            ExperimentSpec.model_validate(data), tmp_path / "job"
+        )

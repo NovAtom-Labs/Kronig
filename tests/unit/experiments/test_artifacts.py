@@ -105,7 +105,15 @@ def test_plan_writer_rejects_symlink_escape(
     outside = tmp_path / "outside"
     outside.mkdir()
     (tmp_path / "workspace" / "experiments").parent.mkdir()
-    (tmp_path / "workspace" / "experiments").symlink_to(outside, target_is_directory=True)
+    try:
+        (tmp_path / "workspace" / "experiments").symlink_to(
+            outside, target_is_directory=True
+        )
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Symlink creation requires Windows privileges unavailable here")
+        raise
+
     prepared = ExperimentEngine().prepare(valid_spec, "devsim")
 
     with pytest.raises(ValueError, match="symlink"):
@@ -119,3 +127,27 @@ def test_plan_quantity_text_preserves_canonical_precision_for_repository_reuse()
     original = QuantityValue.model_validate("4.35 eV")
     literal = _display(original.model_dump()).strip("`")
     assert QuantityValue.model_validate(literal) == original
+
+def test_plan_artifacts_preserve_original_request_and_hash(
+    tmp_path: Path,
+    valid_spec: ExperimentSpec,
+) -> None:
+    import hashlib
+
+    original_request = (
+        "Simulate a silicon diode at 300 K. "
+        "Preserve the requested voltage sweep from 0 V to 1 V."
+    )
+    prepared = ExperimentEngine().prepare(valid_spec, "devsim")
+    artifact = ExperimentPlanArtifactWriter(tmp_path).write(
+        prepared,
+        original_request=original_request,
+    )
+
+    payload = json.loads(artifact.json_path.read_text(encoding="utf-8"))
+    expected_hash = hashlib.sha256(original_request.encode("utf-8")).hexdigest()
+
+    assert payload["original_request"]["text"] == original_request
+    assert payload["original_request"]["sha256"] == expected_hash
+    assert original_request in artifact.markdown_path.read_text(encoding="utf-8")
+    assert expected_hash in artifact.markdown_path.read_text(encoding="utf-8")

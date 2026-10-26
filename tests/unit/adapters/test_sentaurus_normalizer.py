@@ -39,9 +39,7 @@ def test_valid_result_is_normalized_to_si_units() -> None:
     assert result.fields["potential"].positions_m[-1] == pytest.approx(2.0e-6)
     assert result.fields["electric_field"].values[2] == pytest.approx(-1.25e6)
     assert result.fields["electron_density"].values[-1] == pytest.approx(1.0e23)
-    assert result.bias_points[0].terminal_currents_a_per_m2["anode"] == pytest.approx(
-        1.0e-12
-    )
+    assert result.bias_points[0].terminal_currents_a_per_m2["anode"] == pytest.approx(1.0e-12)
 
 
 def test_missing_required_column_is_rejected(tmp_path: Path) -> None:
@@ -79,3 +77,16 @@ def test_exact_simulator_version_is_required(tmp_path: Path) -> None:
     with pytest.raises(SentaurusNormalizationError, match="invalid schema"):
         SentaurusNormalizer().normalize(native(path))
 
+
+def test_legacy_density_with_voltage_unit_is_rejected(tmp_path):
+    path = mutate(tmp_path, lambda data: data["fields"]["electron_density"].update(unit="V"))
+    with pytest.raises(SentaurusNormalizationError, match="unit"):
+        SentaurusNormalizer().normalize(native(path))
+
+
+def test_legacy_unknown_terminal_is_rejected(tmp_path):
+    path = mutate(
+        tmp_path, lambda data: data["bias_points"][0]["terminal_current_density"].update(ghost=1)
+    )
+    with pytest.raises(SentaurusNormalizationError, match="terminal"):
+        SentaurusNormalizer().normalize(native(path))

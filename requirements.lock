@@ -53,6 +53,8 @@ authlib==1.8.0
     #   fastmcp-slim
 backoff==2.2.1
     # via posthog
+bcrypt==5.0.0
+    # via paramiko
 beartype==0.22.9
     # via py-key-value-aio
 beautifulsoup4==4.15.0
@@ -252,6 +254,8 @@ iniconfig==2.3.0
     # via pytest
 inquirerpy==0.3.4
     # via browser-use
+invoke==3.0.3
+    # via paramiko
 jaraco-classes==3.4.0
     # via keyring
 jaraco-context==6.1.2
@@ -415,6 +419,8 @@ packaging==26.3
     #   opentelemetry-instrumentation
     #   pytest
     #   wheel
+paramiko==4.0.0
+    # via novatom-tcad-agent (pyproject.toml)
 pathable==0.6.0
     # via jsonschema-path
 pathspec==1.1.1
@@ -512,6 +518,8 @@ pyobjc-core==12.2.2
     # via pyobjc-framework-cocoa
 pyobjc-framework-cocoa==12.2.2
     # via screeninfo
+pynacl==1.6.2
+    # via paramiko
 pyotp==2.10.0
     # via browser-use
 pyparsing==3.3.3

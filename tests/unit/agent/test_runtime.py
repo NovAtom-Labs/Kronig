@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 from tcad_agent.agent.runtime import build_runtime
 
@@ -95,5 +95,5 @@ def test_runtime_hands_typed_simulation_results_back_to_product_ui(
     suffix = (build_runtime(tmp_path).context.system_message_suffix or "").lower()
 
     assert "after execute_approved_plan returns, stop" in suffix
-    assert "do not search agent kronig source" in suffix
+    assert "do not search agent kronik source" in suffix
     assert "deterministic adapter" in suffix

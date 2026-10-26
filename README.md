@@ -195,9 +195,18 @@ for definitions and limitations.
 | Recombination | Bulk SRH, Auger, surface SRH, and single-level charged interface traps | SRH and Auger |
 | Band-gap narrowing | Reviewed Slotboom implementation | Supported by the adapter contract |
 | Temperature | Scalar temperature, temperature studies, and prescribed constant, linear, piecewise-constant, or tabulated silicon profiles in the reviewed DC envelope | Scalar temperature |
-| Studies | Equilibrium, DC, charge or C-V, AC or frequency, transient step, ramp, or pulse, temperature, and registered parameters, with a 10,000-point resource limit | Equilibrium and DC sweep, up to 10 points |
+| Studies | Equilibrium, DC, charge or C-V, AC or frequency, transient step, ramp, or pulse, temperature, and registered parameters, with a 10,000-point resource limit | Candidate equilibrium, exact DC sweep and explicit DC points, up to 10 points; native qualification pending |
 
 Unsupported physics is refused. It is never silently approximated or removed from the research request.
+
+The SSH branch adds deterministic Sentaurus candidate decks, immutable hash-bound
+external mesh preparation, pre-connection bundle checks, and versioned exported
+JSON/CSV normalization into the same interactive workbench. Synthetic tests cover
+shell execution, transfer, timeout, failure, units, profile selection, and zoom.
+They do not qualify Sentaurus syntax or physics. Automatic native mesh generation,
+native TDR/PLT extraction, licensed reference runs, scheduler integration, and
+verified remote cancellation still require licensed-host integration. See the
+[Sentaurus integration guide](docs/operations/sentaurus-integration.md).
 
 ### Numerical execution and precision
 

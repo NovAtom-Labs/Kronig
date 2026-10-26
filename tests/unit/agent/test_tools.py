@@ -1,4 +1,4 @@
-import json
+﻿import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -512,6 +512,28 @@ def test_prepare_experiment_returns_typed_plan(tmp_path: Path) -> None:
     assert prepared["spec"]["schema_version"] == "1.0"
 
 
+def test_prepare_experiment_preserves_original_request_in_artifacts(
+    tmp_path: Path,
+) -> None:
+    original_request = (
+        "Simulate a silicon diode at 300 K and sweep voltage from 0 V to 1 V."
+    )
+    tools = DomainTools(tmp_path, original_request=original_request)
+
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+
+    assert response.status == "ok"
+    artifact_paths = response.data["plan_artifacts"]
+    plan_json = Path(artifact_paths["structured_plan"])
+    payload = json.loads(plan_json.read_text(encoding="utf-8"))
+
+    import hashlib
+
+    expected_hash = hashlib.sha256(original_request.encode("utf-8")).hexdigest()
+    assert payload["original_request"]["text"] == original_request
+    assert payload["original_request"]["sha256"] == expected_hash
+
+
 def test_invalid_dimensional_input_returns_json_serializable_tool_error(
     tmp_path: Path,
 ) -> None:
@@ -840,3 +862,105 @@ def test_tcad_domain_tool_declares_external_research_capability(
     )[0]
 
     assert tool.annotations.openWorldHint is True
+
+
+def test_ssh_audit_discovery_uses_the_opened_workspace_runtime(tmp_path, monkeypatch):
+    from tcad_agent.runtime.paths import RuntimePaths
+
+    monkeypatch.delenv("TCAD_WORKSPACE", raising=False)
+    monkeypatch.setenv("AGENT_KRONIG_DATA_DIR", str(tmp_path / "managed"))
+    workspace = tmp_path / "selected-repo"
+    workspace.mkdir()
+    audit_dir = RuntimePaths.from_workspace(workspace).bundle_root / "run-current" / "logs"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / "ssh-audit.json").write_text(
+        '{"schema_version": 1, "run_id": "remote-run", "events": []}', encoding="utf-8"
+    )
+
+    tools = build_tools(workspace)
+    assert tools.read_ssh_audit().data["runs"][0]["bundle_run_id"] == "run-current"
+    assert tools.read_ssh_audit("run-current").data["audit"]["run_id"] == "remote-run"
+
+
+def test_llm_can_read_ssh_audit_from_experiment_bundle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TCAD_WORKSPACE", str(tmp_path))
+    bundle = tmp_path / "bundles" / "run-123" / "logs"
+    bundle.mkdir(parents=True)
+    (bundle / "ssh-audit.json").write_text(
+        '{"schema_version": 1, "run_id": "ssh-run", "events": '
+        '[{"action": "ssh.connect", "status": "succeeded"}]}',
+        encoding="utf-8",
+    )
+    (bundle / "ssh-audit.log").write_text(
+        "[SUCCEEDED] ssh.connect\n", encoding="utf-8"
+    )
+
+    response = build_tools(tmp_path).read_ssh_audit("run-123")
+
+    assert response.status == "ok"
+    assert response.code == "ssh_audit_read"
+    audit = response.data["audit"]
+    assert isinstance(audit, dict)
+    assert audit["events"][0]["action"] == "ssh.connect"
+    assert "ssh.connect" in response.data["text_log"]
+
+
+def test_read_ssh_audit_rejects_path_traversal(tmp_path: Path) -> None:
+    response = build_tools(tmp_path).read_ssh_audit("../outside")
+
+    assert response.status == "refused"
+    assert response.code == "invalid_run_id"
+
+
+def test_read_ssh_audit_reports_missing_bundle(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("TCAD_WORKSPACE", str(tmp_path))
+
+    response = build_tools(tmp_path).read_ssh_audit("missing-run")
+
+    assert response.status == "refused"
+    assert response.code == "ssh_audit_not_found"
+
+
+def test_llm_domain_tool_dispatches_ssh_audit_read(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TCAD_WORKSPACE", str(tmp_path))
+    audit_dir = tmp_path / "bundles" / "run-456" / "logs"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / "ssh-audit.json").write_text(
+        '{"schema_version": 1, "run_id": "ssh-run", "events": []}',
+        encoding="utf-8",
+    )
+    (audit_dir / "ssh-audit.log").write_text("audit available\n", encoding="utf-8")
+
+    observation = TcadDomainExecutor(tmp_path)(
+        TcadDomainAction(
+            operation="read_ssh_audit",
+            payload={"run_id": "run-456"},
+        )
+    )
+
+    assert observation.status == "ok"
+    assert observation.code == "ssh_audit_read"
+    assert '"events": []' in observation.text
+
+
+def test_llm_can_discover_recent_ssh_audit_bundles(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("TCAD_WORKSPACE", str(tmp_path))
+    audit_dir = tmp_path / "bundles" / "run-discover" / "logs"
+    audit_dir.mkdir(parents=True)
+    (audit_dir / "ssh-audit.json").write_text(
+        '{"schema_version": 1, "run_id": "ssh-run", "updated_at": '
+        '"2026-10-13T00:00:00+00:00", "events": [{"action": "ssh.connect"}]}',
+        encoding="utf-8",
+    )
+
+    response = build_tools(tmp_path).read_ssh_audit()
+
+    assert response.status == "ok"
+    assert response.code == "ssh_audit_index"
+    assert response.data["runs"][0]["bundle_run_id"] == "run-discover"
