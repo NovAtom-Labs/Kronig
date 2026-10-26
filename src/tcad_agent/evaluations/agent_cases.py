@@ -49,7 +49,7 @@ class AgentEvaluationSuite(StrictModel):
 
     @classmethod
     def from_file(cls, path: Path) -> Self:
-        payload = yaml.safe_load(path.read_text())
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
         suite = cls.model_validate(payload)
         object.__setattr__(suite, "_source_path", path.resolve())
         return suite
@@ -67,5 +67,5 @@ class AgentEvaluationSuite(StrictModel):
         prompt_path = (self._source_path.parent / case.prompt_file).resolve()
         if not prompt_path.is_file():
             raise FileNotFoundError(f"agent evaluation prompt not found: {prompt_path}")
-        return prompt_path.read_text()
+        return prompt_path.read_text(encoding="utf-8")
 

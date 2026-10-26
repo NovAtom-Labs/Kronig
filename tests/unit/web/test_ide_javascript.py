@@ -36,8 +36,8 @@ def _run_javascript(tmp_path: Path, source: str) -> subprocess.CompletedProcess[
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_navigation_guard_prevents_stale_browser_updates(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide-state.js").read_text()
-    assertions = (project_root / "tests/js/ide_navigation_guard.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide-state.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/ide_navigation_guard.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -46,8 +46,8 @@ def test_navigation_guard_prevents_stale_browser_updates(tmp_path: Path) -> None
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_file_viewer_helpers_preserve_scientific_data_and_safe_markdown(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/file-viewer.js").read_text()
-    assertions = (project_root / "tests/js/file_viewer.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/file-viewer.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/file_viewer.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -56,8 +56,8 @@ def test_file_viewer_helpers_preserve_scientific_data_and_safe_markdown(tmp_path
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_results_workbench_recognizes_and_summarizes_canonical_results(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/results-workbench.js").read_text()
-    assertions = (project_root / "tests/js/results_workbench.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/results-workbench.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/results_workbench.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -66,8 +66,8 @@ def test_results_workbench_recognizes_and_summarizes_canonical_results(tmp_path:
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_scientific_chart_helpers_are_dataset_and_device_neutral(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/scientific-chart.js").read_text()
-    assertions = (project_root / "tests/js/scientific_chart.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/scientific-chart.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/scientific_chart.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -76,8 +76,8 @@ def test_scientific_chart_helpers_are_dataset_and_device_neutral(tmp_path: Path)
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_agent_events_reduce_restored_and_live_activity_deterministically(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide-events.js").read_text()
-    assertions = (project_root / "tests/js/ide_events.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide-events.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/ide_events.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -86,8 +86,8 @@ def test_agent_events_reduce_restored_and_live_activity_deterministically(tmp_pa
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_agent_markdown_constructs_safe_document_nodes(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide-markdown.js").read_text()
-    assertions = (project_root / "tests/js/ide_markdown.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide-markdown.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/ide_markdown.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -96,8 +96,8 @@ def test_agent_markdown_constructs_safe_document_nodes(tmp_path: Path) -> None:
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_workbench_layout_preserves_editor_space_and_recovers_preferences(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide-layout.js").read_text()
-    assertions = (project_root / "tests/js/ide_layout.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide-layout.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/ide_layout.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -106,8 +106,8 @@ def test_workbench_layout_preserves_editor_space_and_recovers_preferences(tmp_pa
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_agent_view_models_group_activity_permissions_and_outcomes(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide-agent.js").read_text()
-    assertions = (project_root / "tests/js/ide_agent.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide-agent.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/ide_agent.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -116,8 +116,8 @@ def test_agent_view_models_group_activity_permissions_and_outcomes(tmp_path: Pat
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_changes_view_model_handles_text_binary_and_rename_operations(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide-changes.js").read_text()
-    assertions = (project_root / "tests/js/ide_changes.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide-changes.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/ide_changes.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -126,8 +126,8 @@ def test_changes_view_model_handles_text_binary_and_rename_operations(tmp_path: 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_prompt_clarification_view_preserves_generic_questions_and_answers(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/prompt-clarification.js").read_text()
-    assertions = (project_root / "tests/js/prompt_clarification.test.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/prompt-clarification.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/prompt_clarification.test.js").read_text(encoding="utf-8")
     completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
 
     assert completed.returncode == 0, completed.stderr
@@ -136,7 +136,7 @@ def test_prompt_clarification_view_preserves_generic_questions_and_answers(tmp_p
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_production_ide_script_parses(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.js").read_text(encoding="utf-8")
     parser = tmp_path / "parse-ide.js"
     parser.write_text(f"new Function({json.dumps(source)});", encoding="utf-8")
     completed = subprocess.run(
@@ -152,7 +152,7 @@ def test_production_ide_script_parses(tmp_path: Path) -> None:
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_desktop_bridge_script_parses(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/desktop-bridge.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/desktop-bridge.js").read_text(encoding="utf-8")
     parser = tmp_path / "parse-desktop-bridge.js"
     parser.write_text(f"new Function({json.dumps(source)});", encoding="utf-8")
     completed = subprocess.run(
@@ -167,8 +167,8 @@ def test_desktop_bridge_script_parses(tmp_path: Path) -> None:
 
 def test_production_ide_wires_chat_recovery_file_editing_and_panel_controls() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
-    permission_source = (project_root / "src/tcad_agent/web/static/ide-agent.js").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.js").read_text(encoding="utf-8")
+    permission_source = (project_root / "src/tcad_agent/web/static/ide-agent.js").read_text(encoding="utf-8")
 
     for required in (
         "refreshCoordinator.request",
@@ -222,7 +222,7 @@ def test_production_ide_wires_chat_recovery_file_editing_and_panel_controls() ->
 
 def test_responsive_styles_keep_agent_panel_available_as_a_drawer() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text(encoding="utf-8")
 
     assert source.count("{") == source.count("}")
     assert ".edge-reveal-right" in source
@@ -252,7 +252,7 @@ def test_responsive_styles_keep_agent_panel_available_as_a_drawer() -> None:
 
 def test_file_viewer_toolbar_stays_compact_across_widths() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text(encoding="utf-8")
 
     header = re.search(r"\.file-viewer-header\s*\{([^}]*)\}", source, re.DOTALL)
     assert header is not None
@@ -270,7 +270,7 @@ def test_file_viewer_toolbar_stays_compact_across_widths() -> None:
 
 def test_company_lockup_stays_at_far_right_without_header_divider() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text(encoding="utf-8")
 
     brand = re.search(r"(?m)^\.brand\s*\{([^}]*)\}", source, re.DOTALL)
     header_actions = re.search(r"(?m)^\.header-actions\s*\{([^}]*)\}", source, re.DOTALL)
@@ -283,7 +283,7 @@ def test_company_lockup_stays_at_far_right_without_header_divider() -> None:
 
 def test_desktop_shell_keeps_the_center_canvas_dominant() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text(encoding="utf-8")
 
     shell = re.search(r"(?m)^\.ide-shell\s*\{([^}]*)\}", source, re.DOTALL)
     header = re.search(r"(?m)^\.ide-header\s*\{([^}]*)\}", source, re.DOTALL)
@@ -316,7 +316,7 @@ def test_desktop_shell_keeps_the_center_canvas_dominant() -> None:
 
 def test_internal_workbench_hierarchy_is_minimal_and_sidebars_are_secondary() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text(encoding="utf-8")
 
     def rule(selector: str) -> str:
         match = re.search(rf"(?m)^{re.escape(selector)}\s*\{{([^}}]*)\}}", source, re.DOTALL)
@@ -362,8 +362,8 @@ def test_internal_workbench_hierarchy_is_minimal_and_sidebars_are_secondary() ->
 
 def test_composer_and_panel_reveal_controls_are_integrated_and_minimal() -> None:
     project_root = Path(__file__).parents[3]
-    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text()
-    template = (project_root / "src/tcad_agent/web/templates/ide.html").read_text()
+    source = (project_root / "src/tcad_agent/web/static/ide.css").read_text(encoding="utf-8")
+    template = (project_root / "src/tcad_agent/web/templates/ide.html").read_text(encoding="utf-8")
 
     assert 'class="edge-reveal edge-reveal-left"' in template
     assert 'class="edge-reveal edge-reveal-right"' in template
@@ -394,7 +394,7 @@ def test_composer_and_panel_reveal_controls_are_integrated_and_minimal() -> None
 
 def test_workspace_shell_loads_researcher_facing_experiment_projects() -> None:
     project_root = Path(__file__).parents[3]
-    script = (project_root / "src/tcad_agent/web/static/ide.js").read_text()
+    script = (project_root / "src/tcad_agent/web/static/ide.js").read_text(encoding="utf-8")
 
     assert "/saved-results`" in script
     assert "function renderExperimentProjects" in script

@@ -1,4 +1,4 @@
-import json
+﻿import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -510,6 +510,28 @@ def test_prepare_experiment_returns_typed_plan(tmp_path: Path) -> None:
     assert prepared["backend"] == "devsim"
     assert len(prepared["plan_digest"]) == 64
     assert prepared["spec"]["schema_version"] == "1.0"
+
+
+def test_prepare_experiment_preserves_original_request_in_artifacts(
+    tmp_path: Path,
+) -> None:
+    original_request = (
+        "Simulate a silicon diode at 300 K and sweep voltage from 0 V to 1 V."
+    )
+    tools = DomainTools(tmp_path, original_request=original_request)
+
+    response = tools.prepare_experiment(valid_spec_payload(), backend="devsim")
+
+    assert response.status == "ok"
+    artifact_paths = response.data["plan_artifacts"]
+    plan_json = Path(artifact_paths["structured_plan"])
+    payload = json.loads(plan_json.read_text(encoding="utf-8"))
+
+    import hashlib
+
+    expected_hash = hashlib.sha256(original_request.encode("utf-8")).hexdigest()
+    assert payload["original_request"]["text"] == original_request
+    assert payload["original_request"]["sha256"] == expected_hash
 
 
 def test_invalid_dimensional_input_returns_json_serializable_tool_error(

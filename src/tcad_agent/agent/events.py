@@ -232,6 +232,7 @@ class AgentEventBridge:
         self.events = events
         self.conversations = conversations
         self.workspace = workspace.resolve() if workspace is not None else None
+        self.original_request: str | None = None
         raw_grants = permission_grants if permission_grants is not None else set()
         normalized_grants = {PermissionCategory(value) for value in raw_grants}
         raw_grants.clear()

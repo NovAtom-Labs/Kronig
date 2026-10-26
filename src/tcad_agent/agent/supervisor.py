@@ -563,8 +563,10 @@ class AgentSupervisor:
         try:
             preparation = self.services.store.get_prompt_preparation(run.id)
             bridge.research_intent = preparation.decision.intent if preparation.decision else None
+            bridge.original_request = preparation.original_prompt
         except IDEStoreError:
             bridge.research_intent = None
+            bridge.original_request = None
         runtime = self.runtime_factory.create(workspace, run.sdk_conversation_id, bridge)
         current = self.services.store.get_run(run.id)
         if current.state is RunState.CANCELLED:

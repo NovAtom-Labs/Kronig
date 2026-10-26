@@ -216,6 +216,11 @@ def test_accepted_answers_can_be_replayed_after_preparation_finishes(tmp_path):
     assert supervisor.join(run.id, timeout=3)
     acknowledged = supervisor.answer_clarification(run.id, record.revision, answers)
     assert acknowledged.id == run.id
+    print([
+    (event.kind, event.payload)
+    for event in services.events.list_after(conversation.id, 0)
+    if event.kind in ("run_failed", "run_blocked", "clarification_required")
+])
     assert len(factory.created) == 1
     assert (
         len(

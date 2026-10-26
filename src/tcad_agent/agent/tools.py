@@ -1,4 +1,4 @@
-"""Typed tool operations exposed to the agent and CLI."""
+﻿"""Typed tool operations exposed to the agent and CLI."""
 
 from __future__ import annotations
 
@@ -112,6 +112,7 @@ class DomainTools:
         web_research: Any | None = None,
         experiment_engine: ExperimentEngineAPI | None = None,
         research_intent: ResolvedResearchIntent | None = None,
+        original_request: str | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         configured_index = os.getenv("TCAD_KNOWLEDGE_INDEX")
@@ -127,6 +128,7 @@ class DomainTools:
         )
         self.experiment_engine = experiment_engine or ExperimentEngine()
         self.research_intent = research_intent
+        self.original_request = original_request
 
     def describe_spec(self) -> ToolResponse:
         """Expose the authoritative contract instead of making the model guess it."""
@@ -472,7 +474,10 @@ class DomainTools:
             )
         except ValueError as exc:
             return ToolResponse(status="refused", code="unknown_backend", message=str(exc))
-        artifacts = ExperimentPlanArtifactWriter(self.workspace).write(prepared)
+        artifacts = ExperimentPlanArtifactWriter(self.workspace).write(
+            prepared,
+            original_request=self.original_request,
+        )
         return ToolResponse(
             status="ok",
             code="experiment_prepared",
@@ -1029,10 +1034,16 @@ class TcadDomainObservation(Observation):
 
 class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
     def __init__(
-        self, workspace: Path, research_intent: ResolvedResearchIntent | None = None
+        self,
+        workspace: Path,
+        research_intent: ResolvedResearchIntent | None = None,
+        original_request: str | None = None,
     ) -> None:
-        self.tools = DomainTools(workspace, research_intent=research_intent)
-
+        self.tools = DomainTools(
+            workspace,
+            research_intent=research_intent,
+            original_request=original_request,
+        )
     def __call__(
         self,
         action: TcadDomainAction,
@@ -1163,11 +1174,12 @@ class TcadDomainTool(ToolDefinition[TcadDomainAction, TcadDomainObservation]):
                     openWorldHint=True,
                 ),
                 executor=TcadDomainExecutor(
-                    workspace,
-                    ResolvedResearchIntent.model_validate(params["research_intent"])
-                    if params.get("research_intent")
-                    else None,
-                ),
+                workspace,
+                ResolvedResearchIntent.model_validate(params["research_intent"])
+                if params.get("research_intent")
+                else None,
+                original_request=params.get("original_request"),
+            ),
             ),
         )
 
