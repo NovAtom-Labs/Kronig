@@ -30,7 +30,9 @@ Math {
 {% endfor %}}
 
 Solve {
-{% if equations != "Poisson" %}  Coupled { Poisson }
+{% if equilibrium_reduced %}  # Kronig: only an insulated gate is swept and every semiconductor contact sits at one
+  # potential, so each bias point is thermal equilibrium and Poisson alone is exact.
+{% endif %}{% if equations != "Poisson" %}  Coupled { Poisson }
 {% endif %}  Coupled { {{ equations }} }
 {% for ramp in ramps %}  NewCurrentPrefix="{{ ramp.prefix }}_"
   Quasistationary({{ " -DoZero" if skip_start_solve else "" }}

@@ -212,3 +212,31 @@ def test_two_dimensional_ladder_starts_iterative_and_ends_on_the_direct_solver(
     assert "Digits=6" in second and "-DoZero" in second
     assert "SubMethod=ILS" not in third and "-DoZero" in third
     assert "direct" in escalation_notes("KRONIG numerics level 3 stalled: 0 1 2", two_dimensional=True)[0]
+
+
+def _deck(tmp_path, monkeypatch, mutator=None) -> str:
+    monkeypatch.setenv("TCAD_SENTAURUS_VERSION", VERSION)
+    job = SentaurusAdapter.from_defaults("sde").compile(spec_with(mutator), tmp_path / "job")
+    return (job.entrypoint.parent / "sdevice.cmd").read_text(encoding="utf-8")
+
+
+def test_a_swept_insulated_gate_over_equal_potential_contacts_solves_poisson_alone(
+    tmp_path, monkeypatch
+) -> None:
+    deck = _deck(tmp_path, monkeypatch)
+    assert "thermal equilibrium and Poisson alone is exact" in deck
+    assert "Poisson Electron Hole" not in deck and "Coupled { Poisson }" in deck
+
+
+def test_any_contact_that_can_carry_current_keeps_the_full_system(tmp_path, monkeypatch) -> None:
+    def bias_a_contact(data: dict) -> None:
+        data["contacts"][1]["voltage_offset"] = "0.1 V"
+
+    biased = _deck(tmp_path, monkeypatch, bias_a_contact)
+    assert "Poisson Electron Hole" in biased and "Poisson alone" not in biased
+
+    def sweep_an_ohmic_contact(data: dict) -> None:
+        data["study"]["contact"] = "back"
+
+    swept = _deck(tmp_path / "other", monkeypatch, sweep_an_ohmic_contact)
+    assert "Poisson Electron Hole" in swept

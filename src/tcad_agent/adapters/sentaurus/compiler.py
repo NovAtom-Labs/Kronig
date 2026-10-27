@@ -37,6 +37,7 @@ from tcad_agent.domain.models import (
     Contact,
     ContactKind,
     DCStudy,
+    Equation,
     ExperimentSpec,
     Observable,
     SolverControls,
@@ -428,7 +429,9 @@ class SentaurusAdapter:
             "electron_continuity": "Electron",
             "hole_continuity": "Hole",
         }
+        reduced = self._equilibrium_reducible(spec)
         return {
+            "equilibrium_reduced": reduced,
             "compiler_version": self.compiler_version,
             "contacts": [self._contact_context(contact, spec) for contact in spec.contacts],
             "parameter_file": (
@@ -438,12 +441,52 @@ class SentaurusAdapter:
             "physics_lines": physics_lines,
             "plot_fields": plot_fields,
             "ramps": ramps,
-            "equations": " ".join(equations[item] for item in spec.physics.equations),
+            "equations": (
+                "Poisson"
+                if reduced
+                else " ".join(equations[item] for item in spec.physics.equations)
+            ),
             "iterations": max(spec.solver.maximum_iterations, MINIMUM_ITERATIONS, 300 if spec.dimension == 2 else 0),
             "digits": max(round(-math.log10(spec.solver.relative_error)), MINIMUM_DIGITS),
             "math_lines": list(_ITERATIVE) if spec.dimension == 2 else [],
             "skip_start_solve": False,
         }
+
+    @staticmethod
+    def _equilibrium_reducible(spec: ExperimentSpec) -> bool:
+        """Whether every bias point is thermal equilibrium, so Poisson alone is exact.
+
+        With only an insulated gate swept and every contact on the semiconductor held at one
+        potential, no current can flow at any steady state: the electron and hole quasi-Fermi
+        levels stay at that potential and the continuity equations add nothing but a
+        stiff inversion-layer solve. Anything else (a biased drain, a Schottky or diode
+        junction, a swept ohmic contact) carries current and keeps the full system.
+        """
+        if not isinstance(spec.study, DCStudy | DCPointsStudy):
+            return False
+        wanted = {Equation.ELECTRON_CONTINUITY, Equation.HOLE_CONTINUITY}
+        if not wanted <= set(spec.physics.equations):
+            return False
+
+        def edge_material(contact: Contact) -> str:
+            if spec.dimension == 2:
+                return next(r for r in spec.regions if r.id == contact.region).material
+            if str(contact.location) == "x_min":
+                return min(spec.regions, key=lambda region: region.x0.to("m")).material
+            return max(spec.regions, key=lambda region: region.x1.to("m")).material
+
+        gates = {
+            contact.id
+            for contact in spec.contacts
+            if contact.kind in {ContactKind.METAL_WORK_FUNCTION, ContactKind.IDEAL_GATE}
+            and edge_material(contact) != "silicon"
+        }
+        if spec.study.contact not in gates:
+            return False
+        bulk = [contact for contact in spec.contacts if contact.id not in gates]
+        if not bulk or any(contact.kind is not ContactKind.OHMIC for contact in bulk):
+            return False
+        return len({round(contact.voltage_offset.to("V"), 12) for contact in bulk}) == 1
 
     @staticmethod
     def _parameter_file(spec: ExperimentSpec) -> str | None:
