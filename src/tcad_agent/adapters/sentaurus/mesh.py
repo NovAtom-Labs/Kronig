@@ -335,7 +335,7 @@ def build_run_script() -> str:
         "  fi\n"
         "  remaining=$((budget - ($(date +%s) - started) - 60))\n"
         "  [ $remaining -gt 60 ] || remaining=60\n"
-        "  case $level in 0) share=35;; 1) share=40;; 2) share=60;; *) share=100;; esac\n"
+        "  case $level in 0) share=55;; 1) share=60;; 2) share=70;; *) share=100;; esac\n"
         "  limit=$((remaining * share / 100))\n"
         "  timedout=0\n"
         "  attempt=1\n"

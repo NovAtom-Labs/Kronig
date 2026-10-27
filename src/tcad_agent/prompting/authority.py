@@ -246,9 +246,9 @@ def _resolve(value, parts):
             matches = [
                 item
                 for item in value
-                if getattr(item, "id", None) == key
-                or getattr(item, "location", None) == key
-                or (boundary and getattr(item, "location", None) == boundary)
+                if getattr(item, "id", _UNMAPPED) == key
+                or getattr(item, "location", _UNMAPPED) == key
+                or (boundary and getattr(item, "location", _UNMAPPED) == boundary)
             ]
             if len(matches) == 1:
                 selected = matches[0]
@@ -257,7 +257,7 @@ def _resolve(value, parts):
                 # a descriptive label for it ("silicon_body"), so it cannot name a different one.
                 item = value[0]
                 fields = type(item).model_fields if isinstance(item, BaseModel) else {}
-                parameters = getattr(item, "parameters", None)
+                parameters = getattr(item, "parameters", _UNMAPPED)
                 is_field = key in fields or (
                     isinstance(parameters, BaseModel) and key in type(parameters).model_fields
                 )
@@ -269,7 +269,7 @@ def _resolve(value, parts):
         return QuantityValue.model_validate(f"{value.x1.to('m') - value.x0.to('m'):.15g} m")
     if isinstance(value, BaseModel) and key in type(value).model_fields:
         return _resolve(getattr(value, key), remaining)
-    parameters = getattr(value, "parameters", None)
+    parameters = getattr(value, "parameters", _UNMAPPED)
     if isinstance(parameters, BaseModel) and key in type(parameters).model_fields:
         return _resolve(getattr(parameters, key), remaining)
     if isinstance(value, dict) and key in value:
@@ -290,7 +290,11 @@ def _candidates(value, parts):
             return
         for item in value:
             yield from _candidates(item, parts)
-            yield from _candidates(item, remaining)
+            # Only skip the selector for items that carry no explicit identifier
+            # contradicting it; entities with a non-matching id or location are absent.
+            if (getattr(item, "id", _UNMAPPED) is _UNMAPPED
+                    and getattr(item, "location", _UNMAPPED) is _UNMAPPED):
+                yield from _candidates(item, remaining)
         return
     resolved = _resolve(value, [key])
     if resolved is not _UNMAPPED:

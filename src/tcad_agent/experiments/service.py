@@ -65,6 +65,10 @@ def _precompile(spec: ExperimentSpec, backend: str) -> None:
         binding.adapter.compile(spec, Path(scratch) / "compiled")
 
 
+# A refined mesh costs more than the run it checks, so each level keeps a floor of its own
+# instead of inheriting whatever is left of the original run's allowance.
+_REFINEMENT_RUN_SECONDS = 2400
+
 class ExperimentEngine:
     """Prepare and execute typed experiments without interpreting prompts."""
 
@@ -248,7 +252,7 @@ class ExperimentEngine:
                         fine_job = binding.adapter.compile(fine_spec, level_root / "compiled")
                         raise_if_cancelled()
                         fine_native = binding.runner.run(
-                            fine_job, RunBudget(seconds=min(remaining, 3600))
+                            fine_job, RunBudget(seconds=min(max(remaining, _REFINEMENT_RUN_SECONDS), 3600))
                         )
                         raise_if_cancelled()
                         fine_result = binding.adapter.normalize(fine_native)
