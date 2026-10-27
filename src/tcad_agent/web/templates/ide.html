@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="dark">
     <title>Agent Kronig workspace · NovAtom Labs</title>
     <link rel="stylesheet" href="/static/theme.css?v=20260928-1">
-    <link rel="stylesheet" href="/static/ide.css?v=20261014-1">
+    <link rel="stylesheet" href="/static/ide.css?v=20261026-1">
   </head>
   <body>
     <div class="ide-shell">
@@ -71,7 +71,7 @@
           <dl class="workspace-facts">
             <div><dt>Access scope</dt><dd>Selected repository</dd></div>
             <div><dt>Agent session</dt><dd>Temporary for this app run</dd></div>
-            <div><dt>Simulation</dt><dd>DEVSIM ready</dd></div>
+            <div><dt>Simulation</dt><dd id="simulator-welcome-state">DEVSIM ready</dd></div>
           </dl>
         </section>
         <section id="file-viewer" class="file-viewer hidden" aria-label="File viewer">
@@ -218,6 +218,12 @@
           </section>
           <form id="message-form" class="message-form">
             <label for="message-input">Message the agent</label>
+            <div id="simulator-switch" class="simulator-switch" role="radiogroup" aria-label="Simulator for the next request">
+              <span class="simulator-switch-label">Simulator</span>
+              <button type="button" role="radio" data-simulator="devsim" aria-checked="true" title="Run on this computer with DEVSIM">DEVSIM <small>local</small></button>
+              <button type="button" role="radio" data-simulator="sentaurus" aria-checked="false" title="Run on the remote HPC with Sentaurus">Sentaurus <small>HPC</small></button>
+              <span id="simulator-switch-note" class="simulator-switch-note" aria-live="polite"></span>
+            </div>
             <textarea id="message-input" rows="4" disabled placeholder="Ask Agent Kronig to inspect or change this repository"></textarea>
             <div><span>Shift + Enter for a new line</span><button id="send-message" type="submit" disabled>Send</button></div>
           </form>
@@ -258,6 +264,55 @@
           <input id="desktop-settings-clear" type="checkbox">
           <span>Remove the saved API key</span>
         </label>
+        <section class="settings-group" aria-labelledby="simulator-settings-title">
+          <h3 id="simulator-settings-title">Sentaurus on a remote HPC</h3>
+          <p class="settings-hint">Kronig sends Sentaurus jobs over SSH. DEVSIM needs no setup. Choose the simulator for each request with the switch above the message box.</p>
+          <p id="simulator-settings-state" class="settings-hint" aria-live="polite"></p>
+          <div class="settings-grid">
+            <div>
+              <label for="simulator-host">HPC address</label>
+              <input id="simulator-host" autocomplete="off" placeholder="10.0.0.5 or hpc.example.edu">
+            </div>
+            <div>
+              <label for="simulator-port">SSH port</label>
+              <input id="simulator-port" inputmode="numeric" autocomplete="off" placeholder="22">
+            </div>
+            <div>
+              <label for="simulator-user">Login name</label>
+              <input id="simulator-user" autocomplete="off">
+            </div>
+            <div>
+              <label for="simulator-release">Sentaurus release</label>
+              <input id="simulator-release" autocomplete="off" placeholder="O-2018.06-SP2">
+            </div>
+          </div>
+          <label for="simulator-password">HPC password</label>
+          <input id="simulator-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep the current password, or use an SSH key">
+          <label class="settings-check" for="simulator-password-clear">
+            <input id="simulator-password-clear" type="checkbox">
+            <span>Remove the saved HPC password</span>
+          </label>
+          <details class="settings-advanced">
+            <summary>Advanced</summary>
+            <label for="simulator-remote-root">Remote work folder</label>
+            <input id="simulator-remote-root" autocomplete="off" placeholder="~/novatom-labs/runs">
+            <label for="simulator-setup">Setup command (only if Sentaurus is not found automatically)</label>
+            <input id="simulator-setup" autocomplete="off" placeholder="module load sentaurus">
+            <label for="simulator-bin">Sentaurus bin folder (alternative to the setup command)</label>
+            <input id="simulator-bin" autocomplete="off">
+            <label for="simulator-license">License server</label>
+            <input id="simulator-license" autocomplete="off" placeholder="27020@licenses.example.edu">
+            <label for="simulator-extra">More environment variables (one NAME=value per line, names start with TCAD_)</label>
+            <textarea id="simulator-extra" rows="3" spellcheck="false" placeholder="TCAD_BACKEND=sentaurus"></textarea>
+          </details>
+          <div class="settings-test">
+            <button id="simulator-test" type="button">Test connection</button>
+            <button id="simulator-test-deep" type="button" title="Also starts the structure editor to check the license">Test with license check</button>
+            <button id="simulator-trust" type="button" hidden>Trust this host key</button>
+          </div>
+          <p class="settings-hint">The test uses the saved settings. Save first, then test.</p>
+          <ul id="simulator-test-results" class="settings-checks" aria-live="polite"></ul>
+        </section>
         <section class="settings-updates" aria-labelledby="desktop-updates-title">
           <h3 id="desktop-updates-title">Application updates</h3>
           <p id="desktop-update-status">Managed updates are not configured.</p>
@@ -283,7 +338,9 @@
     <script src="/static/prompt-clarification.js?v=20261004-2" defer></script>
     <script src="/static/desktop-bridge.js?v=20260925-1" defer></script>
     <script src="/static/scientific-chart.js?v=20261004-2" defer></script>
-    <script src="/static/results-workbench.js?v=20261016-4" defer></script>
-    <script src="/static/ide.js?v=20261014-1" defer></script>
+    <script src="/static/results-workbench.js?v=20261026-1" defer></script>
+    <script src="/static/plan-view.js?v=20261026-1" defer></script>
+    <script src="/static/simulators.js?v=20261026-1" defer></script>
+    <script src="/static/ide.js?v=20261026-1" defer></script>
   </body>
 </html>

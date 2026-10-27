@@ -30,6 +30,7 @@ def build_plan(
             "mesh_refinement_factor": 0.5,
             "mesh_relative_linf_limit": 0.03,
             "maximum_mesh_comparisons": 4,
+            "extra_comparison_when_converging": 1,
             "scope": "same physical inputs and complete study; "
             "existing scientific tolerances unchanged",
         },

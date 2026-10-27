@@ -5,20 +5,33 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 from importlib.resources import files
 from pathlib import Path
+from typing import Literal
 
 from jinja2 import Environment, StrictUndefined
 
+from tcad_agent.adapters.sentaurus.mesh import (
+    MESH_GENERATION,
+    MESH_GENERATION_2D,
+    build_run_script,
+    build_sde_script,
+    slab_height_um,
+)
 from tcad_agent.adapters.sentaurus.normalizer import SentaurusNormalizer
 from tcad_agent.adapters.sentaurus.runtime import (
+    ESCALATION_DECKS,
+    MINIMUM_DIGITS,
+    MINIMUM_ITERATIONS,
     NativeOperatingPoint,
+    NativeReview,
     SentaurusJobManifest,
     SourceLocation,
 )
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
-from tcad_agent.capabilities.service import CapabilityService
+from tcad_agent.capabilities.service import _OBSERVABLE_MODELS, CapabilityService
 from tcad_agent.domain.errors import CapabilityError
 from tcad_agent.domain.models import (
     Contact,
@@ -33,13 +46,17 @@ from tcad_agent.results.models import CanonicalResult
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+_SAFE_LABEL = re.compile(r"[^\x00-\x1f\x7f/\\;`$|&<>\"']{1,300}")
 _MODEL_LINES = {
     "boltzmann": (),
     "fermi": ("Fermi",),
-    "constant_mobility": ("Mobility",),
+    "constant_mobility": (),
+    "klaassen_mobility": ("PhuMob",),
+    "high_field_saturation": ("HighFieldSaturation",),
     "srh": (),
     "auger": (),
     "band_gap_narrowing": ("EffectiveIntrinsicDensity( OldSlotboom )",),
+    "slotboom_bgn": ("EffectiveIntrinsicDensity( OldSlotboom )",),
 }
 _PLOT_FIELDS = {
     Observable.POTENTIAL: ("Potential",),
@@ -50,17 +67,29 @@ _PLOT_FIELDS = {
     Observable.CONDUCTION_BAND: ("ConductionBandEnergy",),
     Observable.VALENCE_BAND: ("ValenceBandEnergy",),
     Observable.FERMI_LEVEL: ("eQuasiFermiEnergy", "hQuasiFermiEnergy"),
+    Observable.ELECTRON_QUASI_FERMI_LEVEL: ("eQuasiFermiEnergy",),
+    Observable.HOLE_QUASI_FERMI_LEVEL: ("hQuasiFermiEnergy",),
     Observable.ELECTRON_CURRENT_DENSITY: ("eCurrent/Vector",),
     Observable.HOLE_CURRENT_DENSITY: ("hCurrent/Vector",),
     Observable.ELECTRON_MOBILITY: ("eMobility",),
     Observable.HOLE_MOBILITY: ("hMobility",),
     Observable.RECOMBINATION_RATE: ("TotalRecombination",),
+    Observable.SRH_RECOMBINATION_RATE: ("SRHRecombination",),
+    Observable.AUGER_RECOMBINATION_RATE: ("AugerRecombination",),
+    Observable.NET_DOPING: ("Doping",),
+    Observable.DONOR_CONCENTRATION: ("DonorConcentration",),
+    Observable.ACCEPTOR_CONCENTRATION: ("AcceptorConcentration",),
+    Observable.BAND_GAP: ("BandGap",),
+    Observable.BAND_GAP_NARROWING: ("BandGapNarrowing",),
+    Observable.ELECTRON_AFFINITY: ("ElectronAffinity",),
+    Observable.EFFECTIVE_INTRINSIC_CARRIER_CONCENTRATION: ("EffectiveIntrinsicDensity",),
+    Observable.TOTAL_CURRENT_DENSITY: ("TotalCurrent/Vector",),
+    Observable.LATTICE_TEMPERATURE: ("LatticeTemperature",),
     Observable.TERMINAL_CURRENT: (),
     Observable.TERMINAL_CURRENT_DENSITY: (),
     Observable.ABSOLUTE_TERMINAL_CURRENT: (),
     Observable.TERMINAL_CHARGE: (),
 }
-_EXPECTED_OUTPUTS = ("sdevice.log", "sdevice.plt", "sdevice.tdr")
 
 
 class SentaurusCompilerSafetyError(ValueError):
@@ -90,16 +119,19 @@ def _combined_digest(files_by_name: dict[str, bytes]) -> str:
 class SentaurusAdapter:
     compiler_version = "0.2.0"
 
-    def __init__(self, manifest: CapabilityManifest) -> None:
+    def __init__(
+        self, manifest: CapabilityManifest, mesh_mode: Literal["external", "sde"] = "external"
+    ) -> None:
         self._manifest = manifest
+        self._mesh_mode = mesh_mode
 
     @property
     def manifest(self) -> CapabilityManifest:
         return self._manifest
 
     @classmethod
-    def from_defaults(cls) -> SentaurusAdapter:
-        return cls(CapabilityManifest.from_backend("sentaurus"))
+    def from_defaults(cls, mesh_mode: Literal["external", "sde"] = "external") -> SentaurusAdapter:
+        return cls(CapabilityManifest.from_backend("sentaurus"), mesh_mode)
 
     def compile(self, spec: ExperimentSpec, workspace: Path) -> CompiledJob:
         decision = CapabilityService().check(spec, self.manifest)
@@ -125,14 +157,52 @@ class SentaurusAdapter:
         experiment_bytes = (json.dumps(spec.normalized(), sort_keys=True, indent=2) + "\n").encode()
 
         source_map = self._source_map(spec, command_text)
+        point_count = max(1, len(expand_study_points(spec.study)))
+        inputs = {
+            "experiment.json": _sha256(experiment_bytes),
+            "sdevice.cmd": _sha256(command_bytes),
+        }
+        extra: dict[str, bytes] = {}
+        mesh_fields: dict[str, object] = {}
+        if self._mesh_mode == "sde":
+            version = os.getenv("TCAD_SENTAURUS_VERSION", "").strip()
+            if not version:
+                raise CapabilityError(
+                    "TCAD_SENTAURUS_VERSION must name the exact Sentaurus release for this host"
+                )
+            extra = {
+                "mesh.scm": build_sde_script(spec).encode(),
+                "run.sh": build_run_script().encode(),
+            }
+            for deck_name, variant in zip(
+                ESCALATION_DECKS, self._escalations(context), strict=True
+            ):
+                deck_text = environment.from_string(template_text).render(**variant)
+                self._lint_generated(deck_text)
+                extra[deck_name] = deck_text.encode()
+            parameter_file = self._parameter_file(spec)
+            if parameter_file is not None:
+                extra["sdevice.par"] = parameter_file.encode()
+            inputs.update({name: _sha256(content) for name, content in extra.items()})
+            mesh_fields = {
+                "mesh_generation": MESH_GENERATION_2D if spec.dimension == 2 else MESH_GENERATION,
+                "required_runtime_inputs": (),
+                "slab_height_um": None if spec.dimension == 2 else slab_height_um(spec),
+                "expected_outputs": tuple(
+                    f"point_{index:04d}_des.tdr" for index in range(point_count)
+                ),
+                "native_review": NativeReview(
+                    simulator_version=version,
+                    reference="automatic structure-editor unit-slab mesh; not human-reviewed",
+                ),
+            }
+        else:
+            mesh_fields = {"expected_outputs": ("sdevice.log", "sdevice.plt", "sdevice.tdr")}
         manifest = SentaurusJobManifest(
             compiler_version=self.compiler_version,
-            expected_outputs=_EXPECTED_OUTPUTS,
-            inputs={
-                "experiment.json": _sha256(experiment_bytes),
-                "sdevice.cmd": _sha256(command_bytes),
-            },
+            inputs=inputs,
             source_map=source_map,
+            **mesh_fields,
             operating_points=tuple(
                 NativeOperatingPoint(
                     index=index,
@@ -150,6 +220,7 @@ class SentaurusAdapter:
             "experiment.json": experiment_bytes,
             "job-manifest.json": manifest_bytes,
             "sdevice.cmd": command_bytes,
+            **extra,
         }
 
         workspace = workspace.resolve()
@@ -167,6 +238,8 @@ class SentaurusAdapter:
                     },
                     sort_keys=True,
                 ).encode(),
+                "mesh-mode": self._mesh_mode.encode(),
+                "run-script": build_run_script().encode(),
             }
         )
         return CompiledJob(
@@ -180,12 +253,28 @@ class SentaurusAdapter:
             compiler_version=self.compiler_version,
         )
 
+    @staticmethod
+    def _escalations(context: dict[str, object]) -> list[dict[str, object]]:
+        """The same experiment with the next numerical strategies, tried only if a ramp stalls."""
+        iterative = ["Method=Blocked", "SubMethod=ILS"]
+        iterations = max(int(context["iterations"]), 300)  # type: ignore[call-overload]
+        first = {**context, "math_lines": iterative, "iterations": iterations}
+        # A ramp restarts by re-solving its converged starting point; on a fine mesh that
+        # re-solve can fail by itself, so the next strategy simply continues from the state.
+        second = {**first, "skip_start_solve": True}
+        return [first, second, {**second, "digits": 6}]
+
     def normalize(self, native: NativeRunResult) -> CanonicalResult:
         return SentaurusNormalizer().normalize(native)
 
     def _validate_safe_subset(self, spec: ExperimentSpec) -> None:
-        identifiers = [spec.name]
-        identifiers.extend(region.id for region in spec.regions)
+        # The experiment name is a free-text label that never reaches a native file, so spaces and
+        # punctuation are fine; only characters that could act as a path or shell syntax are not.
+        if not _SAFE_LABEL.fullmatch(spec.name) or ".." in spec.name:
+            raise SentaurusCompilerSafetyError(
+                f"unsafe identifier rejected by Sentaurus compiler: {spec.name!r}"
+            )
+        identifiers = [region.id for region in spec.regions]
         identifiers.extend(profile.region for profile in spec.profiles)
         identifiers.extend(contact.id for contact in spec.contacts)
         for value in identifiers:
@@ -200,9 +289,21 @@ class SentaurusAdapter:
             raise SentaurusCompilerSafetyError(
                 "boltzmann and fermi statistics cannot both be selected"
             )
-        if any(value is not None for value in spec.physics.parameters.model_dump().values()):
+        mapped = {"electron_lifetime", "hole_lifetime"} if self._mesh_mode == "sde" else set()
+        overrides = {
+            name
+            for name, value in spec.physics.parameters.model_dump().items()
+            if value is not None and name not in mapped
+        }
+        if overrides:
             raise SentaurusCompilerSafetyError(
-                "physics.parameters overrides need native parameter-file mappings"
+                "physics.parameters overrides need native parameter-file mappings: "
+                + ", ".join(sorted(overrides))
+            )
+        parameters = spec.physics.parameters
+        if (parameters.electron_lifetime is None) != (parameters.hole_lifetime is None):
+            raise SentaurusCompilerSafetyError(
+                "SRH lifetimes must be given for both electrons and holes, or for neither"
             )
         if spec.physics.temperature_profiles:
             raise SentaurusCompilerSafetyError("spatial temperature profiles are not mapped")
@@ -214,20 +315,49 @@ class SentaurusAdapter:
             for contact in spec.contacts
         ):
             raise SentaurusCompilerSafetyError("contact Richardson constants are not mapped")
-        if spec.profile_sampling is not None:
+        if spec.profile_sampling is not None and self._mesh_mode != "sde":
+            # Selecting profile biases happens when results are exported, which only the
+            # generated-mesh pipeline does; an external-mesh bundle would drop the request.
             raise SentaurusCompilerSafetyError(
                 "profile_sampling is not mapped to native output selection"
             )
         if isinstance(spec.study, DCStudy | DCPointsStudy) and spec.study.strategy != "fixed":
             raise SentaurusCompilerSafetyError("adaptive study recovery controls are not mapped")
         defaults = SolverControls()
-        for key in (
+        if spec.dimension == 2:
+            vector = sorted(
+                str(observable)
+                for observable in spec.observables
+                if str(observable)
+                in {
+                    "electric_field",
+                    "electron_current_density",
+                    "hole_current_density",
+                    "total_current_density",
+                }
+            )
+            if vector:
+                raise SentaurusCompilerSafetyError(
+                    "vector fields are not defined along a two-dimensional line cut: "
+                    + ", ".join(vector)
+                )
+        for observable in spec.observables:
+            needed = _OBSERVABLE_MODELS.get(str(observable))
+            if needed and not set(needed) & set(spec.physics.models):
+                raise SentaurusCompilerSafetyError(
+                    f"{observable} needs the {' or '.join(needed)} model in the physics"
+                )
+        unmapped = [
             "electrostatic_absolute_error",
             "carrier_absolute_error",
-            "mesh_refinement_level",
             "transient_initial_relative_error",
             "transient_step_relative_error",
-        ):
+        ]
+        if self._mesh_mode != "sde":
+            # The generated mesh already follows the (halved) region spacing that a
+            # refinement level stands for; an external mesh cannot honor it.
+            unmapped.append("mesh_refinement_level")
+        for key in unmapped:
             if getattr(spec.solver, key) != getattr(defaults, key):
                 raise SentaurusCompilerSafetyError(f"solver.{key} is not mapped")
         digits = -math.log10(spec.solver.relative_error)
@@ -240,8 +370,15 @@ class SentaurusAdapter:
         physics_lines: list[str] = []
         if "fermi" in spec.physics.models:
             physics_lines.append("Fermi")
-        if "constant_mobility" in spec.physics.models:
-            physics_lines.append("Mobility")
+        # Constant mobility is the native default; a bare ``Mobility`` keyword is a syntax error.
+        mobility_terms = [
+            term
+            for model in ("klaassen_mobility", "high_field_saturation")
+            if model in spec.physics.models
+            for term in _MODEL_LINES[model]
+        ]
+        if mobility_terms:
+            physics_lines.append(f"Mobility( {' '.join(mobility_terms)} )")
         recombination = [
             native
             for model, native in (("srh", "SRH"), ("auger", "Auger"))
@@ -249,12 +386,17 @@ class SentaurusAdapter:
         ]
         if recombination:
             physics_lines.append(f"Recombination( {' '.join(recombination)} )")
-        if "band_gap_narrowing" in spec.physics.models:
+        if {"band_gap_narrowing", "slotboom_bgn"} & set(spec.physics.models):
             physics_lines.append("EffectiveIntrinsicDensity( OldSlotboom )")
 
         plot_fields: list[str] = []
         for observable in spec.observables:
             for field in _PLOT_FIELDS[observable]:
+                if field not in plot_fields:
+                    plot_fields.append(field)
+        if "boltzmann" in spec.physics.models:
+            # Evidence that carrier densities stay in the nondegenerate Boltzmann domain.
+            for field in ("eEffectiveStateDensity", "hEffectiveStateDensity"):
                 if field not in plot_fields:
                     plot_fields.append(field)
 
@@ -280,25 +422,60 @@ class SentaurusAdapter:
         }
         return {
             "compiler_version": self.compiler_version,
-            "contacts": [self._contact_context(contact) for contact in spec.contacts],
+            "contacts": [self._contact_context(contact, spec) for contact in spec.contacts],
+            "parameter_file": (
+                "sdevice.par" if self._mesh_mode == "sde" and self._parameter_file(spec) else None
+            ),
             "temperature": _stable_number(spec.physics.temperature.to("K")),
             "physics_lines": physics_lines,
             "plot_fields": plot_fields,
             "ramps": ramps,
             "equations": " ".join(equations[item] for item in spec.physics.equations),
-            "iterations": spec.solver.maximum_iterations,
-            "digits": round(-math.log10(spec.solver.relative_error)),
+            "iterations": max(spec.solver.maximum_iterations, MINIMUM_ITERATIONS),
+            "digits": max(round(-math.log10(spec.solver.relative_error)), MINIMUM_DIGITS),
+            "math_lines": [],
+            "skip_start_solve": False,
         }
 
     @staticmethod
-    def _contact_context(contact: Contact) -> dict[str, str | None]:
+    def _parameter_file(spec: ExperimentSpec) -> str | None:
+        """Native parameter overrides for the quantities the experiment states explicitly."""
+        parameters = spec.physics.parameters
+        if parameters.electron_lifetime is None or parameters.hole_lifetime is None:
+            return None
+        electron = _stable_number(parameters.electron_lifetime.to("s"))
+        hole = _stable_number(parameters.hole_lifetime.to("s"))
+        return (
+            "# Generated by NovAtom TCAD Agent: constant SRH lifetimes stated in the experiment.\n"
+            'Material = "Silicon" {\n'
+            "  Scharfetter {\n"
+            f"    taumax = {electron} , {hole}\n"
+            "  }\n"
+            "}\n"
+        )
+
+    @staticmethod
+    def _contact_context(contact: Contact, spec: ExperimentSpec) -> dict[str, object]:
         work_function = None
+        schottky = False
         if contact.kind is ContactKind.METAL_WORK_FUNCTION:
             assert contact.work_function is not None
             work_function = _stable_number(contact.work_function.to("eV"))
+            if spec.dimension == 2:
+                edge = next(region for region in spec.regions if region.id == contact.region)
+            else:
+                edge = (
+                    min(spec.regions, key=lambda region: region.x0.to("m"))
+                    if str(contact.location) == "x_min"
+                    else max(spec.regions, key=lambda region: region.x1.to("m"))
+                )
+            # A metal on silicon is a Schottky contact; on an insulator it is a gate, which
+            # takes a work function but no Schottky barrier model.
+            schottky = edge.material == "silicon"
         return {
             "id": contact.id,
             "work_function": work_function,
+            "schottky": schottky,
             "voltage": _stable_number(contact.voltage_offset.to("V")),
         }
 

@@ -1,0 +1,1 @@
+use sentaurus to simulate a heavily doped pn junction under forward bias

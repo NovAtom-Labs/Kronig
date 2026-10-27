@@ -32,6 +32,20 @@ Agent Kronig is a self-contained Native desktop application. A release includes 
 
 Verify a download against `SHA256SUMS.txt` from the same release. See the [installation guide](INSTALLATION.md) for platform instructions and unsigned-package warnings.
 
+## Quick start: DEVSIM or Sentaurus (over SSH)
+
+1. Install: follow [INSTALLATION.md](INSTALLATION.md), then `copy .env.example .env` and add your model credentials.
+2. DEVSIM runs locally with no further setup (`TCAD_BACKEND=devsim`).
+3. Sentaurus runs on your HPC over SSH. Set `TCAD_HPSC_HOST`, `TCAD_HPSC_USER`, `TCAD_HPSC_PASSWORD` (or use an SSH key) and `TCAD_SENTAURUS_VERSION` in `.env`, then verify with the connection check described in
+   [docs/operations/sentaurus-ssh-setup.md](docs/operations/sentaurus-ssh-setup.md). The same settings can be edited in the desktop Settings bar, where you also pick DEVSIM or Sentaurus per request.
+4. Ask for an experiment in plain English. Kronig asks only what it needs, shows a plan for approval, runs it, validates it (including mesh-refinement checks) and reports the results.
+
+`.env` is gitignored: never commit credentials. The first connection records the host key; confirm its fingerprint with your cluster administrator.
+
+### Setting this up with an AI assistant
+
+Give the assistant `docs/operations/sentaurus-ssh-setup.md` and these rules: fill only `.env` (never tracked files), never print or log `TCAD_HPSC_PASSWORD`, run the connection check before any simulation, and if the tools are not found set `TCAD_SENTAURUS_SETUP`, `TCAD_SENTAURUS_BIN` or `TCAD_SENTAURUS_LICENSE` as the guide's Step 4 describes. The cluster needs only Sentaurus, a POSIX shell and `timeout`; results are parsed on your computer.
+
 ## What Agent Kronig does
 
 Agent Kronig combines an agentic repository IDE with a constrained scientific execution system:

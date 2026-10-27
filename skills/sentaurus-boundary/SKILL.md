@@ -25,6 +25,35 @@ Require the deployed Sentaurus version, configured authenticated runner, valid p
 
 Treat model names as backend-specific mappings of portable intent. Defaults can differ across releases. Contacts, mobility, Fermi statistics, recombination, band-gap narrowing, interfaces, and output variables must each have an explicit mapping and versioned test. Never infer a command from DEVSIM syntax or from memory of another Sentaurus release.
 
+## Preparing and reading an SSH-run experiment
+
+When the researcher names Sentaurus, pass `backend: "sentaurus"` to `prepare_experiment` and read
+the capability catalog and its `backend_guide` first; they are the authority for what is
+available. Express every choice in the ExperimentSpec, never in metadata: statistics
+(`boltzmann` or `fermi`), mobility (`constant_mobility`, `klaassen_mobility`, optionally
+`high_field_saturation`), recombination (`srh`, `auger`), band-gap narrowing (`slotboom_bgn`).
+Use numeric region `mesh_spacing`; mesh anchors, interface spacing and solver absolute-error
+controls are refused. A biased study uses `electron_quasi_fermi_level` and
+`hole_quasi_fermi_level`; a single `fermi_level` exists only at equilibrium. Keep every output the
+researcher asked for and ask before dropping one.
+
+For a two-dimensional device set `dimension: 2`. Regions are rectangles with `x0`/`x1` along the
+stack (depth) axis and `y0`/`y1` along the lateral axis; doping is `constant` per region or a `box`
+window inside a region; each contact names its `region`, `location` side and optional `span`
+along that side; other contacts are held with `voltage_offset`. Take profiles along `profile_cuts`
+(depth only) and give `width` for absolute currents. Do not use `electric_field` or current
+densities in 2D, and do not use interfaces or mesh anchors.
+
+Do not offer or imply 3D devices, graded or Gaussian implants, oxide stacks other than rectangles,
+non-uniform doping, AC or transient
+studies, quantum or tunnelling models, traps, self-heating or custom parameter files. They are
+real Sentaurus features that Kronig cannot run yet; say so and ask for an available alternative.
+
+Terminal currents are current densities from a thin 2D slab and spatial profiles are vertex values,
+so the field-versus-gradient check is reported as not applicable. A failed run names its stage:
+structure editor, device simulation, or license unavailable. A license failure is retried by the
+platform and is not a physics result.
+
 ## Cross-backend conformance
 
 Expect semantic agreement, not identical meshes, solver iteration counts, or pointwise values. Align material parameters, physics models, contact semantics, bias history, units, and extraction definitions. Compare selected expert-owned metrics with declared absolute and relative tolerances.

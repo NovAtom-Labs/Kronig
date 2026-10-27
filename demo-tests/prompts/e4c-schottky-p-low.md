@@ -1,0 +1,1 @@
+schottky contact on p-type silicon with a low workfunction metal, equilibrium electrostatics and band diagram

@@ -150,8 +150,36 @@ class PiecewiseConstantProfile(_DomainModel):
         return self
 
 
+class BoxProfile(_DomainModel):
+    """Uniform doping inside a rectangular window of a two-dimensional silicon region.
+
+    ``x`` runs along the stack (depth) axis and ``y`` along the lateral axis, the same axes the
+    region rectangles use. The window must lie inside the region. Where windows meet, the
+    doping steps abruptly; graded junctions are not described by this profile.
+    """
+
+    kind: Literal["box"]
+    region: str
+    species: ProfileSpecies
+    value: QuantityValue
+    x0: QuantityValue
+    x1: QuantityValue
+    y0: QuantityValue
+    y1: QuantityValue
+
+    _validate_value = field_validator("value")(_concentration)
+    _validate_lengths = field_validator("x0", "x1", "y0", "y1")(_length)
+
+    @model_validator(mode="after")
+    def require_positive_window(self) -> Self:
+        if self.x1.to("m") <= self.x0.to("m") or self.y1.to("m") <= self.y0.to("m"):
+            raise ValueError("box profile window must have positive extent")
+        return self
+
+
 Profile1D = Annotated[
     ConstantProfile
+    | BoxProfile
     | FixedChargeProfile
     | LinearProfile
     | GaussianProfile

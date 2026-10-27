@@ -1,0 +1,8 @@
+{
+    "regions":  "1 um",
+    "contacts":  "low 4.1 eV, high 5.1 eV, ohmic on the other side",
+    "physics.temperature":  "300 K",
+    "profiles.parameters":  "1e16 for both n and p",
+    "study.type":  "equilibrium only",
+    "regions.parameters":  "1 um, 5 nm mesh near the metal, coarser in the bulk"
+}

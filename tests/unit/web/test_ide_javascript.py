@@ -134,6 +134,16 @@ def test_prompt_clarification_view_preserves_generic_questions_and_answers(tmp_p
 
 
 @pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
+def test_simulator_switch_describes_readiness_and_parses_settings(tmp_path: Path) -> None:
+    project_root = Path(__file__).parents[3]
+    source = (project_root / "src/tcad_agent/web/static/simulators.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/simulators.test.js").read_text(encoding="utf-8")
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
+
+    assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
 def test_production_ide_script_parses(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[3]
     source = (project_root / "src/tcad_agent/web/static/ide.js").read_text(encoding="utf-8")
@@ -399,3 +409,13 @@ def test_workspace_shell_loads_researcher_facing_experiment_projects() -> None:
     assert "/saved-results`" in script
     assert "function renderExperimentProjects" in script
     assert "openSavedResult(experiment.bundle_run_id)" in script
+
+
+@pytest.mark.skipif(_javascript_runner() is None, reason="No JavaScript runtime installed")
+def test_plan_view_keeps_every_field_and_shows_friendly_units(tmp_path: Path) -> None:
+    project_root = Path(__file__).parents[3]
+    source = (project_root / "src/tcad_agent/web/static/plan-view.js").read_text(encoding="utf-8")
+    assertions = (project_root / "tests/js/plan_view.test.js").read_text(encoding="utf-8")
+    completed = _run_javascript(tmp_path, f"{source}\n{assertions}")
+
+    assert completed.returncode == 0, completed.stderr

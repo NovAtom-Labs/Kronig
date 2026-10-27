@@ -2,11 +2,12 @@ schema_version: "1.0"
 backend: sentaurus
 adapter_version: "0.2.0"
 execution_state: unconfigured
-dimensions: [1]
+aliases: [sdevice]
+dimensions: [1, 2]
 equations: [poisson, electron_continuity, hole_continuity]
-models: [boltzmann, fermi, constant_mobility, srh, auger, band_gap_narrowing]
-materials: [silicon]
-profiles: [constant]
+models: [boltzmann, fermi, constant_mobility, klaassen_mobility, high_field_saturation, srh, auger, band_gap_narrowing, slotboom_bgn]
+materials: [silicon, silicon_dioxide]
+profiles: [constant, box]
 interfaces: [continuity]
 contacts: [ohmic, metal_work_function]
 studies: [equilibrium, dc, dc_points]
@@ -23,11 +24,35 @@ observables:
   - conduction_band
   - valence_band
   - fermi_level
+  - electron_quasi_fermi_level
+  - hole_quasi_fermi_level
   - electron_current_density
   - hole_current_density
   - electron_mobility
   - hole_mobility
   - recombination_rate
+  - srh_recombination_rate
+  - auger_recombination_rate
+  - net_doping
+  - donor_concentration
+  - acceptor_concentration
+  - band_gap
+  - band_gap_narrowing
+  - electron_affinity
+  - effective_intrinsic_carrier_concentration
+  - total_current_density
+  - lattice_temperature
 limits:
-  max_bias_points: 10
+  max_bias_points: 40
   max_regions: 32
+# Measured numerical noise of Sentaurus Device O-2018.06-SP2 contact currents. At equilibrium
+# the true terminal currents are zero, yet the evaluation leaves a residue because opposing
+# drift and diffusion fluxes cancel only to double precision, so it grows with doping:
+#   peak doping 1e17 /cm3 -> 2.8e-6 A/m2, 1e18 -> 2.4e-5, 5e18 -> 3.5e-4 (1 um slab).
+# Tightening solver digits or error references did not change it (10 digits: 2.9e-6), so it is
+# evaluation noise, not convergence. current_noise_per_doping is 1e-22 A/m2 per /cm3 of peak
+# doping (about 1.4 times the largest measured ratio) and current_atol is the low-doping floor.
+validation_limits:
+  current_atol: 1.0e-5
+  equilibrium_current_atol: 1.0e-5
+  current_noise_per_doping: 1.0e-22

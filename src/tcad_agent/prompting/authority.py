@@ -6,7 +6,8 @@ Unmapped intent remains available for model reasoning and researcher plan review
 
 import math
 import re
-from typing import Annotated, get_args, get_origin
+from enum import Enum
+from typing import Annotated, Literal, get_args, get_origin
 
 from pydantic import BaseModel
 
@@ -60,6 +61,133 @@ def _schema_input_path(annotation, parts):
         if parameters := fields.get("parameters"):
             return _schema_input_path(parameters.annotation, parts)
     return False
+
+
+def _models(annotation):
+    """Every portable model an annotation can hold, through unions and annotations."""
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _models(get_args(annotation)[0])
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return [annotation]
+    if origin is not None and origin not in {tuple, list, dict}:
+        return [model for argument in get_args(annotation) for model in _models(argument)]
+    return []
+
+
+def _property_used_as_selector(annotation, parts):
+    """Find a collection step whose selector is really a property of the items.
+
+    ``regions.material`` selects nothing: a region is chosen by index or id (``regions.0.material``
+    or ``regions.silicon.material``), and ``material`` is what that region has.
+    """
+    origin = get_origin(annotation)
+    arguments = get_args(annotation)
+    if origin is Annotated:
+        return _property_used_as_selector(arguments[0], parts)
+    if origin in {tuple, list}:
+        if not parts:
+            return None
+        models = _models(arguments[0])
+        selector = parts[0]
+        if not selector.isdecimal() and any(selector in model.model_fields for model in models):
+            return selector
+        return next(
+            (
+                found
+                for model in models
+                if (found := _property_used_as_selector(model, parts[1:]))
+            ),
+            None,
+        )
+    if origin is dict:
+        return _property_used_as_selector(arguments[1], parts[1:]) if parts else None
+    if origin is not None:
+        found = (_property_used_as_selector(argument, parts) for argument in arguments)
+        return next((item for item in found if item), None)
+    if parts and isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        field = annotation.model_fields.get(parts[0])
+        return _property_used_as_selector(field.annotation, parts[1:]) if field else None
+    return None
+
+def _leaf_annotations(annotation, parts):
+    """Every declared type an input path can end on, selecting one entity of each collection."""
+    origin = get_origin(annotation)
+    arguments = get_args(annotation)
+    if origin is Annotated:
+        return _leaf_annotations(arguments[0], parts)
+    if not parts:
+        return [annotation]
+    if origin in {tuple, list}:
+        return _leaf_annotations(arguments[0], parts[1:]) if len(parts) > 1 else []
+    if origin is dict:
+        return []
+    if origin is not None:
+        return [leaf for argument in arguments for leaf in _leaf_annotations(argument, parts)]
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        field = annotation.model_fields.get(parts[0])
+        return _leaf_annotations(field.annotation, parts[1:]) if field else []
+    return []
+
+
+def _allowed_values(leaves):
+    """The values a field accepts when every possible type for it is an enum or a literal."""
+    allowed = []
+    for leaf in leaves:
+        if isinstance(leaf, type) and issubclass(leaf, Enum):
+            allowed.extend(str(member.value) for member in leaf)
+        elif get_origin(leaf) is Literal:
+            allowed.extend(str(value) for value in get_args(leaf))
+        elif get_origin(leaf) is not None and not isinstance(leaf, type):
+            nested = _allowed_values([a for a in get_args(leaf) if a is not type(None)])
+            if nested is None:
+                return None
+            allowed.extend(nested)
+        else:
+            return None
+    return list(dict.fromkeys(allowed)) or None
+
+def enum_value_violations(intent) -> list[tuple[str, str, list[str]]]:
+    """Confirmed inputs whose field only takes a fixed set of values but carry something else.
+
+    A description such as "top of oxide" for a contact location is a fair thing to say, but the
+    plan holds ``x_min``. A mismatch the plan gate cannot reconcile is better repaired up front.
+    """
+    from tcad_agent.domain.models import ExperimentSpec
+
+    violations = []
+    for field in intent.fields:
+        if field.origin not in {"researcher", "repository"} or not isinstance(field.value, str):
+            continue
+        parts = canonical_path(field.path, preserve_indices=True).split(".")
+        allowed = _allowed_values(_leaf_annotations(ExperimentSpec, parts))
+        if allowed and field.value not in allowed:
+            violations.append((field.path, field.value, allowed))
+    return violations
+
+
+def ambiguous_collection_paths(intent) -> list[str]:
+    """Compound values filed under a path that cannot select one entity of a collection.
+
+    A single value under an unqualified path is tolerated as prose. An object under it cannot be
+    matched to the plan, so the plan gate would refuse every spec; it has to be fixed here.
+    """
+    from tcad_agent.domain.models import ExperimentSpec
+
+    ambiguous = []
+    for field in intent.fields:
+        if field.origin not in {"researcher", "repository"} or not isinstance(field.value, dict):
+            continue
+        try:
+            QuantityValue.model_validate(field.value)
+        except ValueError:
+            pass
+        else:
+            continue  # a quantity written as an object is one value, not a compound
+        parts = canonical_path(field.path, preserve_indices=True).split(".")
+        if _property_used_as_selector(ExperimentSpec, parts):
+            ambiguous.append(field.path)
+    return ambiguous
 
 
 def _quantity_paths(value, parts):
@@ -122,7 +250,20 @@ def _resolve(value, parts):
                 or getattr(item, "location", None) == key
                 or (boundary and getattr(item, "location", None) == boundary)
             ]
-            selected = matches[0] if len(matches) == 1 else _UNMAPPED
+            if len(matches) == 1:
+                selected = matches[0]
+            elif not matches and len(value) == 1:
+                # A lone record is unambiguous: the key is either a field of it ("parameters") or
+                # a descriptive label for it ("silicon_body"), so it cannot name a different one.
+                item = value[0]
+                fields = type(item).model_fields if isinstance(item, BaseModel) else {}
+                parameters = getattr(item, "parameters", None)
+                is_field = key in fields or (
+                    isinstance(parameters, BaseModel) and key in type(parameters).model_fields
+                )
+                return _resolve(item, parts if is_field else remaining)
+            else:
+                selected = _UNMAPPED
         return _resolve(selected, remaining)
     if key == "thickness" and hasattr(value, "x0") and hasattr(value, "x1"):
         return QuantityValue.model_validate(f"{value.x1.to('m') - value.x0.to('m'):.15g} m")

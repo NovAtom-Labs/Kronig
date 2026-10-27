@@ -18,7 +18,8 @@ from pydantic import Field, model_validator
 
 from tcad_agent.domain.models import SignConvention, StrictModel
 from tcad_agent.results.datasets import Dataset, DatasetCentering, ScientificAxis
-from tcad_agent.results.models import BiasPoint, CanonicalResult, OperatingPoint
+from tcad_agent.results.derive import finite_difference
+from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries, OperatingPoint
 
 _MAX_BYTES = 64 * 1024 * 1024
 _UNITS = {
@@ -69,9 +70,12 @@ _QUANTITIES = {
         (
             "electron_density",
             "hole_density",
+            "effective_density_conduction",
+            "effective_density_valence",
             "donor_concentration",
             "acceptor_concentration",
             "net_doping",
+            "effective_intrinsic_carrier_concentration",
         ),
         "m^-3",
     ),
@@ -82,6 +86,9 @@ _QUANTITIES = {
             "fermi_level",
             "electron_quasi_fermi_level",
             "hole_quasi_fermi_level",
+            "band_gap",
+            "band_gap_narrowing",
+            "electron_affinity",
         ),
         "eV",
     ),
@@ -171,6 +178,11 @@ class TableExport(StrictModel):
     status: Literal["completed"]
     provenance: ExportProvenance
     terminals: tuple[str, ...] = Field(max_length=64)
+    # Physics models the exporter declares were selected for this run (from the submitted
+    # experiment); validation uses them, for example to test Boltzmann applicability.
+    physics_models: tuple[str, ...] = Field(default=(), max_length=32)
+    # Parameters the experiment left unspecified, so the simulator's built-in values applied.
+    native_defaults: tuple[str, ...] = Field(default=(), max_length=32)
     sign_convention: SignConvention
     axes: dict[str, ScientificAxis] = Field(max_length=64)
     datasets: dict[str, ExportDataset] = Field(min_length=1, max_length=256)
@@ -204,6 +216,115 @@ class TableExport(StrictModel):
             ):
                 raise ValueError("operating point values must be finite SI values")
         return self
+
+
+def _single_point_fields(axes, datasets, export) -> dict[str, FieldSeries]:
+    """Plain profiles for a result with exactly one operating point (for example equilibrium).
+
+    A family of profiles over several operating points is never collapsed into one profile;
+    only a profile that already is unique is exposed in the legacy single-profile form.
+    """
+    if len(export.operating_points) != 1:
+        return {}
+    fields: dict[str, FieldSeries] = {}
+    for key, dataset in datasets.items():
+        positions = [name for name in dataset.axes if axes[name].kind == "position"]
+        others = [name for name in dataset.axes if name not in positions]
+        if (
+            len(positions) != 1
+            or dataset.centering is not DatasetCentering.NODE
+            or any(axes[name].kind != "bias" or len(axes[name].values) != 1 for name in others)
+            or len(dataset.values) != len(axes[positions[0]].values)
+            or (dataset.validity is not None and not all(dataset.validity))
+        ):
+            continue
+        fields[key] = FieldSeries(
+            positions_m=tuple(axes[positions[0]].values),
+            values=tuple(dataset.values),
+            unit=dataset.unit,
+        )
+    return fields
+
+
+def _terminal_curves(axes, bias_axes, export) -> dict[str, Dataset]:
+    """Per-terminal curves over the bias axis, named exactly as the DEVSIM results name them.
+
+    They are derived only from operating points, so every table export gets the same
+    I-V, charge and capacitance views. A terminal missing from any point is skipped, never
+    padded with zeros.
+    """
+    if len(bias_axes) != 1:
+        return {}
+    axis_id = bias_axes[0]
+    ordered = []
+    for value in axes[axis_id].values:
+        match = [
+            point
+            for point in export.operating_points
+            if axis_id in point.coordinates
+            and math.isclose(point.coordinates[axis_id], value, rel_tol=1e-12, abs_tol=1e-15)
+        ]
+        if len(match) != 1:
+            return {}
+        ordered.append(match[0])
+    coordinates = tuple(axes[axis_id].values)
+    validity = tuple(point.state == "converged" for point in ordered)
+
+    def curve(name, label, unit, values, source="native"):
+        return Dataset(
+            id=name,
+            label=label,
+            unit=unit,
+            axes=(axis_id,),
+            shape=(len(coordinates),),
+            centering=DatasetCentering.OPERATING_POINT,
+            values=values,
+            validity=validity,
+            source=source,
+        )
+
+    curves: dict[str, Dataset] = {}
+    for terminal in export.terminals:
+        series = {
+            "terminal_current": ("Terminal current", "A/m^2", "terminal_currents_a_per_m2"),
+            "terminal_electron_current": (
+                "Terminal electron current",
+                "A/m^2",
+                "terminal_electron_currents_a_per_m2",
+            ),
+            "terminal_hole_current": (
+                "Terminal hole current",
+                "A/m^2",
+                "terminal_hole_currents_a_per_m2",
+            ),
+            "terminal_charge": ("Terminal charge", "C/m^2", "terminal_charges_c_per_m2"),
+        }
+        for prefix, (label, unit, field) in series.items():
+            if not all(terminal in getattr(point, field) for point in ordered):
+                continue
+            values = tuple(getattr(point, field)[terminal] for point in ordered)
+            curves[f"{prefix}__{terminal}"] = curve(
+                f"{prefix}__{terminal}", f"{label} at {terminal}", unit, values
+            )
+            if prefix == "terminal_current":
+                curves[f"terminal_current_density__{terminal}"] = curve(
+                    f"terminal_current_density__{terminal}",
+                    f"Terminal current density at {terminal}",
+                    unit,
+                    values,
+                    "derived:terminal-current-density-alias",
+                )
+            if prefix == "terminal_charge" and all(validity):
+                slope = finite_difference(coordinates, values)
+                if slope is not None:
+                    curves[f"capacitance__{terminal}"] = curve(
+                        f"capacitance__{terminal}",
+                        f"Quasi-static capacitance at {terminal}",
+                        "F/m^2",
+                        slope,
+                        f"derived:dQdV:terminal_charge__{terminal}",
+                    )
+    return curves
 
 
 def _csv_values(root: Path, column: CSVColumn, source_hashes: dict[str, str]):
@@ -348,6 +469,8 @@ def normalize_tables(payload: dict, path: Path, export_sha256: str) -> Canonical
                         valid[index] = False
             dataset = dataset.model_copy(update={"validity": tuple(valid)})
         datasets[key] = dataset
+    # Exporter-supplied datasets win over derived terminal curves of the same name.
+    datasets = {**_terminal_curves(axes, bias_axes, export), **datasets}
     return CanonicalResult(
         backend="sentaurus",
         simulator_version=export.simulator_version,
@@ -355,6 +478,7 @@ def normalize_tables(payload: dict, path: Path, export_sha256: str) -> Canonical
         terminals=export.terminals,
         axes=axes,
         datasets=datasets,
+        fields=_single_point_fields(axes, datasets, export),
         operating_points=export.operating_points,
         bias_points=tuple(
             BiasPoint(
@@ -373,6 +497,8 @@ def normalize_tables(payload: dict, path: Path, export_sha256: str) -> Canonical
             "native_export_sha256": export_sha256,
             "source_hashes": source_hashes,
             "declared_provenance": export.provenance.model_dump(),
+            "physics_models": list(export.physics_models),
+            "native_defaults": list(export.native_defaults),
             "qualification": "export_interoperability_only_not_native_physics_qualification",
         },
     )

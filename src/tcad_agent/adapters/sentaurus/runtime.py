@@ -35,6 +35,8 @@ class SentaurusJobManifest(StrictModel):
     compiler_version: str
     command_file: Literal["sdevice.cmd"] = "sdevice.cmd"
     required_runtime_inputs: tuple[Literal["device.tdr"], ...] = ("device.tdr",)
+    mesh_generation: Literal["external", "sde_unit_slab", "sde_2d"] = "external"
+    slab_height_um: float | None = Field(default=None, gt=0)
     expected_outputs: tuple[str, ...]
     inputs: dict[str, str]
     source_map: dict[str, SourceLocation]
@@ -44,6 +46,26 @@ class SentaurusJobManifest(StrictModel):
 
 
 _MAX_INPUT_BYTES = 512 * 1024 * 1024
+# Mesh modes whose structure is built on the host by the structure editor.
+GENERATED_MESHES = ("sde_unit_slab", "sde_2d")
+# Sentaurus Device accepts a solve at 6 digits, but with doping- and field-dependent mobility the
+# contact currents then stop adding up (a 2e18/5e16 diode at 0.2 V: anode and cathode differed by
+# 77%). Measured on O-2018.06-SP2: 6 digits fails, 7 to 10 conserve to under 1e-6. Eight leaves a
+# margin; a tighter request from the experiment is honored.
+MINIMUM_DIGITS = 8
+# At the onset of strong inversion Newton needs more than the usual 80 iterations; an iteration
+# cap changes nothing for a solve that converges sooner (measured: 200 reached the bias that 80
+# stalled at).
+MINIMUM_ITERATIONS = 200
+# When a bias ramp gives up, the run script reruns the same experiment with the next of these
+# prepared decks. Each is the same physics with a different, documented numerical strategy.
+ESCALATION_DECKS = ("sdevice.r1.cmd", "sdevice.r2.cmd", "sdevice.r3.cmd")
+ESCALATION_NOTES = (
+    "iterative linear solver (ILS) instead of the default direct solver",
+    "iterative linear solver, and each bias ramp continues from the previous converged state "
+    "without re-solving its starting point",
+    "iterative linear solver, no restart solve, and a looser 6-digit precision",
+)
 
 
 def _file_digest(path: Path) -> str:
@@ -92,8 +114,21 @@ def validate_bundle(
     manifest = SentaurusJobManifest.model_validate_json((root / "job-manifest.json").read_bytes())
     if set(names) != {*manifest.inputs, "job-manifest.json"}:
         raise ValueError("bundle files do not match the manifest")
-    if set(manifest.inputs) - {"experiment.json", "sdevice.cmd", "device.tdr"}:
+    allowed = {
+        "experiment.json",
+        "sdevice.cmd",
+        "device.tdr",
+        "mesh.scm",
+        "run.sh",
+        "sdevice.par",
+        *ESCALATION_DECKS,
+    }
+    if set(manifest.inputs) - allowed:
         raise ValueError("unrecognized bundle input")
+    if manifest.mesh_generation in GENERATED_MESHES and not {"mesh.scm", "run.sh"} <= set(
+        manifest.inputs
+    ):
+        raise ValueError("generated-mesh bundles require mesh.scm and run.sh")
     if (
         job.entrypoint != root / manifest.command_file
         or manifest.compiler_version != job.compiler_version

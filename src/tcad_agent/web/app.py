@@ -38,6 +38,7 @@ from tcad_agent.web.ide_routes import (
     build_ide_router,
 )
 from tcad_agent.web.runtime import runtime_fingerprint
+from tcad_agent.web.simulator_routes import build_simulator_router
 
 
 def create_app(
@@ -66,6 +67,7 @@ def create_app(
         app.add_middleware(DesktopSessionMiddleware, auth=desktop_auth)
     app.mount("/static", StaticFiles(directory=package_root / "static"), name="static")
     app.include_router(build_ide_router(ide_services, active_supervisor))
+    app.include_router(build_simulator_router())
     diagnostic_store = DiagnosticStore(
         Path(os.getenv("AGENT_KRONIG_DATA_DIR", str(ide_services.runtime_root)))
     )

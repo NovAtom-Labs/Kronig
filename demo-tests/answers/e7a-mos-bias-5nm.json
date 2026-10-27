@@ -1,0 +1,10 @@
+{
+    "study":  "-2 V to 2 V in 0.5 V steps on the gate",
+    "study.frequency":  "A",
+    "profiles":  "p-type 1e17 uniform",
+    "profile_sampling":  "-2, 0 and 2 V",
+    "contacts.area":  "current density is fine",
+    "contacts":  "gate work function 4.1 eV, ohmic body at 0V",
+    "physics.temperature":  "300 K",
+    "regions":  "5 nm oxide, 1 um p-type silicon, fine mesh near the interface"
+}

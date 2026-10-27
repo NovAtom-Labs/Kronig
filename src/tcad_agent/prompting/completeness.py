@@ -198,6 +198,46 @@ def question_for_path(
     )
 
 
+_SWEEP_PARTS = ("start", "stop", "step")
+
+
+def _merge_sweep_questions(missing, existing, catalog, selected):
+    """Ask for a voltage sweep once, not as a separate question for each of its parts.
+
+    One answer states all of start, stop and step, so three questions about one sweep make the
+    researcher repeat themselves. When the model's own question already asks for all three, the
+    separate ones are dropped; otherwise a single clear question stands in for them.
+    """
+    parts = {f"study.{part}" for part in _SWEEP_PARTS}
+    sweep = [path for path in missing if canonical_path(path) in parts]
+    if len(sweep) < 2:
+        return missing, {}
+    covering = [
+        question
+        for path, question in existing.items()
+        if canonical_path(path) not in parts
+        and all(word in question.prompt.lower() for word in _SWEEP_PARTS)
+        and any(_scoped_path(item) == path for item in missing)
+    ]
+    kept = [path for path in missing if path not in sweep]
+    if covering:
+        return kept, {}
+    first = sweep[0]
+    base = question_for_path(first, catalog, selected=selected)
+    combined = base.model_copy(
+        update={
+            "prompt": (
+                "What voltage sweep should be applied? Give the start voltage, stop voltage and "
+                "step size, all in V."
+            ),
+            "reason": "These define the bias points of the sweep; they must not be chosen "
+            "without your instruction.",
+        }
+    )
+    index = sum(1 for path in missing[: missing.index(first)] if path in kept)
+    return [*kept[:index], first, *kept[index:]], {first: combined}
+
+
 def requirement_path(capability_id: str, path: str, selected: tuple[str, ...]) -> str:
     """Separate nested voltage schedules from frequency/time study parameters."""
     if (
@@ -464,6 +504,12 @@ def enforce_completeness(
                     _matches_scope(path, key) for path in missing
                 ):
                     missing.append(qualified)
+    if "dimension.2" in selected:
+        # A two-dimensional contact has no area: its extent is a lateral span and the device
+        # width (asked for separately) is what turns current per width into amperes.
+        missing = [
+            path for path in missing if not re.fullmatch(r"(.*\.)?contacts(\.[^.]+)?\.area", path)
+        ]
     if not missing:
         return decision.model_copy(
             update={
@@ -473,8 +519,10 @@ def enforce_completeness(
                 "intent": intent.model_copy(update={"unresolved_critical": ()}),
             }
         )
+    missing, merged = _merge_sweep_questions(missing, existing, catalog, tuple(selected))
     questions = tuple(
-        existing.get(_scoped_path(path))
+        merged.get(path)
+        or existing.get(_scoped_path(path))
         or question_for_path(path, catalog, selected=tuple(selected))
         for path in dict.fromkeys(missing)
     )[:7]

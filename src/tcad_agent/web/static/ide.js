@@ -102,6 +102,20 @@ const desktopSettingsStorage = document.querySelector("#desktop-settings-storage
 const desktopSettingsError = document.querySelector("#desktop-settings-error");
 const desktopSettingsCancel = document.querySelector("#desktop-settings-cancel");
 const desktopSettingsSave = document.querySelector("#desktop-settings-save");
+const simulatorFields = Object.fromEntries([
+  ["host", "#simulator-host"],
+  ["port", "#simulator-port"],
+  ["user", "#simulator-user"],
+  ["release", "#simulator-release"],
+  ["remoteRoot", "#simulator-remote-root"],
+  ["setup", "#simulator-setup"],
+  ["bin", "#simulator-bin"],
+  ["license", "#simulator-license"],
+].map(([key, selector]) => [key, document.querySelector(selector)]));
+const simulatorPassword = document.querySelector("#simulator-password");
+const simulatorPasswordClear = document.querySelector("#simulator-password-clear");
+const simulatorExtra = document.querySelector("#simulator-extra");
+let simulatorSwitch = null;
 const desktopCheckUpdates = document.querySelector("#desktop-check-updates");
 const desktopApplyUpdate = document.querySelector("#desktop-apply-update");
 const desktopUpdateStatus = document.querySelector("#desktop-update-status");
@@ -243,7 +257,17 @@ async function openDesktopSettings() {
     }
     const presence = settings.hasBedrockCredential ? "A key is configured." : "No key is configured.";
     desktopSettingsStorage.textContent = `${presence} ${protection}`;
+    Object.entries(simulatorFields).forEach(([key, input]) => {
+      input.value = settings.simulator?.[key] || "";
+    });
+    simulatorExtra.value = window.AgentKronigSimulators.formatExtra(settings.extraEnvironment);
+    simulatorPassword.value = "";
+    simulatorPasswordClear.checked = false;
+    simulatorPassword.placeholder = settings.hasHpcPassword
+      ? "A password is saved. Leave blank to keep it."
+      : "Leave blank to use an SSH key";
     desktopSettingsDialog.showModal();
+    void simulatorSwitch?.refresh().catch(() => {});
     await refreshUpdateState();
   } catch (error) {
     showError(error.message);
@@ -264,6 +288,12 @@ async function saveDesktopSettings(event) {
       reasoningEffort: desktopSettingsReasoning.value,
       bedrockApiKey: desktopSettingsKey.value,
       clearCredential: desktopSettingsClear.checked,
+      simulator: Object.fromEntries(
+        Object.entries(simulatorFields).map(([key, input]) => [key, input.value]),
+      ),
+      extraEnvironment: window.AgentKronigSimulators.parseExtra(simulatorExtra.value),
+      hpcPassword: simulatorPassword.value,
+      clearHpcPassword: simulatorPasswordClear.checked,
     });
     desktopSettingsStorage.textContent = "Saved. Agent Kronig is restarting its private service.";
   } catch (error) {
@@ -572,6 +602,8 @@ function renderFileContent(mode = "preview") {
       activeResult,
       resultComparisonHistory.filter((item) => item.bundle_path !== activeResult.bundle_path),
     );
+  } else if (activeFile.planDocument) {
+    window.AgentKronigPlanView.render(fileViewerBody, activeFile.planDocument);
   } else if (activeFile.kind === "markdown") {
     renderMarkdown(activeFile.content);
   } else if (activeFile.kind === "json") {
@@ -589,8 +621,24 @@ function renderFileContent(mode = "preview") {
   }
 }
 
-function showFile(preview) {
-  activeFile = preview;
+// The structured twin of PLAN.md carries every field, so the plan can be presented as a designed
+// view. Any problem reading it leaves the plain document in place.
+async function loadPlanDocument(workspaceId, planPath) {
+  try {
+    const sibling = planPath.replace(/PLAN\.md$/, "plan.json");
+    const preview = await api(
+      `/api/workspaces/${workspaceId}/files/preview?path=${encodeURIComponent(sibling)}`,
+    );
+    if (preview.truncated) return null;
+    const data = JSON.parse(preview.content);
+    return data && typeof data === "object" && (data.spec || data.prepared) ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+function showFile(preview, planDocument = null) {
+  activeFile = planDocument ? {...preview, planDocument} : preview;
   activeResult = null;
   editingFile = null;
   workspaceWelcome.classList.add("hidden");
@@ -605,7 +653,7 @@ function showFile(preview) {
   fileViewerDownload.hidden = false;
   fileViewerDownload.href = window.AgentKronigFileViewer.fileUrl(activeWorkspace.id, preview.path, true);
   fileViewerDownload.download = preview.name;
-  fileViewerPreview.textContent = "Preview";
+  fileViewerPreview.textContent = planDocument ? "Plan" : "Preview";
   fileViewerSource.textContent = "Source";
   const modes = window.AgentKronigFileViewer.viewModes(preview.kind);
   fileViewerModes.hidden = modes.length < 2;
@@ -725,7 +773,11 @@ async function openFile(entry) {
       if (requestGeneration !== fileRequestGeneration || activeWorkspace?.id !== workspaceId) return;
       showCanonicalResult(preview, result);
     } else {
-      showFile(preview);
+      const planDocument = /(^|\/)PLAN\.md$/.test(preview.path)
+        ? await loadPlanDocument(workspaceId, preview.path)
+        : null;
+      if (requestGeneration !== fileRequestGeneration || activeWorkspace?.id !== workspaceId) return;
+      showFile(preview, planDocument);
     }
     document.querySelectorAll(".tree-entry.is-selected").forEach((button) => button.classList.remove("is-selected"));
     document.querySelector(`.tree-entry[data-path="${CSS.escape(entry.path)}"]`)?.classList.add("is-selected");
@@ -2604,4 +2656,13 @@ setInterval(() => {
     || streamState.textContent === "RECONNECTING";
   if (shouldRefresh) void refreshCoordinator.request(activeSession.id).catch((error) => showError(error.message));
 }, 5000);
+simulatorSwitch = window.AgentKronigSimulators.install({
+  document,
+  fetch: (...args) => fetch(...args),
+  storage: window.localStorage,
+  onSetupRequested: () => {
+    if (window.agentKronigDesktop) void openDesktopSettings();
+  },
+});
+void simulatorSwitch.start().catch(() => {});
 void restoreRoute();

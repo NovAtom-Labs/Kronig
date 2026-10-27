@@ -916,6 +916,24 @@
     );
   }
 
+  // The dataset shown first. A sweep curve leads when there is one; a result with a single
+  // operating point has no curve to draw, so it opens on its band structure or potential.
+  const OPENING_PROFILES = ["conduction_band", "potential", "electron_density", "electric_field"];
+
+  function defaultDatasetName(datasets) {
+    if (!datasets.length) return "";
+    const samples = (dataset) => (Array.isArray(dataset.values) ? dataset.values.length : 0);
+    if (samples(datasets[0]) > 1) return datasets[0].name;
+    const profiles = datasets.filter((dataset) => samples(dataset) > 1
+      && dataset.axes.some((axis) => axis.kind === "position"));
+    const base = (dataset) => String(dataset.name).split("__")[0];
+    for (const wanted of OPENING_PROFILES) {
+      const match = profiles.find((dataset) => base(dataset) === wanted);
+      if (match) return match.name;
+    }
+    return (profiles[0] || datasets[0]).name;
+  }
+
   function renderDatasets(payload, datasets) {
     const section = element("section", "result-section result-fields");
     const heading = element("div", "result-section-heading");
@@ -930,6 +948,7 @@
       option.value = dataset.name;
       select.append(option);
     });
+    select.value = defaultDatasetName(datasets);
     const slice = element("select");
     slice.setAttribute("aria-label", "Displayed operating point");
     const mode = element("select");
@@ -1476,6 +1495,7 @@
 
   globalThis.AgentKronigResults = {
     availableSelection,
+    defaultDatasetName,
     sampleCounts,
     statusDimensions,
     validationEvidence,

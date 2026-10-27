@@ -1,0 +1,10 @@
+{
+    "study":  "0 V to 0.6 V in 0.2 V steps",
+    "profiles":  "p 1e17, n 1e16 uniform, p side 0.5 um and n side 0.5 um",
+    "study.contact":  "anode",
+    "profile_sampling":  "0 and 0.6 V",
+    "contacts.area":  "current density is fine",
+    "contacts":  "ohmic both ends, p side anode",
+    "physics.temperature":  "250, 300 and 350 K",
+    "regions":  "0.5 um each side"
+}

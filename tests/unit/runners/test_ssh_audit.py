@@ -307,6 +307,7 @@ def test_run_returns_per_run_audit_paths_and_records_remote_work(
 
     runner = SSHSentaurusRunner(host="test-host", user="test-user", remote_root="/remote/runs")
     runner._connect = lambda: FakeClient()  # type: ignore[method-assign]
+    runner._read_return_code = lambda client, directory: 0  # type: ignore[method-assign]
 
     def fake_exec(client, command: str, action: str) -> tuple[int, str, str]:
         runner._record(action, "started", command=command)
@@ -418,11 +419,14 @@ def test_fractional_budget_is_not_rendered_as_disabled_timeout(tmp_path):
         if action == "remote.get_home":
             return 0, "/home/user", ""
         if action == "sentaurus.execute":
-            tokens = shlex.split(command)
-            assert tokens[tokens.index("timeout") + 1] == "0.25s"
+            # The job is launched detached; its own command line is the quoted argument of sh -c.
+            inner = shlex.split(shlex.split(command)[shlex.split(command).index("-c") + 1])
+            # Whole seconds, rounded up: old coreutils reject fractions; 0 would disable it.
+            assert inner[inner.index("timeout") + 1] == "1s"
         return 0, "", ""
 
     runner._exec = remote_exec
+    runner._read_return_code = lambda client, directory: 0
     runner._upload_files = lambda *args: None
     runner._download_files = lambda *args, **kwargs: None
     job = CompiledJob(

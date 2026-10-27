@@ -10,6 +10,18 @@ from tcad_agent.domain.units import QuantityValue
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.physics import _position_profiles
 
+_STEP_DENSITY_INTEGRALS = {"C/m^3": "C/m^2", "V/m": "V"}
+_STEP_PROFILES = {
+    "net_doping": "m^-2",
+    "donor_concentration": "m^-2",
+    "acceptor_concentration": "m^-2",
+}
+
+
+def _running_integral(grid: np.ndarray, values: np.ndarray) -> np.ndarray:
+    steps = 0.5 * (values[1:] + values[:-1]) * np.diff(grid)
+    return np.concatenate(([0.0], np.cumsum(steps)))
+
 
 def refined_spec(spec: ExperimentSpec) -> ExperimentSpec:
     def half(value):
@@ -17,18 +29,21 @@ def refined_spec(spec: ExperimentSpec) -> ExperimentSpec:
 
     regions = []
     for region in spec.regions:
-        base = region.mesh_spacing or QuantityValue.model_validate(
-            f"{(region.x1.to('m') - region.x0.to('m')) / 50:.17g} m"
-        )
-        regions.append(
-            region.model_copy(
-                update={
-                    "mesh_spacing": half(base),
-                    "minimum_mesh_spacing": half(region.minimum_mesh_spacing),
-                    "maximum_mesh_spacing": half(region.maximum_mesh_spacing),
-                }
+        update = {
+            "minimum_mesh_spacing": half(region.minimum_mesh_spacing),
+            "maximum_mesh_spacing": half(region.maximum_mesh_spacing),
+        }
+        if region.mesh_spacing is not None:
+            update["mesh_spacing"] = half(region.mesh_spacing)
+        elif region.minimum_mesh_spacing is None and region.maximum_mesh_spacing is None:
+            # Only when nothing was specified does refinement halve the adapter's default.
+            update["mesh_spacing"] = half(
+                QuantityValue.model_validate(
+                    f"{(region.x1.to('m') - region.x0.to('m')) / 50:.17g} m"
+                )
             )
-        )
+        # With only graded bounds given, halving those alone keeps minimum <= maximum.
+        regions.append(region.model_copy(update=update))
     return spec.model_copy(
         update={
             "regions": tuple(regions),
@@ -46,8 +61,12 @@ def refined_spec(spec: ExperimentSpec) -> ExperimentSpec:
 
 
 def mesh_comparison(
-    coarse: CanonicalResult, fine: CanonicalResult, relative_tolerance: float = 0.03,
-    *, current_absolute_tolerance: float = 1e-6, equilibrium: bool = False,
+    coarse: CanonicalResult,
+    fine: CanonicalResult,
+    relative_tolerance: float = 0.03,
+    *,
+    current_absolute_tolerance: float = 1e-6,
+    equilibrium: bool = False,
 ) -> dict:
     record = {
         "status": "failed",
@@ -74,11 +93,28 @@ def mesh_comparison(
             return {**record, "reason": f"Refinement changed dataset semantics: {name}."}
         if (left.imaginary_values is None) != (right.imaginary_values is None):
             return {**record, "reason": f"Refinement changed complex-response semantics: {name}."}
-        if (left.validity and not all(left.validity)) or (
+        position = any(coarse.axes[a].kind == "position" for a in left.axes)
+        # A space-charge density is a step across a junction, so its pointwise difference is set
+        # by one cell however fine the mesh. Its running integral (the field) is the converging
+        # quantity.
+        # Doping is the other quantity that steps at a junction: its vertex values cannot place
+        # an abrupt step better than one cell, so its integral is compared too.
+        integrated = position and (left.unit in _STEP_DENSITY_INTEGRALS or name in _STEP_PROFILES)
+        unit = (
+            _STEP_PROFILES.get(name, _STEP_DENSITY_INTEGRALS.get(left.unit, left.unit))
+            if integrated
+            else left.unit
+        )
+        partial = bool(left.validity and not all(left.validity)) or bool(
             right.validity and not all(right.validity)
+        )
+        # Samples a profile lacks where its quantity does not exist (carriers in an oxide) are
+        # structural. They are compared on the samples valid in both meshes, but only when every
+        # operating point converged; a failed solve or a non-profile dataset stays a failure.
+        if partial and (
+            not position or any(p.state != "converged" for p in coarse.operating_points)
         ):
             return {**record, "reason": f"Invalid refinement samples: {name}."}
-        position = any(coarse.axes[a].kind == "position" for a in left.axes)
         if not position:
             if (
                 left.shape != right.shape
@@ -115,9 +151,15 @@ def mesh_comparison(
                     if sum(b - a for a, b in parts) != len(coords):
                         raise ValueError("Region domains do not partition the field coordinates")
                     return tuple(parts)
+                # A region interface is a repeated coordinate; exported copies can differ by
+                # rounding, so coincidence is judged against the extent, not exact equality.
+                # A running integral is one continuous accumulation across interfaces.
+                if integrated:
+                    return ((0, len(coords)),)
+                coincident = 1e-6 * (max(coords) - min(coords))
                 starts = (
                     [0]
-                    + [i for i in range(1, len(coords)) if coords[i] <= coords[i - 1]]
+                    + [i for i in range(1, len(coords)) if coords[i] - coords[i - 1] <= coincident]
                     + [len(coords)]
                 )
                 return tuple(pairwise(starts))
@@ -142,20 +184,39 @@ def mesh_comparison(
                     fine, right.model_copy(update={"values": right.imaginary_values})
                 )
                 imaginary_profiles = (old_imaginary, new_imaginary)
-            for group, ((old, _), (new, _)) in enumerate(zip(profiles, fine_profiles, strict=True)):
+            for group, ((old, old_ok), (new, new_ok)) in enumerate(
+                zip(profiles, fine_profiles, strict=True)
+            ):
                 for (a, b), (c, d) in zip(old_segments, new_segments, strict=True):
-                    # Edge centers differ with mesh spacing; compare only common support.
-                    lo, hi = max(x[a], y[c]), min(x[b - 1], y[d - 1])
-                    grid = np.unique([z for z in (*x[a:b], *y[c:d]) if lo <= z <= hi])
+                    # Edge centers differ with mesh spacing; compare only common support, and
+                    # only samples that exist in each mesh.
+                    xs_old = np.asarray(x[a:b])[np.asarray(old_ok[a:b], dtype=bool)]
+                    xs_new = np.asarray(y[c:d])[np.asarray(new_ok[c:d], dtype=bool)]
+                    if not len(xs_old) or not len(xs_new):
+                        continue
+                    ys_old = np.asarray(old[a:b])[np.asarray(old_ok[a:b], dtype=bool)]
+                    ys_new = np.asarray(new[c:d])[np.asarray(new_ok[c:d], dtype=bool)]
+                    # A vertex on a contact or region interface holds a boundary-condition or
+                    # shared value, and the first cell next to it can carry a sharp layer, so
+                    # interpolating across it measures the cell size, not convergence. Compare
+                    # the interior; step quantities are compared by integral instead.
+                    if (
+                        not integrated
+                        and left.centering != "edge"
+                        and min(len(xs_old), len(xs_new)) >= 4
+                    ):
+                        xs_old, ys_old = xs_old[1:-1], ys_old[1:-1]
+                        xs_new, ys_new = xs_new[1:-1], ys_new[1:-1]
+                    lo, hi = max(xs_old[0], xs_new[0]), min(xs_old[-1], xs_new[-1])
+                    grid = np.unique([z for z in (*xs_old, *xs_new) if lo <= z <= hi])
                     if not len(grid):
                         return {**record, "reason": f"No common profile support: {name}."}
-                    pairs.append(
-                        (
-                            np.interp(grid, x[a:b], old[a:b]),
-                            np.interp(grid, y[c:d], new[c:d]),
-                            group,
-                        )
-                    )
+                    old_on_grid = np.interp(grid, xs_old, ys_old)
+                    new_on_grid = np.interp(grid, xs_new, ys_new)
+                    if integrated:
+                        old_on_grid = _running_integral(grid, old_on_grid)
+                        new_on_grid = _running_integral(grid, new_on_grid)
+                    pairs.append((old_on_grid, new_on_grid, group))
                     if imaginary_profiles is not None:
                         old_imag = imaginary_profiles[0][group][0]
                         new_imag = imaginary_profiles[1][group][0]
@@ -166,15 +227,22 @@ def mesh_comparison(
                                 group + len(profiles),
                             )
                         )
-        floor = {"A/m^2": 1e-6, "C/m^2": 1e-10, "F/m^2": 1e-10, "V": 1e-6}.get(left.unit, 1e-30)
+        # Currents below the validation current tolerance and energies below the potential
+        # resolution are numerical noise, not a response to compare.
+        floor = {
+            "A/m^2": current_absolute_tolerance,
+            "C/m^2": 1e-10,
+            "F/m^2": 1e-10,
+            "V": 1e-6,
+            "eV": 1e-6,
+        }.get(unit, 1e-30)
         if left.unit == "m^-3/s" and equilibrium:
             # q * integral(delta R dx) is a current-density perturbation. Bound
             # equilibrium-zero rates by the existing continuity resolution.
             # This is mixed absolute/relative resolution, not a claim of
             # relative accuracy for small physical non-equilibrium rates.
             try:
-                lengths = [d["x1_m"] - d["x0_m"]
-                           for d in coarse.metadata.get("region_domains", [])]
+                lengths = [d["x1_m"] - d["x0_m"] for d in coarse.metadata.get("region_domains", [])]
             except (KeyError, TypeError):
                 lengths = []
             if lengths and all(math.isfinite(length) and length > 0 for length in lengths):
@@ -186,16 +254,24 @@ def mesh_comparison(
                 max(old_error, float(np.max(np.abs(np.array(a) - np.array(b))))),
                 max(old_scale, float(np.max(np.abs(a))), float(np.max(np.abs(b)))),
             )
+        if equilibrium and unit == "A/m^2":
+            # Two currents that both satisfy the equilibrium-zero criterion agree on the only
+            # thing equilibrium asserts; their noise difference is not a response to compare.
+            groups = {g: (0.0 if s <= floor else e, s) for g, (e, s) in groups.items()}
         ratio = max((e / s for e, s in groups.values()), default=math.inf)
         record["metrics"].append(
             {
                 "dataset": name,
                 "relative_linf": ratio,
                 "tolerance": relative_tolerance,
-                "unit": left.unit,
+                "unit": unit,
                 "absolute_floor": floor,
-                **({"absolute_floor_basis": "continuity current tolerance / (q * domain length)"}
-                   if left.unit == "m^-3/s" and equilibrium and lengths else {}),
+                **({"compared_as": "running integral over position"} if integrated else {}),
+                **(
+                    {"absolute_floor_basis": "continuity current tolerance / (q * domain length)"}
+                    if left.unit == "m^-3/s" and equilibrium and lengths
+                    else {}
+                ),
                 "stable": ratio <= relative_tolerance,
             }
         )

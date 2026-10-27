@@ -24,6 +24,7 @@ from pydantic import Field, ValidationError
 
 from tcad_agent.bundles.models import ExperimentBundle, require_run_id
 from tcad_agent.bundles.reader import BundleIntegrityError, BundleReader
+from tcad_agent.capabilities.active import resolve_backend
 from tcad_agent.capabilities.descriptors import CapabilityCatalog
 from tcad_agent.capabilities.models import CapabilityManifest
 from tcad_agent.domain.models import ExperimentSpec, StrictModel
@@ -38,6 +39,7 @@ from tcad_agent.domain.units import QuantityValue
 from tcad_agent.experiments.artifacts import ExperimentPlanArtifactWriter
 from tcad_agent.experiments.errors import (
     ExperimentCapabilityError,
+    ExperimentCompileError,
     ExperimentExecutionError,
     PlanDigestMismatchError,
 )
@@ -129,6 +131,10 @@ class DomainTools:
         self.experiment_engine = experiment_engine or ExperimentEngine()
         self.research_intent = research_intent
         self.original_request = original_request
+
+    def default_backend(self) -> str:
+        """Backend named by the researcher's request, else the configured default."""
+        return resolve_backend(self.original_request)
 
     def describe_spec(self) -> ToolResponse:
         """Expose the authoritative contract instead of making the model guess it."""
@@ -241,6 +247,10 @@ class DomainTools:
         for contact in spec.contacts:
             path = f"contacts.{contact.id}.area"
             confirmed = declarations[contact.id]
+            if spec.dimension == 2:
+                # A two-dimensional contact has no area field: its extent is the lateral span
+                # and the device width turns current per width into amperes.
+                continue
             if not confirmed and contact.area is not None:
                 issues.append({"path": path, "reason": "unconfirmed_area"})
             for source_path, supplied_area in confirmed:
@@ -472,6 +482,13 @@ class DomainTools:
                 message="Requested experiment is unsupported by the selected backend.",
                 data={"decision": exc.decision.model_dump(mode="json")},
             )
+        except ExperimentCompileError as exc:
+            return ToolResponse(
+                status="refused",
+                code="not_compilable",
+                message=str(exc),
+                data={"schema_operation": "describe_spec"},
+            )
         except ValueError as exc:
             return ToolResponse(status="refused", code="unknown_backend", message=str(exc))
         artifacts = ExperimentPlanArtifactWriter(self.workspace).write(
@@ -610,7 +627,7 @@ class DomainTools:
                 message="Canonical result is invalid.",
                 data={"errors": _serializable_validation_errors(exc)},
             )
-        report = ValidationEngine().validate(result)
+        report = ValidationEngine.for_backend(result.backend).validate(result)
         return ToolResponse(
             status="ok" if report.overall == "passed" else "refused",
             code=f"validation_{report.overall}",
@@ -1057,7 +1074,7 @@ class TcadDomainExecutor(ToolExecutor[TcadDomainAction, TcadDomainObservation]):
             response = self.tools.open_saved_result(str(action.payload.get("run_id", "")))
         elif action.operation == "prepare_experiment":
             response = self.tools.prepare_experiment(
-                action.payload, backend=action.backend or "devsim"
+                action.payload, backend=action.backend or self.tools.default_backend()
             )
         elif action.operation == "validate_spec":
             response = self.tools.validate_spec(action.payload)

@@ -1,0 +1,1 @@
+pn junction with heavily doped p side, show electrostatics and IV under bias

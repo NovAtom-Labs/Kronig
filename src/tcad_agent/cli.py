@@ -130,6 +130,29 @@ def report_command(bundle: Path) -> None:
     typer.echo(report.read_text())
 
 
+@app.command("sentaurus-check")
+def sentaurus_check_command(
+    trust_host: Annotated[
+        bool, typer.Option("--trust-host", help="Save the HPC's SSH key after you verified it.")
+    ] = False,
+    deep: Annotated[
+        bool, typer.Option("--deep", help="Also start the Sentaurus structure editor (license).")
+    ] = False,
+) -> None:
+    """Check this machine's SSH pathway to a Sentaurus HPC and say how to fix any problem."""
+    from tcad_agent.runners.ssh_check import CheckResult, run_checks
+
+    def show(result: CheckResult) -> None:
+        typer.echo(f"[{'ok' if result.ok else 'FAIL':>4}] {result.name}: {result.detail}")
+        if not result.ok and result.fix:
+            typer.echo(f"       fix: {result.fix}")
+
+    results = run_checks(trust_host=trust_host, deep=deep, emit=show)
+    if not all(result.ok for result in results):
+        raise typer.Exit(1)
+    typer.echo("Everything needed for Sentaurus runs over SSH is in place.")
+
+
 @conformance_app.command("compare")
 def compare_conformance_command(
     devsim_bundle: Path,

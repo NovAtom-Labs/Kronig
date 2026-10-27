@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from tcad_agent.results.datasets import AxisKind, Dataset
+from tcad_agent.results.datasets import AxisKind, Dataset, DatasetCentering
 from tcad_agent.results.models import CanonicalResult
 from tcad_agent.validation.datasets import axes_compatible
 from tcad_agent.validation.models import ValidationCheck
@@ -98,6 +98,22 @@ def physics_checks(
                 message="Legacy fields lack reviewed centering provenance for this relation.",
                 evidence_origin="configured",
                 evidence_paths=("result.datasets",),
+            ),
+        )
+    if electric.centering is DatasetCentering.NODE and potential.centering is DatasetCentering.NODE:
+        # E = -dV/dx is an edge identity. A vertex-centered field (as Sentaurus reports) has
+        # no matching edge samples, so the identity is declared unevaluated, not loosened.
+        return (
+            ValidationCheck(
+                id="electric-field-potential-gradient",
+                level="physical",
+                status="not_applicable",
+                message=(
+                    "The electric field is vertex-centered, so the edge-gradient identity "
+                    "was not evaluated for this result."
+                ),
+                evidence_origin="derived",
+                evidence_paths=("result.datasets.potential", "result.datasets.electric_field"),
             ),
         )
     if potential.unit != "V" or electric.unit != "V/m":

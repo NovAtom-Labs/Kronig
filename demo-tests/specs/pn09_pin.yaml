@@ -1,0 +1,67 @@
+schema_version: '1.0'
+name: pn09-pin
+dimension: 1
+regions:
+- id: p_region
+  material: silicon
+  x0: 0 um
+  x1: 0.25 um
+  mesh_spacing: 0.01 um
+- id: intrinsic_region
+  material: silicon
+  x0: 0.25 um
+  x1: 0.75 um
+  mesh_spacing: 0.02 um
+- id: n_region
+  material: silicon
+  x0: 0.75 um
+  x1: 1.0 um
+  mesh_spacing: 0.01 um
+profiles:
+- kind: constant
+  region: p_region
+  species: acceptor
+  value: 5e16 cm^-3
+- kind: constant
+  region: intrinsic_region
+  species: donor
+  value: 1e10 cm^-3
+- kind: constant
+  region: n_region
+  species: donor
+  value: 5e16 cm^-3
+contacts:
+- id: anode
+  location: x_min
+  kind: ohmic
+- id: cathode
+  location: x_max
+  kind: ohmic
+physics:
+  equations:
+  - poisson
+  - electron_continuity
+  - hole_continuity
+  models:
+  - boltzmann
+  - constant_mobility
+  - srh
+  temperature: 300 K
+study:
+  kind: dc
+  contact: anode
+  start: 0.0 V
+  stop: 0.8 V
+  step: 0.2 V
+observables:
+- terminal_current_density
+- terminal_charge
+- potential
+- electric_field
+- electron_density
+- hole_density
+- charge_density
+- conduction_band
+- valence_band
+metadata:
+  purpose: three-region PIN

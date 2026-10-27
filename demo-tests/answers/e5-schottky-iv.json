@@ -1,0 +1,9 @@
+{
+    "contacts.work_function":  "4.7 eV",
+    "contacts.area":  "current density is fine",
+    "physics.temperature":  "300 K",
+    "profiles.parameters":  "n-type 1e16 uniform, 1 um thick",
+    "study":  "-1 V to 0.4 V, 0.2 V step",
+    "regions.length":  "1 um",
+    "contacts.boundary_conditions":  "schottky on the left, ohmic on the right at 0V"
+}

@@ -1,0 +1,1 @@
+pn junction forward bias with boltzmann, constant mobility and SRH. heavily doped p side. just give me terminal current, potential, electric field and electron/hole density

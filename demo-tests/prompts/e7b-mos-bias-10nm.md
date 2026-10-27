@@ -1,0 +1,1 @@
+MOS capacitor with 10 nm oxide, DC gate bias sweep accumulation to inversion, boltzmann statistics. give me potential, field, electron/hole density

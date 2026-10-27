@@ -1,0 +1,1 @@
+use sentaurus on the remote hpc to simulate a pn junction under forward bias and give me the IV and electrostatics

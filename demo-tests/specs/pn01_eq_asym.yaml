@@ -1,0 +1,55 @@
+schema_version: '1.0'
+name: pn01-eq-asym
+dimension: 1
+regions:
+- id: p_region
+  material: silicon
+  x0: 0 um
+  x1: 0.3 um
+  mesh_spacing: 0.01 um
+- id: n_region
+  material: silicon
+  x0: 0.3 um
+  x1: 2.3 um
+  mesh_spacing: 0.02 um
+profiles:
+- kind: constant
+  region: p_region
+  species: acceptor
+  value: 1e18 cm^-3
+- kind: constant
+  region: n_region
+  species: donor
+  value: 1e15 cm^-3
+contacts:
+- id: anode
+  location: x_min
+  kind: ohmic
+- id: cathode
+  location: x_max
+  kind: ohmic
+physics:
+  equations:
+  - poisson
+  - electron_continuity
+  - hole_continuity
+  models:
+  - boltzmann
+  - constant_mobility
+  - srh
+  temperature: 300 K
+study:
+  kind: equilibrium
+observables:
+- terminal_current_density
+- terminal_charge
+- potential
+- electric_field
+- electron_density
+- hole_density
+- charge_density
+- conduction_band
+- valence_band
+- fermi_level
+metadata:
+  purpose: asymmetric one-sided junction, long lightly doped side

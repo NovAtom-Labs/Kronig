@@ -69,7 +69,8 @@ class ScriptedLLM:
 
     def completion(self, messages):
         self.messages.append(list(messages))
-        response = self.responses.pop(0)
+        # A scripted model keeps giving its last answer once the script runs out.
+        response = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
         if isinstance(response, Exception):
             raise response
         return SimpleNamespace(
@@ -1124,3 +1125,88 @@ def test_unregistered_display_intent_is_repaired_before_the_execution_agent_star
     assert len(llm.messages) == 2
     packet = json.loads(llm.messages[0][1].content[0].text)
     assert packet["display_quantity_units"]["electron_density"] == "m^-3"
+
+
+def test_a_duplicated_clarification_question_is_kept_once_and_shared_ids_are_made_unique():
+    from tcad_agent.prompting.gateway import _repair_clarification_paths
+
+    question = {"id": "geometry", "field_path": "geometry", "prompt": "p", "reason": "r"}
+    payload = {
+        "status": "clarification",
+        "questions": [
+            question,
+            dict(question, prompt="the same input asked again"),
+            dict(question, field_path="study", prompt="a different input with a reused id"),
+        ],
+    }
+    repaired = json.loads(_repair_clarification_paths(json.dumps(payload)))
+    assert [q["field_path"] for q in repaired["questions"]] == ["geometry", "study"]
+    assert repaired["questions"][0]["prompt"] == "p"
+    assert [q["id"] for q in repaired["questions"]] == ["geometry", "geometry-2"]
+
+
+def test_a_transient_model_failure_is_retried_before_the_request_fails():
+    from tcad_agent.prompting.gateway import MODEL_CALL_ATTEMPTS
+
+    ok = json.dumps({"status": "ready", "summary": "ok"})
+    llm = ScriptedLLM([TimeoutError("slow"), ConnectionError("dropped"), ok])
+    model = OpenHandsPreparationModel(llm)
+    assert MODEL_CALL_ATTEMPTS >= 3
+    response = model._complete_with_retries([], {})
+    assert response.message.content[0].text == ok
+    assert len(llm.messages) == 3
+
+    failing = ScriptedLLM([TimeoutError(str(i)) for i in range(MODEL_CALL_ATTEMPTS)])
+    with pytest.raises(TimeoutError):
+        OpenHandsPreparationModel(failing)._complete_with_retries([], {})
+    assert len(failing.messages) == MODEL_CALL_ATTEMPTS
+
+def test_a_compound_value_under_a_property_path_is_refused_before_a_plan_exists():
+    from types import SimpleNamespace
+
+    from tcad_agent.prompting.authority import ambiguous_collection_paths
+
+    def field(path, value="x", origin="researcher"):
+        return SimpleNamespace(path=path, origin=origin, value=value)
+
+    compound = {"region": "silicon", "thickness": "1e-6 m"}
+    intent = SimpleNamespace(
+        fields=[
+            field("regions.material", compound),
+            field("regions.0.material", compound),
+            field("regions.silicon.thickness", "1 um"),
+            field("contacts.work_function", "4.1 eV"),
+            field("contacts.kind", {"a": 1}),
+            field("regions.material", compound, origin="evidence"),
+        ]
+    )
+    assert ambiguous_collection_paths(intent) == ["regions.material", "contacts.kind"]
+
+def test_a_description_in_place_of_an_allowed_value_is_refused_before_a_plan_exists():
+    from types import SimpleNamespace
+
+    from tcad_agent.prompting.authority import enum_value_violations
+
+    def field(path, value, origin="researcher"):
+        return SimpleNamespace(path=path, origin=origin, value=value)
+
+    intent = SimpleNamespace(
+        fields=[
+            field("contacts.gate.location", "top of oxide"),
+            field("contacts.gate.location", "x_min"),
+            field("contacts.gate.kind", "metal_work_function"),
+            field("contacts.body.kind", "Ohmic contact"),
+            field("study.kind", "DC sweep"),
+            field("study.kind", "dc"),
+            field("contacts.gate.location", "top of oxide", origin="evidence"),
+            field("physics.temperature", "300 K"),
+            field("regions.silicon.material", "silicon"),
+        ]
+    )
+    flagged = [(path, value) for path, value, _ in enum_value_violations(intent)]
+    assert flagged == [
+        ("contacts.gate.location", "top of oxide"),
+        ("contacts.body.kind", "Ohmic contact"),
+        ("study.kind", "DC sweep"),
+    ]
+    assert "x_min" in enum_value_violations(intent)[0][2]

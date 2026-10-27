@@ -1,0 +1,61 @@
+schema_version: '1.0'
+name: mos03-sweep-n-10nm
+dimension: 1
+regions:
+- id: oxide
+  material: silicon_dioxide
+  x0: 0 um
+  x1: 0.01 um
+  mesh_spacing: 0.001 um
+- id: silicon
+  material: silicon
+  x0: 0.01 um
+  x1: 1.01 um
+  mesh_spacing: 0.002 um
+  minimum_mesh_spacing: 0.0005 um
+  maximum_mesh_spacing: 0.01 um
+profiles:
+- kind: constant
+  region: silicon
+  species: donor
+  value: 1e16 cm^-3
+contacts:
+- id: gate
+  location: x_min
+  kind: metal_work_function
+  work_function: 5.0 eV
+- id: body
+  location: x_max
+  kind: ohmic
+physics:
+  equations:
+  - poisson
+  - electron_continuity
+  - hole_continuity
+  models:
+  - fermi
+  - constant_mobility
+  - srh
+  temperature: 300 K
+study:
+  kind: dc
+  contact: gate
+  start: -2.0 V
+  stop: 2.0 V
+  step: 0.5 V
+observables:
+- terminal_charge
+- terminal_current_density
+- potential
+- electric_field
+- electron_density
+- hole_density
+- charge_density
+- conduction_band
+- valence_band
+metadata:
+  purpose: n-substrate, thicker oxide, high work function gate
+interfaces:
+- id: oxide_silicon
+  left_region: oxide
+  right_region: silicon

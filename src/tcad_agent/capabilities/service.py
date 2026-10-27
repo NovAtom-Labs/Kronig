@@ -18,6 +18,52 @@ from tcad_agent.domain.studies import (
 from tcad_agent.physics.parameters import REGISTERED_PARAMETERS
 from tcad_agent.physics.registry import PhysicsRegistry
 
+# Spatial quantities that need a line to be read along in a two-dimensional structure.
+_PROFILE_OBSERVABLES = frozenset(
+    {
+        "potential",
+        "electron_density",
+        "hole_density",
+        "charge_density",
+        "net_doping",
+        "conduction_band",
+        "valence_band",
+        "fermi_level",
+        "electron_quasi_fermi_level",
+        "hole_quasi_fermi_level",
+        "electron_mobility",
+        "hole_mobility",
+        "recombination_rate",
+        "srh_recombination_rate",
+        "auger_recombination_rate",
+        "donor_concentration",
+        "acceptor_concentration",
+        "band_gap",
+        "band_gap_narrowing",
+        "electron_affinity",
+        "effective_intrinsic_carrier_concentration",
+        "lattice_temperature",
+        "electric_field",
+        "electron_current_density",
+        "hole_current_density",
+        "total_current_density",
+    }
+)
+_NEEDS_INPUT_CODES = frozenset(
+    {
+        "missing_contact_area",
+        "missing_device_width",
+        "missing_profile_cut",
+        "observable_needs_model",
+    }
+)
+# A native field exists only when the model that produces it is part of the physics.
+_OBSERVABLE_MODELS = {
+    "srh_recombination_rate": ("srh",),
+    "auger_recombination_rate": ("auger",),
+    "band_gap_narrowing": ("band_gap_narrowing", "slotboom_bgn"),
+}
+
 
 class CapabilityService:
     """Checks requested features without interpreting device names."""
@@ -451,8 +497,68 @@ class CapabilityService:
                         supported=("electron_quasi_fermi_level", "hole_quasi_fermi_level"),
                     )
                 )
+        if manifest.backend == "sentaurus":
+            for observable in spec.observables:
+                needed = _OBSERVABLE_MODELS.get(str(observable))
+                if needed and not set(needed) & set(spec.physics.models):
+                    issues.append(
+                        CapabilityIssue(
+                            path="physics.models",
+                            code="observable_needs_model",
+                            message=(
+                                f"{observable} only exists when the {' or '.join(needed)} model "
+                                "is part of the physics; the model changes the whole "
+                                "simulation, so it is added to the experiment for approval, "
+                                "never switched on silently"
+                            ),
+                            requested=str(observable),
+                            supported=(
+                                *(f"add the {name} model" for name in needed),
+                                "drop this output",
+                            ),
+                        )
+                    )
+        if spec.dimension == 2 and not spec.profile_cuts:
+            spatial = sorted(
+                str(observable)
+                for observable in spec.observables
+                if str(observable) in _PROFILE_OBSERVABLES
+            )
+            if spatial:
+                issues.append(
+                    CapabilityIssue(
+                        path="profile_cuts",
+                        code="missing_profile_cut",
+                        message=(
+                            "profiles in a two-dimensional structure are taken along a lateral "
+                            "line, so the depth of at least one cut is required"
+                        ),
+                        requested=",".join(spatial),
+                        supported=("provide cut depth",),
+                    )
+                )
         if any(str(observable) == "absolute_terminal_current" for observable in spec.observables):
-            missing_area = tuple(contact.id for contact in spec.contacts if contact.area is None)
+            if spec.dimension == 2:
+                # A two-dimensional device carries current per unit width, so the width turns
+                # it into amperes; contact areas follow from the geometry.
+                if spec.width is None:
+                    issues.append(
+                        CapabilityIssue(
+                            path="width",
+                            code="missing_device_width",
+                            message=(
+                                "absolute terminal current in a two-dimensional device "
+                                "requires the device width"
+                            ),
+                            requested="width",
+                            supported=("provide device width",),
+                        )
+                    )
+            missing_area = tuple(
+                contact.id
+                for contact in spec.contacts
+                if contact.area is None and spec.dimension == 1
+            )
             if missing_area:
                 issues.append(
                     CapabilityIssue(
@@ -525,7 +631,7 @@ class CapabilityService:
         if issues:
             status = (
                 CapabilityStatus.NEEDS_INPUT
-                if all(issue.code == "missing_contact_area" for issue in issues)
+                if all(issue.code in _NEEDS_INPUT_CODES for issue in issues)
                 else CapabilityStatus.BACKEND_UNSUPPORTED
             )
         return CapabilityDecision(status=status, backend=manifest.backend, issues=tuple(issues))

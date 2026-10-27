@@ -1,0 +1,9 @@
+{
+    "contacts.area":  "current density is fine",
+    "study":  "0 V to 0.6 V in 0.2 V steps",
+    "contacts":  "ohmic both ends, p side anode",
+    "profile_sampling":  "0 and 0.6 V",
+    "regions":  "1 um total, junction in the middle",
+    "physics.temperature":  "300 K",
+    "profiles":  "p 1e18, n 1e16 uniform"
+}

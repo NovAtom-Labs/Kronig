@@ -1,0 +1,9 @@
+{
+    "regions.material":  "silicon and sio2",
+    "regions.geometry":  "5 nm oxide, 100 nm silicon",
+    "profiles.parameters":  "p-type 1e17, whatever for the source drain",
+    "study.contact":  "gate",
+    "physics.temperature":  "300 K",
+    "contacts.boundary_conditions":  "metal gate, work function 4.1 eV",
+    "study.values":  "0 V, 1 V and 2 V on the gate"
+}

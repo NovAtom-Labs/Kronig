@@ -4,9 +4,37 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from itertools import pairwise
 
 from tcad_agent.results.datasets import AxisKind, Dataset, ScientificAxis
 from tcad_agent.results.models import OperatingPoint
+
+
+def finite_difference(
+    coordinates: tuple[float, ...], values: tuple[float, ...]
+) -> tuple[float, ...] | None:
+    """Local derivative on a strictly monotonic coordinate, or None if undefined.
+
+    Two points give only one secant, not a local curve, so at least three are required.
+    """
+    deltas = tuple(right - left for left, right in pairwise(coordinates))
+    if (
+        len(coordinates) < 3
+        or any(delta == 0 for delta in deltas)
+        or not (all(delta > 0 for delta in deltas) or all(delta < 0 for delta in deltas))
+    ):
+        return None
+    derivatives: list[float] = []
+    for index in range(len(values)):
+        if index == 0:
+            left, right = 0, 1
+        elif index == len(values) - 1:
+            left, right = index - 1, index
+        else:
+            left, right = index - 1, index + 1
+        run = coordinates[right] - coordinates[left]
+        derivatives.append((values[right] - values[left]) / run)
+    return tuple(derivatives)
 
 
 @dataclass(frozen=True)

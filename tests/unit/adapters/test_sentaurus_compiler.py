@@ -220,7 +220,8 @@ def test_dc_ramps_reach_exact_targets_and_write_distinct_profiles(tmp_path, stud
     deck = job.entrypoint.read_text()
     goals = [line.strip() for line in deck.splitlines() if "Goal {" in line]
     assert goals == [f'Goal {{ Name="{study["contact"]}" Voltage={target} }}' for target in targets]
-    assert deck.count("InitialStep=0.1 MinStep=1e-6 MaxStep=0.1") == 3
+    # Small ramp steps: a refined mesh stalls near the first bias with steps of 0.1 of the ramp.
+    assert deck.count("InitialStep=0.02 MinStep=1e-6 MaxStep=0.05") == 3
     for index in range(3):
         assert f'Plot(FilePrefix="point_{index:04d}" NoOverWrite)' in deck
     manifest = json.loads((job.entrypoint.parent / "job-manifest.json").read_text())
@@ -241,11 +242,17 @@ def test_unmapped_physics_parameters_fail_before_writing(tmp_path):
 
 def test_solver_iteration_limit_is_mapped(tmp_path):
     data = equilibrium_spec().model_dump(mode="json")
-    data["solver"]["maximum_iterations"] = 123
+    data["solver"]["maximum_iterations"] = 500
     job = SentaurusAdapter.from_defaults().compile(
         ExperimentSpec.model_validate(data), tmp_path / "job"
     )
-    assert "Iterations=123" in job.entrypoint.read_text()
+    assert "Iterations=500" in job.entrypoint.read_text()
+    # A smaller request is raised to the floor Newton needs near strong inversion.
+    data["solver"]["maximum_iterations"] = 80
+    floor = SentaurusAdapter.from_defaults().compile(
+        ExperimentSpec.model_validate(data), tmp_path / "floor"
+    )
+    assert "Iterations=200" in floor.entrypoint.read_text()
 
 
 def test_hole_only_richardson_override_is_not_silently_ignored(tmp_path):

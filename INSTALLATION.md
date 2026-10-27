@@ -124,6 +124,10 @@ Open **Settings** in the application and supply your approved Bedrock key, regio
 
 An ignored `.env` is optional for developer overrides. Copy `.env.example` only if you need it, then fill your own values. Blank `TCAD_DEVSIM_PYTHON` uses the sibling simulator environment automatically in the desktop launcher. Set an absolute executable path only for a deliberately different installation.
 
+### Optional: run Sentaurus on an HPC over SSH
+
+DEVSIM runs locally with no extra setup. To also run Sentaurus on an HPC you can reach over SSH (and a VPN such as Tailscale if needed), put the HPC address, your login and the Sentaurus release in `.env`, then run `tcad-agent sentaurus-check`. Nothing is installed on the HPC. The simple step-by-step guide is [Run Sentaurus from Kronig over SSH](docs/operations/sentaurus-ssh-setup.md). Both simulators stay available; name the one you want in a request, for example "use Sentaurus".
+
 The desktop launcher and scientific CLI read dotenv configuration without executing shell code. Do not `source .env`. Do not copy another developer's `.env`, credentials or entire virtual environment. Never commit proprietary Sentaurus documentation, licensed examples or private signing keys. Rotate exposed credentials.
 
 ## 5. Check the installation

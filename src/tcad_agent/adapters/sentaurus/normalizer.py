@@ -46,6 +46,17 @@ _ALLOWED_FIELDS = {
     "electron_mobility",
     "hole_mobility",
     "recombination_rate",
+    "srh_recombination_rate",
+    "auger_recombination_rate",
+    "net_doping",
+    "donor_concentration",
+    "acceptor_concentration",
+    "band_gap",
+    "band_gap_narrowing",
+    "electron_affinity",
+    "effective_intrinsic_carrier_concentration",
+    "total_current_density",
+    "lattice_temperature",
 }
 
 

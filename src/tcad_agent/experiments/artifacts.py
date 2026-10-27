@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from tcad_agent.domain.models import Region2D
 from tcad_agent.domain.units import QuantityValue
 from tcad_agent.experiments.models import PreparedExperiment
 
@@ -243,10 +244,16 @@ class ExperimentPlanArtifactWriter:
             )
 
         for region in spec.regions:
+            lateral = (
+                f", lateral {_display(region.y0.model_dump(mode='json'))} to "
+                f"{_display(region.y1.model_dump(mode='json'))}"
+                if isinstance(region, Region2D)
+                else ""
+            )
             lines.append(
                 f"- `{region.id}`: {region.material}, "
                 f"{_display(region.x0.model_dump(mode='json'))} to "
-                f"{_display(region.x1.model_dump(mode='json'))}"
+                f"{_display(region.x1.model_dump(mode='json'))}{lateral}"
             )
 
         lines.extend(["", "## Doping and charge profiles", ""])
@@ -265,14 +272,46 @@ class ExperimentPlanArtifactWriter:
                 else ""
             )
 
+            placement = (
+                f" on region `{contact.region}`"
+                + (
+                    f", span {_display(contact.span[0].model_dump(mode='json'))} to "
+                    f"{_display(contact.span[1].model_dump(mode='json'))}"
+                    if contact.span is not None
+                    else ""
+                )
+                if contact.region is not None
+                else ""
+            )
+            offset = (
+                f", fixed at {_display(contact.voltage_offset.model_dump(mode='json'))}"
+                if contact.voltage_offset.to("V") != 0
+                else ""
+            )
             lines.append(
                 f"- `{contact.id}`: {contact.kind.value} "
-                f"at {contact.location.value}{area}"
+                f"at {contact.location.value}{placement}{area}{offset}"
                 + (
                     f", work function "
                     f"{_display(contact.work_function.model_dump(mode='json'))}"
                     if contact.work_function is not None
                     else ""
+                )
+            )
+
+        if spec.profile_cuts or spec.width is not None:
+            lines.extend(["", "## Two-dimensional readout", ""])
+            for cut in spec.profile_cuts:
+                lines.append(
+                    f"- Lateral profile cut `{cut.id}` at depth "
+                    f"{_display(cut.at.model_dump(mode='json'))}"
+                )
+            lines.append(
+                "- Device width: "
+                + (
+                    _display(spec.width.model_dump(mode="json"))
+                    if spec.width is not None
+                    else "not given; currents are reported per 1 um of width"
                 )
             )
 
@@ -319,7 +358,8 @@ class ExperimentPlanArtifactWriter:
         )
 
         lines.append(
-            "Up to four half-spacing mesh comparisons retain the same physics "
+            "Up to four half-spacing mesh comparisons (a fifth only when the last two "
+            "show the response clearly converging) retain the same physics "
             "and study, using a 3% per-profile response criterion. Numerically "
             "refined results may replace the initial coarse result, with every "
             "input retained in provenance. Existing physical tolerances are "

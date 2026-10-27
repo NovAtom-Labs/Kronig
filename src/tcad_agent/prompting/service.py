@@ -97,7 +97,9 @@ class PromptPreparationService:
         compiler: PromptCompiler,
         capability_hashes: Mapping[str, str],
         capability_catalog: CapabilityCatalog | None = None,
+        catalog_resolver: Callable[[str], CapabilityCatalog] | None = None,
     ) -> None:
+        self.catalog_resolver = catalog_resolver
         self.model = model
         self.workspace_collector = workspace_collector
         self.evidence_collector = evidence_collector
@@ -142,8 +144,12 @@ class PromptPreparationService:
                 self._evidence_cache.clear()
             self._evidence_cache[cache_key] = evidence
         report("reasoning_about_scientific_intent")
-        catalog_view = self.capability_catalog.public_view() if self.capability_catalog else None
-        incremental = self._literal_answer_decision(previous_decision, answers)
+        # The backend follows the simulator the researcher names, on every round.
+        request_catalog = self.capability_catalog
+        if self.catalog_resolver is not None:
+            request_catalog = self.catalog_resolver(original_prompt)
+        catalog_view = request_catalog.public_view() if request_catalog else None
+        incremental = self._literal_answer_decision(previous_decision, answers, request_catalog)
         if incremental is not None:
             report("validating_research_intent")
             incremental = readable_questions(
@@ -171,11 +177,7 @@ class PromptPreparationService:
             answers=answers,
             workspace=workspace,
             evidence=evidence,
-            capabilities=(
-                self.capability_catalog.public_view()
-                if self.capability_catalog is not None
-                else None
-            ),
+            capabilities=catalog_view,
         )
         if "previous_decision" in inspect.signature(self.model.prepare).parameters:
             model_arguments["previous_decision"] = previous_decision
@@ -198,7 +200,7 @@ class PromptPreparationService:
 
         threading.Thread(target=infer, daemon=True, name="kronig-preparation-inference").start()
         started = time.monotonic()
-        timeout = max(1, float(os.getenv("AGENT_KRONIG_PREPARATION_TIMEOUT", "300")))
+        timeout = max(1, float(os.getenv("AGENT_KRONIG_PREPARATION_TIMEOUT", "900")))
         while True:
             try:
                 successful, result = response.get(
@@ -337,9 +339,7 @@ class PromptPreparationService:
                 + ", ".join(unsupported)
                 + ". No replacement defaults were applied and no simulation was started.",
             )
-        decision = enforce_completeness(
-            decision, self.capability_catalog.public_view() if self.capability_catalog else None
-        )
+        decision = enforce_completeness(decision, catalog_view)
         decision = readable_questions(decision, catalog_view)
         try:
             validate_questions(decision, original_prompt, answers, catalog_view, previous_decision)
@@ -375,17 +375,17 @@ class PromptPreparationService:
             compiled_request=compiled,
         )
 
-    def _literal_answer_decision(self, previous, answers):
+    def _literal_answer_decision(self, previous, answers, request_catalog):
         """Apply only literal, unit-checked scalar answers to already reasoned questions.
 
         Free text, choices, structured values and unresolved new intent still go to
         the model. This is not a replacement for scientific intent reasoning.
         """
-        if not previous or not previous.intent or not self.capability_catalog:
+        if not previous or not previous.intent or not request_catalog:
             return None
         if previous.status != "clarification":
             return None
-        catalog = self.capability_catalog.public_view()
+        catalog = request_catalog.public_view()
         supplied = {answer.question_id: answer.answer.strip() for answer in current_answers(answers)
             if answer.field_path is None or any(
                 _scoped_path(answer.field_path) == _scoped_path(q.field_path)
@@ -452,8 +452,7 @@ class PromptPreparationService:
 def build_default_prompt_preparation(project_root: Path) -> PromptPreparationService:
     """Compose production preprocessing from the same environment model settings."""
 
-    from tcad_agent.capabilities.descriptors import CapabilityCatalog
-    from tcad_agent.capabilities.models import CapabilityManifest
+    from tcad_agent.capabilities.active import catalog_for_request
     from tcad_agent.knowledge.retrieve import KnowledgeIndex
     from tcad_agent.prompting.context import capability_hashes
     from tcad_agent.prompting.gateway import EnvironmentPreparationModel
@@ -468,7 +467,5 @@ def build_default_prompt_preparation(project_root: Path) -> PromptPreparationSer
         evidence_collector=LocalEvidenceCollector(KnowledgeIndex(index_path)),
         compiler=PromptCompiler(),
         capability_hashes=capability_hashes(project_root / "src" / "tcad_agent"),
-        capability_catalog=CapabilityCatalog.from_manifest(
-            CapabilityManifest.from_backend("devsim")
-        ),
+        catalog_resolver=catalog_for_request,
     )

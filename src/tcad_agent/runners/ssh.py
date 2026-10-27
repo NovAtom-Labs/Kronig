@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shlex
 import stat
 import time
@@ -15,7 +16,28 @@ from uuid import uuid4
 
 import paramiko
 
+from tcad_agent.adapters.sentaurus.runtime import GENERATED_MESHES
 from tcad_agent.runners.models import CompiledJob, NativeRunResult, RunBudget
+
+CONNECT_ATTEMPTS = 3
+CONNECT_RETRY_SECONDS = 5
+POLL_SECONDS = 15
+RECONNECT_SECONDS = 30
+RESULT_GRACE_SECONDS = 180
+
+
+def _is_transient_connect_error(error: Exception) -> bool:
+    """Timeouts and resets are worth another try; rejected logins and host keys are not."""
+    if isinstance(error, paramiko.AuthenticationException | paramiko.BadHostKeyException):
+        return False
+    if isinstance(error, TimeoutError | ConnectionError):
+        return True
+    if isinstance(error, paramiko.SSHException):
+        # A login node that refuses or drops a session says things like "No existing session" or
+        # "Error reading SSH protocol banner"; only a rejected key is a permanent answer.
+        text = str(error).lower()
+        return "known_hosts" not in text and "host key" not in text
+    return isinstance(error, OSError)
 
 
 class SSHRunnerError(RuntimeError):
@@ -163,19 +185,35 @@ class SSHSentaurusRunner:
         client = paramiko.SSHClient()
 
         try:
-            client.load_system_host_keys()
-            client.set_missing_host_key_policy(paramiko.RejectPolicy())
-            client.connect(
-                hostname=self.host,
-                port=self.port,
-                username=self.user,
-                password=self._password,
-                allow_agent=True,
-                look_for_keys=True,
-                timeout=15,
-                banner_timeout=15,
-                auth_timeout=15,
-            )
+            for attempt in range(1, CONNECT_ATTEMPTS + 1):
+                try:
+                    client.load_system_host_keys()
+                    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+                    client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.user,
+                        password=self._password,
+                        allow_agent=True,
+                        look_for_keys=True,
+                        timeout=15,
+                        banner_timeout=15,
+                        auth_timeout=15,
+                    )
+                    break
+                except Exception as transient:
+                    if attempt == CONNECT_ATTEMPTS or not _is_transient_connect_error(transient):
+                        raise
+                    # A shared login node limits simultaneous logins and sometimes drops one.
+                    self._record(
+                        "ssh.connect",
+                        "failed",
+                        error=self._safe_text(transient),
+                        attempt=attempt,
+                        retrying=True,
+                    )
+                    client.close()
+                    time.sleep(CONNECT_RETRY_SECONDS * attempt)
         except Exception as exc:
             try:
                 self._record(
@@ -244,6 +282,62 @@ class SSHSentaurusRunner:
                 error=self._safe_text(exc),
             )
             raise
+
+    def _execute_resilient(
+        self,
+        client: paramiko.SSHClient,
+        remote_dir: str,
+        command: str,
+        seconds: float,
+    ) -> tuple[paramiko.SSHClient, int, str, str]:
+        """Start the job detached on the host and wait for its exit status.
+
+        A simulation can run for an hour over a VPN. If the connection drops, a command held on
+        it dies with it, so the job runs on its own and only its exit-status file is watched,
+        reconnecting as often as needed until the run's own time limit has passed.
+        """
+        launch = (
+            "S=$(command -v setsid || true); "
+            f"nohup $S sh -c {shlex.quote(command)} > /dev/null 2>&1 < /dev/null & echo launched"
+        )
+        exit_code, out, err = self._exec(client, launch, "sentaurus.execute")
+        if exit_code != 0:
+            return client, exit_code, out, err
+        deadline = time.monotonic() + seconds + RESULT_GRACE_SECONDS
+        while True:
+            try:
+                code = self._read_return_code(client, remote_dir)
+            except Exception as error:
+                self._record("sentaurus.wait", "reconnecting", error=self._safe_text(error))
+                client = self._reconnect(client, deadline)
+                continue
+            if code is not None:
+                return client, code, out, err
+            if time.monotonic() > deadline:
+                return client, 124, out, err
+            time.sleep(POLL_SECONDS)
+
+    @staticmethod
+    def _read_return_code(client: paramiko.SSHClient, remote_dir: str) -> int | None:
+        _stdin, stdout, _stderr = client.exec_command(
+            f"cat {shlex.quote(remote_dir)}/runner.return_code 2>/dev/null; true", timeout=30
+        )
+        text = stdout.read().decode(errors="replace").strip()
+        return int(text) if text.lstrip("-").isdigit() else None
+
+    def _reconnect(self, client: paramiko.SSHClient, deadline: float) -> paramiko.SSHClient:
+        try:
+            client.close()
+        except Exception:
+            pass
+        while True:
+            try:
+                return self._connect()
+            except Exception as error:
+                if time.monotonic() > deadline:
+                    raise
+                self._record("sentaurus.wait", "retrying", error=self._safe_text(error))
+                time.sleep(RECONNECT_SECONDS)
 
     def _upload_files(
         self,
@@ -413,6 +507,51 @@ class SSHSentaurusRunner:
                     client, remote_dir, output_dir, names, maximum_bytes=64 * 1024 * 1024
                 )
 
+    @staticmethod
+    def remote_command(remote_dir: str, program: str, seconds: float) -> str:
+        """Shell line that runs ``program`` under ``timeout`` and records its exit status.
+
+        ``timeout`` gets whole seconds rounded up: the remaining budget of a later run is
+        fractional, older coreutils reject a fractional duration outright, and rounding up
+        keeps a sub-second budget from becoming ``0`` (which disables the timeout).
+        """
+        # The script divides this budget between its numerical strategies.
+        return (
+            f"cd {shlex.quote(remote_dir)} && "
+            f"KRONIG_BUDGET_SECONDS={math.ceil(seconds)} "
+            f"timeout {math.ceil(seconds)}s "
+            f"{program} "
+            f"> runner.stdout.log 2> runner.stderr.log; "
+            f"rc=$?; "
+            f"printf '%s\\n' \"$rc\" > runner.return_code; "
+            f'exit "$rc"'
+        )
+
+    @staticmethod
+    def _failure_summary(output_dir: Path, return_code: int | None, fallback: str) -> str:
+        """Name the failed pipeline stage and quote the native diagnostics."""
+        stage = {
+            21: "structure editor failed",
+            22: "structure editor produced no mesh",
+            23: "mesh could not be staged",
+            24: "Sentaurus tools were not found on the host (set TCAD_SENTAURUS_SETUP or _BIN)",
+        }.get(return_code or 0, "device simulation failed")
+        lines: list[str] = []
+        for name in ("sde.stdout.log", "sdevice.stdout.log"):
+            path = output_dir / name
+            if path.is_file():
+                text = path.read_text(errors="replace").splitlines()
+                hits = [
+                    line.strip()
+                    for line in text
+                    if re.search(r"(?i)error|syntax|unable|licen[sc]e", line)
+                ]
+                lines.extend(f"{name}: {line}" for line in hits[-6:])
+        detail = "; ".join(lines) or fallback.strip()
+        if re.search(r"(?i)unable to check out|flexnet|licen[sc]e.*(error|unavailable)", detail):
+            stage = "Sentaurus license unavailable (no free seat or server unreachable)"
+        return f"{stage} (exit {return_code}): {detail}"[:4000]
+
     def run(
         self,
         job: CompiledJob,
@@ -508,46 +647,62 @@ class SSHSentaurusRunner:
 
             self._upload_files(client, job, remote_dir)
 
-            command = (
-                f"cd {shlex.quote(remote_dir)} && "
-                f"timeout {budget.seconds:g}s "
-                f"sdevice {shlex.quote(job.entrypoint.name)} "
-                f"> runner.stdout.log 2> runner.stderr.log; "
-                f"rc=$?; "
-                f"printf '%s\\n' \"$rc\" > runner.return_code; "
-                f'exit "$rc"'
-            )
+            generated = manifest is not None and manifest.mesh_generation in GENERATED_MESHES
+            program = "sh run.sh" if generated else f"sdevice {shlex.quote(job.entrypoint.name)}"
+            command = self.remote_command(remote_dir, program, budget.seconds)
 
-            _exit_code, _stdout_text, _stderr_text = self._exec(
-                client,
-                command,
-                "sentaurus.execute",
+            client, _exit_code, _stdout_text, _stderr_text = self._execute_resilient(
+                client, remote_dir, command, budget.seconds
             )
 
             # Retain shell diagnostics even if the remote logs cannot be fetched.
             stdout_path.write_text(self._safe_text(_stdout_text), encoding="utf-8")
             stderr_path.write_text(self._safe_text(_stderr_text), encoding="utf-8")
 
-            self._download_files(
-                client,
-                remote_dir,
-                output_dir,
-                (
-                    "runner.stdout.log",
-                    "runner.stderr.log",
-                    "runner.return_code",
-                    "sdevice.log",
-                    "sdevice.tdr",
-                    "sdevice.plt",
-                ),
-            )
-            self._download_files(
-                client,
-                remote_dir,
-                output_dir,
-                ("sentaurus-result.json",),
-                maximum_bytes=64 * 1024 * 1024,
-            )
+            if generated:
+                assert manifest is not None
+                self._download_files(
+                    client,
+                    remote_dir,
+                    output_dir,
+                    (
+                        "runner.stdout.log",
+                        "runner.stderr.log",
+                        "runner.return_code",
+                        "sde.stdout.log",
+                        "sde.stderr.log",
+                        "sdevice.stdout.log",
+                        "sdevice.stderr.log",
+                    ),
+                )
+                self._download_files(
+                    client,
+                    remote_dir,
+                    output_dir,
+                    manifest.expected_outputs,
+                    maximum_bytes=256 * 1024 * 1024,
+                )
+            else:
+                self._download_files(
+                    client,
+                    remote_dir,
+                    output_dir,
+                    (
+                        "runner.stdout.log",
+                        "runner.stderr.log",
+                        "runner.return_code",
+                        "sdevice.log",
+                        "sdevice.tdr",
+                        "sdevice.plt",
+                    ),
+                )
+                self._download_files(
+                    client,
+                    remote_dir,
+                    output_dir,
+                    ("sentaurus-result.json",),
+                    maximum_bytes=64 * 1024 * 1024,
+                )
 
             if return_code_path.exists():
                 try:
@@ -576,6 +731,8 @@ class SSHSentaurusRunner:
                     if stderr_path.exists()
                     else "Sentaurus execution failed"
                 )
+                if generated:
+                    error = self._failure_summary(output_dir, return_code, error)
 
             for candidate in (
                 output_dir / "sentaurus-result.json",
@@ -589,13 +746,26 @@ class SSHSentaurusRunner:
                 from tcad_agent.adapters.sentaurus.normalizer import SentaurusNormalizer
 
                 try:
+                    if generated:
+                        from tcad_agent.adapters.sentaurus.native_export import build_export
+                        from tcad_agent.domain.models import ExperimentSpec
+
+                        assert manifest is not None
+                        result_path = build_export(
+                            output_dir,
+                            ExperimentSpec.model_validate_json(
+                                (workspace / "experiment.json").read_bytes()
+                            ),
+                            manifest,
+                        )
                     if result_path is None or result_path.name != "sentaurus-result.json":
                         raise SSHRunnerError(
                             "simulation exited successfully but no native table export "
                             "was produced; "
                             "binary TDR is not a canonical result"
                         )
-                    self._download_export_tables(client, remote_dir, output_dir)
+                    if not generated:
+                        self._download_export_tables(client, remote_dir, output_dir)
                     normalized = SentaurusNormalizer().normalize(
                         NativeRunResult(
                             backend="sentaurus",
@@ -616,7 +786,9 @@ class SSHSentaurusRunner:
                         if provenance != {
                             "compiler_version": manifest.compiler_version,
                             "experiment_sha256": manifest.inputs["experiment.json"],
-                            "mesh_sha256": manifest.inputs["device.tdr"],
+                            "mesh_sha256": manifest.inputs[
+                                "mesh.scm" if generated else "device.tdr"
+                            ],
                         }:
                             raise SSHRunnerError(
                                 "native export provenance differs from the submitted bundle"

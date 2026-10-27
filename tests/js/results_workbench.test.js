@@ -323,3 +323,21 @@ assertEqual(
   "Bias (V),Electron current · run-a (A/m^2),Hole current · run-a (A/m^2)",
   "comparison CSV exports every visible series with run provenance",
 );
+
+// A result with a single operating point opens on a profile, not on an empty one-value chart.
+(() => {
+  const dataset = (name, count, kinds) => ({
+    name, values: new Array(count).fill(1), axes: kinds.map((kind) => ({kind})),
+  });
+  const pick = AgentKronigResults.defaultDatasetName;
+  const equilibrium = [
+    dataset("terminal_current__gate", 1, ["bias"]),
+    dataset("potential", 200, ["position"]),
+    dataset("conduction_band", 200, ["position"]),
+  ];
+  if (pick(equilibrium) !== "conduction_band") throw new Error("equilibrium should open on the band edge");
+  const sweep = [dataset("terminal_current__anode", 10, ["bias"]), dataset("potential", 2000, ["position"])];
+  if (pick(sweep) !== "terminal_current__anode") throw new Error("a sweep curve should still lead");
+  if (pick([dataset("terminal_current__a", 1, ["bias"])]) !== "terminal_current__a") throw new Error("a lone dataset is kept");
+  if (pick([]) !== "") throw new Error("no datasets, no choice");
+})();

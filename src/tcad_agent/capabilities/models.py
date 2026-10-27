@@ -36,6 +36,8 @@ class CapabilityManifest(StrictModel):
     backend: str
     adapter_version: str = "0.1.0"
     execution_state: Literal["configured", "unconfigured"] = "configured"
+    # Extra names a researcher may use for this simulator, matched as whole words.
+    aliases: tuple[str, ...] = ()
     dimensions: tuple[int, ...]
     equations: tuple[str, ...]
     models: tuple[str, ...] = ()
@@ -46,6 +48,11 @@ class CapabilityManifest(StrictModel):
     studies: tuple[str, ...] = ("equilibrium", "dc")
     observables: tuple[str, ...] = ()
     limits: dict[str, int | float] = Field(default_factory=dict)
+    # Numerical floors this backend declares for validation (measured, not tuned to pass).
+    validation_limits: dict[str, float] = Field(default_factory=dict)
+    # Plain-language guide to the backend's real features and how to ask about them. It is
+    # loaded from the adapter's guide.md and is part of the capability digest.
+    guide: str = ""
 
     @model_validator(mode="after")
     def require_unique_values(self) -> Self:
@@ -69,5 +76,9 @@ class CapabilityManifest(StrictModel):
     def from_backend(cls, backend: str) -> "CapabilityManifest":
         if backend not in {"devsim", "sentaurus"}:
             raise ValueError(f"unknown backend: {backend}")
-        resource = files("tcad_agent.adapters").joinpath(backend, "manifest.yaml")
-        return cls.model_validate(yaml.safe_load(resource.read_text()))
+        package = files("tcad_agent.adapters").joinpath(backend)
+        data = yaml.safe_load(package.joinpath("manifest.yaml").read_text())
+        guide = package.joinpath("guide.md")
+        if guide.is_file():
+            data["guide"] = guide.read_text(encoding="utf-8")
+        return cls.model_validate(data)

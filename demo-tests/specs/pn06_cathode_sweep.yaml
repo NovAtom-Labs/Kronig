@@ -1,0 +1,58 @@
+schema_version: '1.0'
+name: pn06-cathode-sweep
+dimension: 1
+regions:
+- id: p_region
+  material: silicon
+  x0: 0 um
+  x1: 0.5 um
+  mesh_spacing: 0.01 um
+- id: n_region
+  material: silicon
+  x0: 0.5 um
+  x1: 1.0 um
+  mesh_spacing: 0.01 um
+profiles:
+- kind: constant
+  region: p_region
+  species: acceptor
+  value: 1e17 cm^-3
+- kind: constant
+  region: n_region
+  species: donor
+  value: 1e16 cm^-3
+contacts:
+- id: anode
+  location: x_min
+  kind: ohmic
+- id: cathode
+  location: x_max
+  kind: ohmic
+physics:
+  equations:
+  - poisson
+  - electron_continuity
+  - hole_continuity
+  models:
+  - boltzmann
+  - constant_mobility
+  - srh
+  temperature: 300 K
+study:
+  kind: dc
+  contact: cathode
+  start: 0.0 V
+  stop: 3.0 V
+  step: 0.5 V
+observables:
+- terminal_current_density
+- terminal_charge
+- potential
+- electric_field
+- electron_density
+- hole_density
+- charge_density
+- conduction_band
+- valence_band
+metadata:
+  purpose: reverse bias by driving the cathode

@@ -28,3 +28,9 @@ knowledge-sources/index/
 # Local verification evidence and unrelated rendering scratch files.
 /output/
 /tmp/
+
+# Demo-test run outputs (inputs under demo-tests/specs, answers, prompts and nl scripts are tracked).
+/demo-tests/matrix/
+/demo-tests/out/
+/demo-tests/nl/runs/
+/demo-tests/nl/_nl_progress.txt

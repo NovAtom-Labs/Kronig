@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
@@ -46,6 +45,7 @@ from tcad_agent.domain.studies import (
 )
 from tcad_agent.physics.parameters import REGISTERED_PARAMETERS
 from tcad_agent.results.datasets import AxisKind, Dataset, DatasetCentering, ScientificAxis
+from tcad_agent.results.derive import finite_difference
 from tcad_agent.results.models import BiasPoint, CanonicalResult, FieldSeries, OperatingPoint
 from tcad_agent.runners.models import CompiledJob, NativeRunResult
 
@@ -1107,23 +1107,4 @@ class DevsimAdapter:
     def _finite_difference(
         coordinates: tuple[float, ...], values: tuple[float, ...]
     ) -> tuple[float, ...] | None:
-        deltas = tuple(right - left for left, right in pairwise(coordinates))
-        if (
-            # Two points give only one secant, not a local C-V curve.
-            len(coordinates) < 3
-            or any(delta == 0 for delta in deltas)
-            or not (all(delta > 0 for delta in deltas) or all(delta < 0 for delta in deltas))
-        ):
-            return None
-        derivatives: list[float] = []
-        for index in range(len(values)):
-            if index == 0:
-                left, right = 0, 1
-            elif index == len(values) - 1:
-                left, right = index - 1, index
-            else:
-                left, right = index - 1, index + 1
-            derivatives.append(
-                (values[right] - values[left]) / (coordinates[right] - coordinates[left])
-            )
-        return tuple(derivatives)
+        return finite_difference(coordinates, values)

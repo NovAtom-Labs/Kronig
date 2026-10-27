@@ -369,3 +369,25 @@ def test_bare_scalar_uses_a_unit_only_when_the_question_explicitly_stated_it(tmp
     from tcad_agent.domain.units import QuantityValue
 
     assert QuantityValue.model_validate(result.decision.intent.fields[0].value).to("K") == 320
+
+
+def test_a_sweep_is_asked_once_not_as_three_separate_questions():
+    from types import SimpleNamespace
+
+    from tcad_agent.prompting.completeness import _merge_sweep_questions, question_for_path
+
+    parts = ["study.start", "study.stop", "study.step"]
+    rich = question_for_path("study.contact").model_copy(
+        update={"prompt": "Which contact is driven? Give start, stop and step in V."}
+    )
+    existing = {"study.contact": rich}
+    # The model already asked for all three: the generic ones disappear.
+    kept, merged = _merge_sweep_questions(["study.contact", *parts], existing, None, ())
+    assert kept == ["study.contact"] and merged == {}
+    # Otherwise one clear question stands in for the three.
+    kept, merged = _merge_sweep_questions(["physics.temperature", *parts], {}, None, ())
+    assert kept == ["physics.temperature", "study.start"]
+    assert "start voltage, stop voltage and step size" in merged["study.start"].prompt
+    # A single missing part is left alone.
+    assert _merge_sweep_questions(["study.stop"], {}, None, ()) == (["study.stop"], {})
+    assert SimpleNamespace  # the helper needs no model objects of its own

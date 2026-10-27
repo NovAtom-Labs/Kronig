@@ -1,0 +1,10 @@
+{
+    "profiles.parameters":  "p 1e17, n 1e16, uniform",
+    "study":  "-1 V to 0.6 V in 0.2 V steps",
+    "contacts.area":  "current density is fine",
+    "profile_sampling":  "-1, 0 and 0.6 V",
+    "physics.temperature":  "300 K",
+    "geometry":  "1 um total, junction in the middle",
+    "contacts.boundary_conditions":  "yes ohmic both, n side at 0V, sweep the p side",
+    "regions":  "1 um total, junction in the middle, p side (anode, left) 1e17 acceptor, n side (cathode, right) 1e16 donor, both uniform"
+}

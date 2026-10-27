@@ -1,0 +1,50 @@
+schema_version: '1.0'
+name: sk06-iv-p-4p3
+dimension: 1
+regions:
+- id: silicon
+  material: silicon
+  x0: 0 um
+  x1: 1.0 um
+  mesh_spacing: 0.005 um
+profiles:
+- kind: constant
+  region: silicon
+  species: acceptor
+  value: 1e16 cm^-3
+contacts:
+- id: metal
+  location: x_min
+  kind: metal_work_function
+  work_function: 4.3 eV
+- id: ohmic_back
+  location: x_max
+  kind: ohmic
+physics:
+  equations:
+  - poisson
+  - electron_continuity
+  - hole_continuity
+  models:
+  - boltzmann
+  - constant_mobility
+  - srh
+  temperature: 300 K
+study:
+  kind: dc
+  contact: metal
+  start: -0.6 V
+  stop: 0.6 V
+  step: 0.2 V
+observables:
+- terminal_current_density
+- terminal_charge
+- potential
+- electric_field
+- electron_density
+- hole_density
+- charge_density
+- conduction_band
+- valence_band
+metadata:
+  purpose: p-type Schottky IV

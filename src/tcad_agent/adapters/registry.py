@@ -72,7 +72,7 @@ def get_backend(backend: str) -> BackendBinding:
 
         if runner_type == "ssh":
             return BackendBinding(
-                adapter=SentaurusAdapter.from_defaults(),
+                adapter=SentaurusAdapter.from_defaults("sde"),
                 runner=SSHSentaurusRunner(),
             )
 

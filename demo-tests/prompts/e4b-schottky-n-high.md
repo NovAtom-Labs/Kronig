@@ -1,0 +1,1 @@
+schottky contact on n-type silicon with a high workfunction metal, equilibrium electrostatics and band diagram

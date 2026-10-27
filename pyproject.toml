@@ -52,6 +52,7 @@ where = ["src"]
 tcad_agent = [
   "**/*.yaml",
   "**/*.j2",
+  "adapters/*/guide.md",
   "web/templates/*.html",
   "web/static/*",
   "web/static/fonts/*",

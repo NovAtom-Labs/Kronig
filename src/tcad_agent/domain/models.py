@@ -5,9 +5,11 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from tcad_agent.domain import geometry2d
 from tcad_agent.domain.interfaces import Interface1D
 from tcad_agent.domain.presentation import normalize_display_units
 from tcad_agent.domain.profiles import (
+    BoxProfile,
     ConstantProfile,
     PiecewiseConstantProfile,
     PiecewiseConstantTemperatureProfile,
@@ -39,8 +41,10 @@ __all__ = [
     "Observable",
     "PhysicsParameters",
     "PhysicsSelection",
+    "ProfileCut",
     "ProfileSpecies",
     "Region1D",
+    "Region2D",
     "SignConvention",
     "SolverControls",
     "StrictModel",
@@ -56,6 +60,9 @@ class StrictModel(BaseModel):
 class ContactLocation(StrEnum):
     X_MIN = "x_min"
     X_MAX = "x_max"
+    # Lateral sides, used only by two-dimensional structures.
+    Y_MIN = "y_min"
+    Y_MAX = "y_max"
 
 
 class ContactKind(StrEnum):
@@ -192,6 +199,40 @@ class Region1D(StrictModel):
         return self
 
 
+class Region2D(Region1D):
+    """A rectangular region of a two-dimensional structure.
+
+    ``x0``/``x1`` are the extent along the stack (depth) axis and ``y0``/``y1`` the lateral
+    extent. A one-dimensional stack is the slice of such a structure at fixed ``y``.
+    """
+
+    y0: QuantityValue
+    y1: QuantityValue
+
+    @field_validator("y0", "y1")
+    @classmethod
+    def require_lateral_length(cls, value: QuantityValue) -> QuantityValue:
+        return value.require("m", "length")
+
+    @model_validator(mode="after")
+    def require_positive_lateral_extent(self) -> Self:
+        if self.y1.to("m") <= self.y0.to("m"):
+            raise ValueError("region y1 must be greater than y0")
+        return self
+
+
+class ProfileCut(StrictModel):
+    """A line along the lateral axis at fixed depth ``at`` where profiles are extracted."""
+
+    id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_-]*$")
+    at: QuantityValue
+
+    @field_validator("at")
+    @classmethod
+    def require_depth_length(cls, value: QuantityValue) -> QuantityValue:
+        return value.require("m", "length")
+
+
 class SignConvention(StrictModel):
     """Explicit electrical signs preserved with every approved experiment."""
 
@@ -218,6 +259,10 @@ class Contact(StrictModel):
     id: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_-]*$")
     location: ContactLocation
     kind: ContactKind
+    # Two-dimensional structures only: the region whose side carries the contact and,
+    # optionally, the (start, end) coordinates along that side. Default is the whole side.
+    region: str | None = None
+    span: tuple[QuantityValue, QuantityValue] | None = None
     work_function: QuantityValue | None = None
     electron_richardson_constant: QuantityValue | None = None
     hole_richardson_constant: QuantityValue | None = None
@@ -246,6 +291,18 @@ class Contact(StrictModel):
     @classmethod
     def require_voltage(cls, value: QuantityValue) -> QuantityValue:
         return value.require("V", "voltage")
+
+    @field_validator("span")
+    @classmethod
+    def require_ordered_span(
+        cls, value: tuple[QuantityValue, QuantityValue] | None
+    ) -> tuple[QuantityValue, QuantityValue] | None:
+        if value is not None:
+            for coordinate in value:
+                coordinate.require("m", "length")
+            if value[1].to("m") <= value[0].to("m"):
+                raise ValueError("contact span must end after it starts")
+        return value
 
     @field_validator("area")
     @classmethod
@@ -409,8 +466,8 @@ class ProfileSampling(StrictModel):
 class ExperimentSpec(StrictModel):
     schema_version: Literal["1.0"]
     name: str = Field(min_length=1)
-    dimension: Literal[1]
-    regions: tuple[Region1D, ...]
+    dimension: Literal[1, 2]
+    regions: tuple[Region1D | Region2D, ...]
     interfaces: tuple[Interface1D, ...] = ()
     profiles: tuple[Profile1D, ...]
     contacts: tuple[Contact, ...]
@@ -419,6 +476,10 @@ class ExperimentSpec(StrictModel):
     profile_sampling: ProfileSampling | None = None
     observables: tuple[Observable, ...]
     mesh_anchors: tuple[MeshAnchor1D, ...] = ()
+    # Two-dimensional structures only. Lines along the lateral axis where profiles are
+    # extracted, and the device width that turns per-width terminal currents into amperes.
+    profile_cuts: tuple[ProfileCut, ...] = ()
+    width: QuantityValue | None = None
     sign_convention: SignConvention = Field(default_factory=SignConvention)
     solver: SolverControls = Field(default_factory=SolverControls)
     display_units: dict[str, str] = Field(
@@ -491,6 +552,10 @@ class ExperimentSpec(StrictModel):
                 for value in self.profile_bias_values_v()
             ):
                 raise ValueError("profile points must exist in the approved bias schedule")
+        if self.dimension == 2:
+            self._validate_two_dimensional()
+            return self
+        self._reject_two_dimensional_fields()
         if not self.regions:
             raise ValueError("at least one region is required")
         region_ids = [region.id for region in self.regions]
@@ -577,6 +642,94 @@ class ExperimentSpec(StrictModel):
         ):
             raise ValueError("every mesh anchor must lie inside the region stack")
         return self
+
+    def _reject_two_dimensional_fields(self) -> None:
+        """A one-dimensional experiment must not carry fields that only 2D can honor."""
+        if any(isinstance(region, Region2D) for region in self.regions):
+            raise ValueError("regions with a lateral extent require dimension 2")
+        if any(isinstance(profile, BoxProfile) for profile in self.profiles):
+            raise ValueError("box doping profiles require dimension 2")
+        if any(
+            contact.region is not None
+            or contact.span is not None
+            or contact.location in {ContactLocation.Y_MIN, ContactLocation.Y_MAX}
+            for contact in self.contacts
+        ):
+            raise ValueError("contact regions, spans and lateral sides require dimension 2")
+        if self.profile_cuts or self.width is not None:
+            raise ValueError("profile cuts and device width require dimension 2")
+
+    def _validate_two_dimensional(self) -> None:
+        regions = list(self.regions)
+        if not regions or not all(isinstance(region, Region2D) for region in regions):
+            raise ValueError("a two-dimensional structure needs regions with y0 and y1")
+        ids = [region.id for region in regions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("region IDs must be unique")
+        for index, first in enumerate(regions):
+            for second in regions[index + 1 :]:
+                if geometry2d.overlap(first, second):
+                    raise ValueError(f"regions {first.id} and {second.id} overlap")
+        if self.interfaces or self.mesh_anchors or self.physics.temperature_profiles:
+            raise ValueError(
+                "interfaces, mesh anchors and temperature profiles are not defined for "
+                "two-dimensional structures"
+            )
+        by_id = {region.id: region for region in regions}
+        for profile in self.profiles:
+            region = by_id.get(profile.region)
+            if region is None:
+                raise ValueError(f"profile references unknown region: {profile.region}")
+            if profile.kind not in {"constant", "box"}:
+                raise ValueError("two-dimensional structures take constant or box doping only")
+            if isinstance(profile, BoxProfile):
+                x0, x1, y0, y1 = geometry2d.bounds(region)
+                inside = (
+                    x0 - 1e-15 <= profile.x0.to("m")
+                    and profile.x1.to("m") <= x1 + 1e-15
+                    and y0 - 1e-15 <= profile.y0.to("m")
+                    and profile.y1.to("m") <= y1 + 1e-15
+                )
+                if not inside:
+                    raise ValueError("a box doping window must lie inside its region")
+        contact_ids = [contact.id for contact in self.contacts]
+        if len(contact_ids) != len(set(contact_ids)):
+            raise ValueError("contact IDs must be unique")
+        for contact in self.contacts:
+            region = by_id.get(contact.region or "")
+            if region is None:
+                raise ValueError(f"contact {contact.id} needs a region of this structure")
+            lo, hi = (
+                (region.y0.to("m"), region.y1.to("m"))
+                if contact.location in {ContactLocation.X_MIN, ContactLocation.X_MAX}
+                else (region.x0.to("m"), region.x1.to("m"))
+            )
+            if contact.span is not None and (
+                contact.span[0].to("m") < lo - 1e-15 or contact.span[1].to("m") > hi + 1e-15
+            ):
+                raise ValueError(f"contact {contact.id} span lies outside its region side")
+            others = [other for other in regions if other.id != region.id]
+            if not geometry2d.segment_is_exposed(contact, region, others):
+                raise ValueError(f"contact {contact.id} lies on a boundary shared with a region")
+        placements = [(c.region, str(c.location), c.span) for c in self.contacts]
+        if len(placements) != len(set(placements)):
+            raise ValueError("contact placements must be unique")
+        study_contact = getattr(self.study, "contact", None)
+        if study_contact is not None and study_contact not in contact_ids:
+            raise ValueError("study references an unknown contact")
+        if not self.observables:
+            raise ValueError("at least one observable is required")
+        depth_lo = min(region.x0.to("m") for region in regions)
+        depth_hi = max(region.x1.to("m") for region in regions)
+        cut_ids = [cut.id for cut in self.profile_cuts]
+        if len(cut_ids) != len(set(cut_ids)):
+            raise ValueError("profile cut IDs must be unique")
+        if any(not depth_lo <= cut.at.to("m") <= depth_hi for cut in self.profile_cuts):
+            raise ValueError("every profile cut must lie inside the structure")
+        if self.width is not None:
+            self.width.require("m", "length")
+            if self.width.to("m") <= 0:
+                raise ValueError("device width must be positive")
 
     def normalized(self) -> dict[str, object]:
         return self.model_dump(mode="json", exclude_none=True)

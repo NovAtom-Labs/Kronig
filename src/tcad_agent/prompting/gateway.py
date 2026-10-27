@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import math
 import re
 import time
@@ -45,6 +46,15 @@ def _unwrap_json_fence(text: str) -> str:
     return stripped
 
 
+_LOG = logging.getLogger(__name__)
+# Provider outages arrive in bursts of a few minutes: wait about seven minutes in total
+# (15 s, 30 s, ... 105 s between eight attempts) before giving up on a request.
+MODEL_CALL_ATTEMPTS = 8
+MODEL_RETRY_SECONDS = 15.0
+# The model may return invalid or non-JSON text; each failure is explained back to it.
+PREPARATION_ATTEMPTS = 5
+
+
 def _repair_clarification_paths(text: str) -> str:
     """Derive omitted unresolved paths from already typed clarification questions."""
 
@@ -76,6 +86,27 @@ def _repair_clarification_paths(text: str) -> str:
                     ).model_dump(mode="json")
             if isinstance(field, dict) and field.get("origin") == "researcher":
                 field["evidence_refs"] = []
+    if isinstance(payload, dict) and isinstance(payload.get("questions"), list):
+        # The same input asked twice is one question; two inputs sharing an id keep both.
+        seen_paths: set[object] = set()
+        seen_ids: set[object] = set()
+        kept = []
+        for question in payload["questions"]:
+            if not isinstance(question, dict):
+                kept.append(question)
+                continue
+            if question.get("field_path") in seen_paths:
+                continue
+            seen_paths.add(question.get("field_path"))
+            identifier = question.get("id")
+            if identifier in seen_ids and isinstance(identifier, str):
+                suffix = 2
+                while f"{identifier}-{suffix}" in seen_ids:
+                    suffix += 1
+                question["id"] = f"{identifier}-{suffix}"
+            seen_ids.add(question.get("id"))
+            kept.append(question)
+        payload["questions"] = kept
     if (
         isinstance(payload, dict)
         and payload.get("status") == "clarification"
@@ -192,6 +223,7 @@ class OpenHandsPreparationModel:
                     "backend": capabilities.backend,
                     "digest": capabilities.digest,
                     "limits": capabilities.limits,
+                    "backend_guide": capabilities.guide or None,
                     "capabilities": [
                         item.model_dump(
                             mode="json",
@@ -252,14 +284,14 @@ class OpenHandsPreparationModel:
                 last_update = now
                 on_progress("receiving_preparation_response")
 
-        for attempt in range(2):
+        for attempt in range(PREPARATION_ATTEMPTS):
             try:
                 kwargs = (
                     {"on_token": receiving}
                     if "on_token" in inspect.signature(self._llm.completion).parameters
                     else {}
                 )
-                response = self._llm.completion(messages, **kwargs)
+                response = self._complete_with_retries(messages, kwargs)
             except Exception:
                 raise ModelResponseError(
                     "The configured model could not prepare the request."
@@ -389,7 +421,7 @@ class OpenHandsPreparationModel:
                 last_validation_summary = "; ".join(
                     str(item.get("msg", "invalid value")) for item in details[:4]
                 )
-                if attempt == 1:
+                if attempt == PREPARATION_ATTEMPTS - 1:
                     if isinstance(error, _ResearcherAuthorityViolation):
                         raise ResearcherInputRequiredError(
                             (error.field_path,), last_validation_summary
@@ -424,6 +456,27 @@ class OpenHandsPreparationModel:
                 if on_progress:
                     on_progress("repairing_preparation_response")
         raise AssertionError("unreachable preparation retry loop")
+
+    def _complete_with_retries(self, messages, kwargs):
+        """Call the model, retrying rate limits, timeouts and dropped connections.
+
+        A provider hiccup should not end a researcher's request. The final error is logged with
+        its type (never its text, which can carry credentials) before it is reported generically.
+        """
+        for attempt in range(MODEL_CALL_ATTEMPTS):
+            try:
+                return self._llm.completion(messages, **kwargs)
+            except Exception as error:
+                _LOG.warning(
+                    "preparation model call failed (attempt %d of %d): %s",
+                    attempt + 1,
+                    MODEL_CALL_ATTEMPTS,
+                    type(error).__name__,
+                )
+                if attempt == MODEL_CALL_ATTEMPTS - 1:
+                    raise
+                time.sleep(MODEL_RETRY_SECONDS * (attempt + 1))
+        raise AssertionError("unreachable model retry loop")
 
     @staticmethod
     def _decision_schema() -> dict:
@@ -653,6 +706,28 @@ class OpenHandsPreparationModel:
     ) -> None:
         if decision.intent is None:
             return
+        from tcad_agent.prompting.authority import ambiguous_collection_paths
+
+        if ambiguous := ambiguous_collection_paths(decision.intent):
+            raise ValueError(
+                "These input paths do not select one entity of a collection: "
+                + ", ".join(ambiguous)
+                + ". Select a region or contact by index or id and name the property last, for "
+                "example regions.0.material, regions.silicon.thickness or contacts.anode.kind, "
+                "with one single value per field; put a compound description in the summary "
+                "or in one field per quantity, never as an object under a property path."
+            )
+        from tcad_agent.prompting.authority import enum_value_violations
+
+        if violations := enum_value_violations(decision.intent):
+            raise ValueError(
+                "These confirmed inputs must use the portable value, not a description: "
+                + "; ".join(
+                    f"{path} is {value!r} but must be one of {allowed}"
+                    for path, value, allowed in violations
+                )
+                + ". Keep the researcher's wording in the summary or rationale."
+            )
         workspace_paths = {item.path for item in workspace.files}
         workspace_references = workspace_paths | {
             "workspace_context",
@@ -774,6 +849,15 @@ class OpenHandsPreparationModel:
             "concentrations, contacts, applied conditions, study bounds, fixed parameters, "
             "or deliverables. If one of those is essential and absent, return clarification. "
             "Use the capability catalog as the authoritative bounded backend scope. "
+            "When capability_catalog.backend_guide is present it describes this backend's real "
+            "features, its defaults, and which decisions deserve a question. Use it to ask "
+            "informed questions: for an open decision the guide marks as 'ask', put the guide's "
+            "available options in the question with one short consequence each, and name the "
+            "guide's recommended default. Offer only options listed under 'Available now'. If "
+            "the researcher wants something the guide lists under 'Not yet available through "
+            "Kronig', say so plainly and ask whether to proceed with an available alternative; "
+            "never promise it. Do not ask about decisions the guide marks 'default' unless the "
+            "researcher's goal depends on them. "
             "Each unresolved input must match a displayed question field or a declared "
             "capability input; do not add unasked internal bookkeeping paths. "
             "Always set selected_capabilities to the IDs of EVERY requested study and output. "

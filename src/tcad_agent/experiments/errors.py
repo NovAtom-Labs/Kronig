@@ -24,3 +24,7 @@ class PlanDigestMismatchError(ExperimentEngineError):
 
 class ExperimentExecutionError(ExperimentEngineError):
     """Raised when the simulator boundary cannot produce a result bundle."""
+
+
+class ExperimentCompileError(ExperimentEngineError):
+    """Raised when a supported experiment cannot be turned into simulator input."""

@@ -1,0 +1,78 @@
+schema_version: '1.0'
+name: pn10-all-outputs
+dimension: 1
+regions:
+- id: p_region
+  material: silicon
+  x0: 0 um
+  x1: 0.5 um
+  mesh_spacing: 0.01 um
+- id: n_region
+  material: silicon
+  x0: 0.5 um
+  x1: 1.0 um
+  mesh_spacing: 0.01 um
+profiles:
+- kind: constant
+  region: p_region
+  species: acceptor
+  value: 1e17 cm^-3
+- kind: constant
+  region: n_region
+  species: donor
+  value: 1e16 cm^-3
+contacts:
+- id: anode
+  location: x_min
+  kind: ohmic
+- id: cathode
+  location: x_max
+  kind: ohmic
+physics:
+  equations:
+  - poisson
+  - electron_continuity
+  - hole_continuity
+  models:
+  - boltzmann
+  - constant_mobility
+  - srh
+  - auger
+  - band_gap_narrowing
+  temperature: 300 K
+study:
+  kind: dc
+  contact: anode
+  start: -1.0 V
+  stop: 0.6 V
+  step: 0.4 V
+observables:
+- terminal_current_density
+- terminal_charge
+- potential
+- electric_field
+- electron_density
+- hole_density
+- charge_density
+- conduction_band
+- valence_band
+- electron_quasi_fermi_level
+- hole_quasi_fermi_level
+- electron_current_density
+- hole_current_density
+- total_current_density
+- electron_mobility
+- hole_mobility
+- recombination_rate
+- srh_recombination_rate
+- auger_recombination_rate
+- net_doping
+- donor_concentration
+- acceptor_concentration
+- band_gap
+- band_gap_narrowing
+- electron_affinity
+- effective_intrinsic_carrier_concentration
+- lattice_temperature
+metadata:
+  purpose: every output Sentaurus can return, drawn in the workbench

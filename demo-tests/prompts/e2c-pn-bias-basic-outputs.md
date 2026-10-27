@@ -1,0 +1,1 @@
+pn junction forward and reverse bias with boltzmann, constant mobility and SRH. just give me terminal current, potential, electric field and electron/hole density

@@ -133,3 +133,26 @@ def test_recovery_refuses_partial_acceptance_before_simulator(tmp_path, valid_sp
             budget=RunBudget(seconds=30),
         )
     assert not (tmp_path / "runs").exists()
+
+
+def test_a_compiler_rejection_is_found_before_a_plan_exists(valid_spec: ExperimentSpec) -> None:
+    from tcad_agent.experiments.errors import ExperimentCompileError
+
+    def reject(spec, backend):
+        raise ValueError("unsafe identifier rejected by the compiler")
+
+    engine = ExperimentEngine(precompile=reject)
+    with pytest.raises(ExperimentCompileError, match=r"could not be generated.*unsafe identifier"):
+        engine.prepare(valid_spec, "devsim")
+
+def test_one_more_halving_is_earned_only_by_clear_convergence():
+    from tcad_agent.experiments.service import _clearly_converging
+
+    def record(*ratios):
+        return {"relative_tolerance": 0.03, "metrics": [{"relative_linf": r} for r in ratios]}
+
+    assert _clearly_converging([record(0.3), record(0.14), record(0.05)])  # 0.05 < 0.06, shrinking
+    assert not _clearly_converging([record(0.3), record(0.1)])  # still far from the criterion
+    assert not _clearly_converging([record(0.06), record(0.055)])  # wobbling, not closing in
+    assert not _clearly_converging([record(0.05)])  # one comparison is no trend
+    assert not _clearly_converging([record(0.1), {"metrics": []}])

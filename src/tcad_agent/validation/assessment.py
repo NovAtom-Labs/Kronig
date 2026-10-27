@@ -28,7 +28,9 @@ def assess_result(
     traceability: TraceabilityMatrix | None = None,
 ) -> ResultAssessment:
     """Derive dimensions from canonical evidence, never from narrative summaries."""
-    report = validation or ValidationEngine().validate(result, spec=spec)
+    report = validation or ValidationEngine.for_backend(result.backend).validate(
+        result, spec=spec
+    )
     scientific = tuple(check for check in report.checks if check.level in {"numerical", "physical"})
     applicable = tuple(check for check in scientific if check.status != "not_applicable")
     failures = tuple(check.id for check in applicable if check.status == "failed")

@@ -1,0 +1,1 @@
+pn junction forward and reverse bias with boltzmann statistics, constant mobility and SRH, give me the IV and electrostatics

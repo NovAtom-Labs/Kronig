@@ -49,6 +49,7 @@ class ValidationEngine:
         built_in_potential_atol: float = 0.02,
         contact_charge_rtol: float = 0.03,
         contact_charge_atol: float = 1e-10,
+        current_noise_per_doping: float = 0.0,
     ) -> None:
         tolerances = (
             current_rtol,
@@ -58,6 +59,7 @@ class ValidationEngine:
             built_in_potential_atol,
             contact_charge_rtol,
             contact_charge_atol,
+            current_noise_per_doping,
         )
         if any(not math.isfinite(value) or value < 0 for value in tolerances):
             raise ValueError("validation tolerances must be finite and nonnegative")
@@ -68,6 +70,47 @@ class ValidationEngine:
         self.built_in_potential_atol = built_in_potential_atol
         self.contact_charge_rtol = contact_charge_rtol
         self.contact_charge_atol = contact_charge_atol
+        self.current_noise_per_doping = current_noise_per_doping
+
+    def _doping_noise_floor(self, spec: ExperimentSpec | None) -> float:
+        """Current-density evaluation noise (A/m^2) a backend declares for this experiment.
+
+        Opposing drift and diffusion fluxes cancel to zero at equilibrium; the leftover
+        scales with the carrier concentration, so the declared coefficient (A/m^2 per cm^-3)
+        multiplies the highest doping in the experiment. Zero for backends that declare none.
+        """
+        if spec is None or not self.current_noise_per_doping:
+            return 0.0
+        peak = max(
+            (
+                profile.value.to("cm^-3")
+                for profile in spec.profiles
+                if getattr(profile, "kind", "") == "constant"
+            ),
+            default=0.0,
+        )
+        return self.current_noise_per_doping * peak
+
+    def _current_atol(self, spec: ExperimentSpec | None) -> float:
+        return max(self.current_atol, self._doping_noise_floor(spec))
+
+    def _equilibrium_current_atol(self, spec: ExperimentSpec | None) -> float:
+        return max(self.equilibrium_current_atol, self._doping_noise_floor(spec))
+
+    @classmethod
+    def for_backend(cls, backend: str) -> ValidationEngine:
+        """Engine whose limits include the numerical floors the backend declares.
+
+        A declared floor states how precisely that simulator evaluates a quantity; the
+        limits actually used are always recorded in the validation report.
+        """
+        from tcad_agent.capabilities.models import CapabilityManifest
+
+        declared = CapabilityManifest.from_backend(backend).validation_limits
+        unknown = set(declared) - set(cls().acceptance_limits())
+        if unknown:
+            raise ValueError(f"unknown validation limits declared by {backend}: {sorted(unknown)}")
+        return cls(**declared)
 
     def acceptance_limits(self) -> dict[str, float]:
         """Return configured scientific acceptance, separate from solver controls."""
@@ -79,6 +122,7 @@ class ValidationEngine:
             "built_in_potential_atol": self.built_in_potential_atol,
             "contact_charge_rtol": self.contact_charge_rtol,
             "contact_charge_atol": self.contact_charge_atol,
+            "current_noise_per_doping": self.current_noise_per_doping,
         }
 
     def validate(
@@ -164,7 +208,9 @@ class ValidationEngine:
         checks.append(mesh_stability_check(result))
         checks.extend(poisson_residual_checks(result))
         checks.extend(
-            sweep_continuity_checks(result, absolute_noise_floors={"A/m^2": self.current_atol})
+            sweep_continuity_checks(
+                result, absolute_noise_floors={"A/m^2": self._current_atol(spec)}
+            )
         )
         checks.extend(capacitance_consistency_checks(result))
         checks.extend(band_checks(result))
@@ -196,7 +242,7 @@ class ValidationEngine:
                     evidence_paths=(f"result.datasets.ac_capacitance__{spec.study.contact}",),
                 )
             )
-        checks.append(self._terminal_current_check(result))
+        checks.append(self._terminal_current_check(result, spec))
         checks.append(self._carrier_density_check(result))
         if spec is not None:
             checks.append(self._requested_observables_check(result, spec))
@@ -447,6 +493,7 @@ class ValidationEngine:
             abs(value) for point in points for value in point.terminal_currents_a_per_m2.values()
         ]
         maximum_current = max(currents) if currents else None
+        equilibrium_atol = self._equilibrium_current_atol(spec)
         complete = bool(points) and all(
             len(point.terminal_currents_a_per_m2) >= 2
             and set(result.terminals).issubset(point.terminal_currents_a_per_m2)
@@ -461,14 +508,14 @@ class ValidationEngine:
                 else "passed"
                 if complete
                 and maximum_current is not None
-                and maximum_current <= self.equilibrium_current_atol
+                and maximum_current <= equilibrium_atol
                 else "failed",
                 measured_value=maximum_current
                 if maximum_current is None or math.isfinite(maximum_current)
                 else "nonfinite currents",
-                limit=self.equilibrium_current_atol,
+                limit=equilibrium_atol,
                 unit="A/m^2",
-                absolute_tolerance=self.equilibrium_current_atol,
+                absolute_tolerance=equilibrium_atol,
                 relative_tolerance=0,
                 scale=maximum_current
                 if maximum_current is not None and math.isfinite(maximum_current)
@@ -625,7 +672,10 @@ class ValidationEngine:
             ),
         )
 
-    def _terminal_current_check(self, result: CanonicalResult) -> ValidationCheck:
+    def _terminal_current_check(
+        self, result: CanonicalResult, spec: ExperimentSpec | None = None
+    ) -> ValidationCheck:
+        current_atol = self._current_atol(spec)
         points = tuple(
             point
             for point in (result.operating_points or result.bias_points)
@@ -673,7 +723,7 @@ class ValidationEngine:
                 )
             residual = abs(sum(currents))
             scale = max(abs(value) for value in currents)
-            limit = self.current_atol + self.current_rtol * scale
+            limit = current_atol + self.current_rtol * scale
             ratio = residual / limit if limit else (math.inf if residual else 0.0)
             residuals.append((ratio, residual, limit, scale))
         _ratio, residual, limit, scale = max(residuals)
@@ -684,7 +734,7 @@ class ValidationEngine:
             measured_value=residual,
             limit=limit,
             unit="A/m^2",
-            absolute_tolerance=self.current_atol,
+            absolute_tolerance=current_atol,
             relative_tolerance=self.current_rtol,
             scale=scale,
             message="The algebraic sum of terminal currents must satisfy the configured tolerance.",

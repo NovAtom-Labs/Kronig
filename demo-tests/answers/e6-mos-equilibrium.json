@@ -1,0 +1,10 @@
+{
+    "profiles.parameters":  "p-type 1e16, 1e17, 1e18 uniform",
+    "regions":  "1 um silicon",
+    "physics.temperature":  "300 K",
+    "contacts.boundary_conditions.substrate":  "ohmic",
+    "contacts.boundary_conditions":  "gate work function 4.1 eV, ohmic body",
+    "regions.oxide_thickness_values":  "5, 10 and 20 nm",
+    "geometry.oxide_thickness_values":  "yes separate runs are fine, 5 10 and 20 nm",
+    "geometry.silicon_thickness":  "1 um"
+}

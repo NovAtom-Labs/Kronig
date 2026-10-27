@@ -135,7 +135,14 @@ class MarkdownReport:
                 "- This result uses an uncalibrated silicon-first reference model.",
                 "- One-dimensional terminal values are reported as current density.",
                 "- Fabrication or external claims require expert review and calibration.",
-                "",
             ]
         )
+        defaults = result.metadata.get("native_defaults") or ()
+        if defaults:
+            lines.append(
+                "- Parameters the experiment did not specify use the simulator's own built-in "
+                f"values ({'; '.join(defaults)}), so absolute values can differ from another "
+                "simulator's defaults."
+            )
+        lines.append("")
         return "\n".join(lines)

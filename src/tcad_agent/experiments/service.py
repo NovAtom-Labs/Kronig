@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +20,7 @@ from tcad_agent.events.ledger import EventLedger
 from tcad_agent.events.models import RunEventKind
 from tcad_agent.experiments.errors import (
     ExperimentCapabilityError,
+    ExperimentCompileError,
     ExperimentExecutionError,
     PlanDigestMismatchError,
 )
@@ -37,6 +39,32 @@ from tcad_agent.validation.engine import ValidationEngine
 from tcad_agent.validation.refinement import mesh_comparison, refined_spec
 
 
+def _clearly_converging(history: list[dict]) -> bool:
+    """Whether one more halving is justified: the last two comparisons are closing in.
+
+    The response must already be within twice the criterion and have shrunk by at least 40%
+    since the comparison before, so a result that merely wobbles never earns extra solves.
+    """
+
+    def worst(record: dict) -> float | None:
+        values = [m["relative_linf"] for m in record.get("metrics", []) if "relative_linf" in m]
+        return max(values) if values else None
+
+    if len(history) < 2:
+        return False
+    previous, last = worst(history[-2]), worst(history[-1])
+    if previous is None or last is None or previous <= 0:
+        return False
+    tolerance = history[-1].get("relative_tolerance", 0.03)
+    return last <= 2 * tolerance and last <= 0.6 * previous
+
+
+def _precompile(spec: ExperimentSpec, backend: str) -> None:
+    binding = get_backend(backend)
+    with tempfile.TemporaryDirectory(prefix="kronig-precompile-") as scratch:
+        binding.adapter.compile(spec, Path(scratch) / "compiled")
+
+
 class ExperimentEngine:
     """Prepare and execute typed experiments without interpreting prompts."""
 
@@ -44,8 +72,10 @@ class ExperimentEngine:
         self,
         *,
         backend_resolver: Callable[[str], BackendBinding] = get_backend,
+        precompile: Callable[[ExperimentSpec, str], None] | None = None,
     ) -> None:
         self.backend_resolver = backend_resolver
+        self.precompile = precompile or _precompile
 
     def prepare(
         self,
@@ -59,6 +89,7 @@ class ExperimentEngine:
         decision = CapabilityService().check(spec, manifest)
         if decision.status is not CapabilityStatus.SUPPORTED:
             raise ExperimentCapabilityError(decision)
+        self._check_compiles(spec, backend)
         completeness = ScientificCompletenessEngine().evaluate(spec, backend)
         plan = build_plan(spec, backend, warnings, completeness)
         if recovery_proposal is not None:
@@ -77,6 +108,19 @@ class ExperimentEngine:
             warnings=warnings,
             recovery_proposal=recovery_proposal,
         )
+
+    def _check_compiles(self, spec: ExperimentSpec, backend: str) -> None:
+        """Generate the simulator input once, discarded, so a rejection happens before approval.
+
+        A plan the researcher approves must be one the compiler accepts; finding out afterwards
+        wastes their approval and the run.
+        """
+        try:
+            self.precompile(spec, backend)
+        except Exception as exc:
+            raise ExperimentCompileError(
+                f"The simulator input could not be generated for this experiment: {exc}"
+            ) from exc
 
     def execute(
         self,
@@ -103,7 +147,7 @@ class ExperimentEngine:
                 "prepared experiment no longer matches backend capabilities"
             )
 
-        validation_engine = ValidationEngine()
+        validation_engine = ValidationEngine.for_backend(prepared.backend)
         if prepared.recovery_proposal is not None:
             limits = {
                 limit.name: limit.value for limit in prepared.recovery_proposal.validation_limits
@@ -182,7 +226,10 @@ class ExperimentEngine:
                 }
                 elapsed = native.elapsed_seconds
                 history = []
-                for level in range(1, 5):
+                level = 0
+                limit = 4
+                while level < limit:
+                    level += 1
                     raise_if_cancelled()
                     remaining = budget.seconds - elapsed
                     if remaining <= 0:
@@ -212,9 +259,12 @@ class ExperimentEngine:
                             result,
                             fine_result,
                             equilibrium=prepared.spec.study.kind == "equilibrium",
-                            current_absolute_tolerance=min(
-                                validation_engine.current_atol,
-                                validation_engine.equilibrium_current_atol,
+                            # At equilibrium the true current is zero, so what the solver
+                            # leaves is noise bounded by the equilibrium criterion itself.
+                            current_absolute_tolerance=(
+                                validation_engine._equilibrium_current_atol(prepared.spec)
+                                if prepared.spec.study.kind == "equilibrium"
+                                else validation_engine._current_atol(prepared.spec)
                             ),
                         )
                         record.update(
@@ -243,7 +293,9 @@ class ExperimentEngine:
                     (level_root / "provenance.json").write_text(json.dumps(record, indent=2))
                     if record["status"] == "passed" or fine_result.status != "completed":
                         break
-                    if level < 4 and all(
+                    if level == limit == 4 and _clearly_converging(history):
+                        limit = 5
+                    if level < limit and all(
                         p.state == "converged" for p in fine_result.operating_points
                     ):
                         coarse_spec, result, native, job = (

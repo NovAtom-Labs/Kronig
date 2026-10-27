@@ -1,0 +1,7 @@
+{
+    "regions":  "1 um, 5 nm mesh near the metal, coarser in the bulk",
+    "profiles":  "p-type 1e16 uniform",
+    "contacts":  "metal work function 5.1 eV, ohmic on the other side",
+    "physics.temperature":  "300 K",
+    "study":  "equilibrium only"
+}

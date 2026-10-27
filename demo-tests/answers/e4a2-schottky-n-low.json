@@ -1,0 +1,10 @@
+{
+    "profile_sampling":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "study":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "mesh":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "regions":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "physics":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "geometry":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "profiles":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K",
+    "contacts":  "n-type silicon 1e16 uniform, 1 um slab with uniform 2 nm mesh, metal contact at the left with work function 4.1 eV, ohmic contact at the right, both at 0 V, equilibrium only, 300 K"
+}

@@ -166,7 +166,16 @@ def build_traceability(
 
 def _valid_dataset(result, dataset_id):
     dataset = result.datasets.get(dataset_id)
-    return dataset is not None and (dataset.validity is None or all(dataset.validity))
+    if dataset is None:
+        return False
+    if dataset.validity is None or all(dataset.validity):
+        return True
+    # A quantity can be absent by nature (carriers inside an oxide) and is then masked there at
+    # every bias. A mask that comes from a failed solve leaves a non-converged point behind, so
+    # when every point converged the masked samples are structural, not missing evidence.
+    return any(dataset.validity) and bool(result.operating_points) and all(
+        point.state == "converged" for point in result.operating_points
+    )
 
 
 def _has_profile_points(result, dataset_id, requested):

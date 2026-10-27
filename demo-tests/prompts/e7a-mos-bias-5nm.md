@@ -1,0 +1,1 @@
+MOS capacitor with 5 nm oxide under gate bias sweep, accumulation to inversion

@@ -119,6 +119,7 @@ class CapabilityCatalogView(StrictModel):
     execution_state: Literal["configured", "unconfigured"]
     capabilities: tuple[PublicCapabilityDescriptor, ...]
     limits: dict[str, int | float]
+    guide: str = ""
     digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
@@ -129,6 +130,7 @@ class CapabilityCatalog(StrictModel):
     execution_state: Literal["configured", "unconfigured"] = "configured"
     descriptors: tuple[CapabilityDescriptor, ...]
     limits: dict[str, int | float] = Field(default_factory=dict)
+    guide: str = ""
 
     @model_validator(mode="after")
     def validate_graph(self) -> Self:
@@ -210,6 +212,7 @@ class CapabilityCatalog(StrictModel):
                 for item in reviewed
             ),
             limits=dict(sorted(self.limits.items())),
+            guide=self.guide,
             digest=self.digest,
         )
 
@@ -238,6 +241,13 @@ class CapabilityCatalog(StrictModel):
                         category=category,
                         summary=(
                             f"{manifest.backend} supports {category} {value}"
+                            + (
+                                " (rectangular regions on a stack axis and a lateral axis, box "
+                                "doping windows, contacts on region sides; results are terminal "
+                                "currents and lateral line-cut profiles)"
+                                if category == "dimension" and str(value) == "2"
+                                else ""
+                            )
                             + (
                                 "; optional bias_schedule executes small-signal analysis at each "
                                 "scheduled DC operating point on the same contact"
@@ -361,6 +371,7 @@ class CapabilityCatalog(StrictModel):
             execution_state=manifest.execution_state,
             descriptors=tuple(descriptors),
             limits=manifest.limits,
+            guide=manifest.guide,
         )
 
 
@@ -387,6 +398,49 @@ def _legacy_conflicts(backend: str, category: CapabilityCategory, value: str) ->
 def _legacy_required_inputs(
     category: CapabilityCategory, value: str
 ) -> tuple[CapabilityInputDescriptor, ...]:
+    if category == "dimension":
+        if value != "2":
+            return ()
+        return (
+            CapabilityInputDescriptor(
+                path="regions.extents",
+                description=(
+                    "Rectangular extent of every region along the stack (depth) axis and the "
+                    "lateral axis, with its material"
+                ),
+                authority=InputAuthority.RESEARCHER,
+                completeness_check="structured",
+            ),
+            CapabilityInputDescriptor(
+                path="profiles.windows",
+                description=(
+                    "Position, size, species and concentration of each doped window, for "
+                    "example a source or drain implant"
+                ),
+                authority=InputAuthority.RESEARCHER,
+                completeness_check="structured",
+            ),
+            CapabilityInputDescriptor(
+                path="contacts.placement",
+                description="Which region side, and which span along it, each contact occupies",
+                authority=InputAuthority.RESEARCHER,
+                completeness_check="structured",
+            ),
+            CapabilityInputDescriptor(
+                path="profile_cuts.depth",
+                description=(
+                    "Depth of each lateral line along which profiles such as the horizontal "
+                    "band diagram are taken"
+                ),
+                authority=InputAuthority.RESEARCHER,
+                required=False,
+                unit="m",
+                question_hint=(
+                    "How far below the surface should the horizontal profile be taken? "
+                    "A channel is a few nanometres below the oxide interface."
+                ),
+            ),
+        )
     if category == "study":
         common = (
             _researcher_input("physics.temperature", "Physical simulation temperature", unit="K"),

@@ -119,6 +119,10 @@ def llm_from_environment() -> LLM:
         aws_region_name=os.getenv("AWS_REGION_NAME", DEFAULT_AWS_REGION),
         reasoning_effort=cast(Any, os.getenv("TCAD_REASONING_EFFORT", "medium")),
         stream=True,
+        # Bedrock sometimes reports the service as unavailable for a minute; wait it out.
+        num_retries=8,
+        retry_min_wait=8,
+        retry_max_wait=120,
     )
 
 
