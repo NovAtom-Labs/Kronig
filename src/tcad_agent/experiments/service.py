@@ -68,6 +68,7 @@ def _precompile(spec: ExperimentSpec, backend: str) -> None:
 # A refined mesh costs more than the run it checks, so each level keeps a floor of its own
 # instead of inheriting whatever is left of the original run's allowance.
 _REFINEMENT_RUN_SECONDS = 2400
+_MESH_VERIFICATION_SECONDS = 7200
 
 class ExperimentEngine:
     """Prepare and execute typed experiments without interpreting prompts."""
@@ -228,14 +229,16 @@ class ExperimentEngine:
                     "relative_tolerance": 0.03,
                     "reason": "Execution budget exhausted before mesh verification.",
                 }
-                elapsed = native.elapsed_seconds
+                # Verification has its own allowance: the run budget sizes one execution, and a
+                # refined mesh is several more of them, each costlier than the last.
+                elapsed = 0.0
                 history = []
                 level = 0
                 limit = 4
                 while level < limit:
                     level += 1
                     raise_if_cancelled()
-                    remaining = budget.seconds - elapsed
+                    remaining = _MESH_VERIFICATION_SECONDS - elapsed
                     if remaining <= 0:
                         record = {
                             **record,
@@ -252,7 +255,8 @@ class ExperimentEngine:
                         fine_job = binding.adapter.compile(fine_spec, level_root / "compiled")
                         raise_if_cancelled()
                         fine_native = binding.runner.run(
-                            fine_job, RunBudget(seconds=min(max(remaining, _REFINEMENT_RUN_SECONDS), 3600))
+                            fine_job,
+                            RunBudget(seconds=min(max(budget.seconds, _REFINEMENT_RUN_SECONDS), 3600)),
                         )
                         raise_if_cancelled()
                         fine_result = binding.adapter.normalize(fine_native)

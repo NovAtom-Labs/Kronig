@@ -134,7 +134,7 @@ def main(run_dir: pathlib.Path, name: str) -> int:
         # the swept-contact rule is test specific
         global expect_swept
         rules = swept_rule(name)
-        rule = rules.get(name) or rules.get(name[:2])
+        rule = rules.get(name) or rules.get(name.removesuffix("d")) or rules.get(name[:2]) or (lambda c: True)
         expect_swept = lambda e, s: rule  # noqa: E731
         rows = check_spec(spec, expect)
     else:
