@@ -116,6 +116,13 @@ default unless the researcher's goal depends on them. Never offer an option that
 say Sentaurus can do it but Kronig cannot run it yet, and ask whether to proceed with the
 closest available alternative.
 
+## Electrode gaps (2D)
+
+Sentaurus refuses two electrodes that touch or overlap. Source, drain and gate regions that abut at a
+surface corner therefore need a gap: give one contact a span that stops a short, stated distance
+(about one mesh cell) before the other, record it as an assumption, and never move a doping edge or
+an oxide edge to make room.
+
 ## Honest limits
 
 Results are from an automatically generated mesh and are not calibrated against measurements.

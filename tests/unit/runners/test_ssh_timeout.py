@@ -75,3 +75,16 @@ def test_a_job_that_never_reports_is_treated_as_timed_out(monkeypatch) -> None:
     runner._read_return_code = lambda client, directory: None  # type: ignore[method-assign]
     _client, code, _out, _err = runner._execute_resilient(Mock(), "/r/run", "sh run.sh", 0)
     assert code == 124
+
+def test_failure_summary_quotes_the_native_error_not_the_license_banner(tmp_path):
+    from tcad_agent.runners.ssh import SSHSentaurusRunner
+
+    (tmp_path / "sdevice.stdout.log").write_text(
+        "*** license agreement between you, or your company, and Synopsys, Inc. ***\n"
+        'Electrode/Thermode "source" cannot overlap or touch Electrode/Thermode "gate" !\n'
+        "RelErrControl (Reference error):\n",
+        encoding="utf-8",
+    )
+    text = SSHSentaurusRunner._failure_summary(tmp_path, 5, "")
+    assert "cannot overlap or touch" in text
+    assert "license unavailable" not in text and "agreement" not in text

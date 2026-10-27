@@ -714,6 +714,21 @@ class ExperimentSpec(StrictModel):
         placements = [(c.region, str(c.location), c.span) for c in self.contacts]
         if len(placements) != len(set(placements)):
             raise ValueError("contact placements must be unique")
+        segments = [
+            (c.id, *geometry2d.contact_segment(c, by_id[c.region or ""])[:2]) for c in self.contacts
+        ]
+        for index, (first_id, a0, a1) in enumerate(segments):
+            for second_id, b0, b1 in segments[index + 1 :]:
+                gap = 1e-12
+                if all(
+                    min(a0[axis], a1[axis]) <= max(b0[axis], b1[axis]) + gap
+                    and min(b0[axis], b1[axis]) <= max(a0[axis], a1[axis]) + gap
+                    for axis in (0, 1)
+                ):
+                    raise ValueError(
+                        f"contacts {first_id} and {second_id} touch or overlap; electrodes need "
+                        "a gap, so narrow one of them with a span that stops short of the other"
+                    )
         study_contact = getattr(self.study, "contact", None)
         if study_contact is not None and study_contact not in contact_ids:
             raise ValueError("study references an unknown contact")

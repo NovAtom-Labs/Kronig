@@ -136,7 +136,7 @@ def _two_contact_spec() -> ExperimentSpec:
                 "id": "left",
                 "region": "body",
                 "location": "x_min",
-                "span": ["0 um", "1 um"],
+                "span": ["0 um", "0.9 um"],
                 "kind": "ohmic",
             },
             {

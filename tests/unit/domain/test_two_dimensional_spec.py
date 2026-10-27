@@ -146,3 +146,18 @@ def test_a_stack_without_lateral_extent_is_still_a_valid_one_dimensional_spec() 
         }
     )
     assert spec.dimension == 1 and spec.profile_cuts == ()
+
+
+def test_electrodes_that_touch_are_refused_with_a_remedy():
+    import copy
+
+    import pytest
+
+    from tcad_agent.domain.models import ExperimentSpec
+
+    data = copy.deepcopy(planar_device())
+    first, second = data["contacts"][0], data["contacts"][1]
+    second.update(region=first["region"], location=first["location"])
+    first["span"], second["span"] = ["0.1 um", "0.15 um"], ["0.15 um", "0.2 um"]
+    with pytest.raises(ValueError, match="touch or overlap.*span"):
+        ExperimentSpec.model_validate(data)

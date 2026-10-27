@@ -544,11 +544,15 @@ class SSHSentaurusRunner:
                 hits = [
                     line.strip()
                     for line in text
-                    if re.search(r"(?i)error|syntax|unable|licen[sc]e", line)
+                    if re.search(r"(?i)error|syntax|unable|cannot|invalid|fatal|licen[sc]e", line)
+                    and not re.search(r"(?i)license agreement|RelErrControl|Reference error", line)
                 ]
                 lines.extend(f"{name}: {line}" for line in hits[-6:])
         detail = "; ".join(lines) or fallback.strip()
-        if re.search(r"(?i)unable to check out|flexnet|licen[sc]e.*(error|unavailable)", detail):
+        if any(
+            re.search(r"(?i)unable to check out|flexnet|licen[sc]e.*(error|unavailable)", line)
+            for line in lines
+        ):
             stage = "Sentaurus license unavailable (no free seat or server unreachable)"
         return f"{stage} (exit {return_code}): {detail}"[:4000]
 
