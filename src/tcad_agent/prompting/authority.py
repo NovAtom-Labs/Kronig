@@ -234,10 +234,21 @@ def unsupported_physics_inputs(intent):
     return unsupported
 
 
+# Intent vocabulary that names a typed field differently (a profile cut is "at" a depth).
+_FIELD_ALIASES = {"depth": "at"}
+
+
 def _resolve(value, parts):
     if not parts:
         return value
     key, *remaining = parts
+    if isinstance(value, BaseModel):
+        fields = type(value).model_fields
+        if key not in fields and _FIELD_ALIASES.get(key) in fields:
+            key = _FIELD_ALIASES[key]
+        elif key == "extents" and "x0" in fields and "x1" in fields:
+            extents = {"x_min": value.x0, "x_max": value.x1}
+            return _resolve(extents, remaining)
     if isinstance(value, tuple | list):
         if key.isdecimal():
             selected = value[int(key)] if int(key) < len(value) else _UNMAPPED
@@ -258,7 +269,7 @@ def _resolve(value, parts):
                 item = value[0]
                 fields = type(item).model_fields if isinstance(item, BaseModel) else {}
                 parameters = getattr(item, "parameters", _UNMAPPED)
-                is_field = key in fields or (
+                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key == "extents" or (
                     isinstance(parameters, BaseModel) and key in type(parameters).model_fields
                 )
                 return _resolve(item, parts if is_field else remaining)
@@ -316,6 +327,8 @@ def _equal(actual, expected):
             and len(actual) == len(expected)
             and all(_equal(a, b) for a, b in zip(actual, expected, strict=True))
         )
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return all(key in actual and _equal(actual[key], value) for key, value in expected.items())
     if isinstance(actual, BaseModel) and isinstance(expected, dict):
         return all(
             key in type(actual).model_fields and _equal(getattr(actual, key), value)

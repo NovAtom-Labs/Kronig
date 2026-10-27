@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 import yaml
 
@@ -30,3 +30,27 @@ def test_a_differently_labelled_record_holding_the_confirmed_value_is_accepted()
 def test_a_label_cannot_hide_a_value_that_no_record_holds():
     issues = plan_authority_issues(_spec(), _intent("profiles.body.value", "5e20 cm^-3"))
     assert [issue["intent_path"] for issue in issues] == ["profiles.body.value"]
+
+
+def _planar():
+    import sys
+    sys.path.insert(0, str(ROOT / "tests" / "unit" / "domain"))
+    from test_two_dimensional_spec import planar_device
+
+    return ExperimentSpec.model_validate(planar_device())
+
+
+def test_a_confirmed_cut_depth_is_checked_against_the_cut_position():
+    spec = _planar()
+    at = spec.profile_cuts[0].at
+    ok = _intent("profile_cuts.depth", f"{at.magnitude_si:.15g} m")
+    assert plan_authority_issues(spec, ok) == []
+    wrong = plan_authority_issues(spec, _intent("profile_cuts.depth", "999 nm"))
+    assert [i["intent_path"] for i in wrong] == ["profile_cuts.depth"]
+
+
+def test_region_extents_are_checked_against_the_region_bounds():
+    spec = _spec()
+    region = spec.regions[0]
+    good = {"x_min": f"{region.x0.magnitude_si:.15g} m", "x_max": f"{region.x1.magnitude_si:.15g} m"}
+    assert plan_authority_issues(spec, _intent("regions.extents", good)) == []
