@@ -56,7 +56,20 @@ def _clearly_converging(history: list[dict]) -> bool:
     if previous is None or last is None or previous <= 0:
         return False
     tolerance = history[-1].get("relative_tolerance", 0.03)
-    return last <= 2 * tolerance and last <= 0.6 * previous
+    if last <= 2 * tolerance and last <= 0.6 * previous:
+        return True
+    # A response still above twice the criterion earns another halving only when it has
+    # contracted twice running and, at that rate, two more halvings would bring it inside.
+    if len(history) < 3:
+        return False
+    earlier = worst(history[-3])
+    ratio = last / previous
+    return (
+        earlier is not None
+        and previous <= 0.6 * earlier
+        and ratio <= 0.6
+        and last * ratio * ratio <= tolerance
+    )
 
 
 def _precompile(spec: ExperimentSpec, backend: str) -> None:
@@ -69,6 +82,7 @@ def _precompile(spec: ExperimentSpec, backend: str) -> None:
 # instead of inheriting whatever is left of the original run's allowance.
 _REFINEMENT_RUN_SECONDS = 2400
 _MESH_VERIFICATION_SECONDS = 7200
+_MAX_MESH_LEVELS = 6
 
 class ExperimentEngine:
     """Prepare and execute typed experiments without interpreting prompts."""
@@ -301,8 +315,8 @@ class ExperimentEngine:
                     (level_root / "provenance.json").write_text(json.dumps(record, indent=2))
                     if record["status"] == "passed" or fine_result.status != "completed":
                         break
-                    if level == limit == 4 and _clearly_converging(history):
-                        limit = 5
+                    if level == limit < _MAX_MESH_LEVELS and _clearly_converging(history):
+                        limit += 1
                     if level < limit and all(
                         p.state == "converged" for p in fine_result.operating_points
                     ):

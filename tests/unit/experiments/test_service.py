@@ -156,3 +156,13 @@ def test_one_more_halving_is_earned_only_by_clear_convergence():
     assert not _clearly_converging([record(0.06), record(0.055)])  # wobbling, not closing in
     assert not _clearly_converging([record(0.05)])  # one comparison is no trend
     assert not _clearly_converging([record(0.1), {"metrics": []}])
+
+def test_a_steadily_contracting_error_earns_more_halvings_than_a_wobbling_one():
+    from tcad_agent.experiments.service import _clearly_converging
+
+    def record(value):
+        return {"metrics": [{"relative_linf": value}], "relative_tolerance": 0.03}
+
+    assert _clearly_converging([record(0.47), record(0.21), record(0.089)])  # 0.4x per halving
+    assert not _clearly_converging([record(0.47), record(0.40), record(0.35)])  # too slow
+    assert not _clearly_converging([record(0.2), record(0.3), record(0.12)])  # not steady
