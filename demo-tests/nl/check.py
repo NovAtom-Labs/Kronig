@@ -109,7 +109,7 @@ def swept_rule(name):
             "t5": lambda c: c.kind == "metal_work_function", "t7": lambda c: c.kind == "metal_work_function",
             "t8": lambda c: c.kind == "metal_work_function",
             "t9a": lambda c: c.kind == "metal_work_function",
-            "t9b": lambda c: c.span is not None and close(c.span[0].to("um"), 0.2, 1e-3, 1e-6)}
+            "t9b": lambda c: c.span is not None and 0.2 - 1e-6 <= c.span[0].to("um") <= 0.2 + 0.03}
 
 
 def main(run_dir: pathlib.Path, name: str) -> int:

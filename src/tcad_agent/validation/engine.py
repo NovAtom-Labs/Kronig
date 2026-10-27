@@ -39,6 +39,25 @@ from tcad_agent.validation.refinement import mesh_stability_check
 from tcad_agent.validation.statistics import statistics_checks
 
 
+def _peak_doping_cm3(spec: ExperimentSpec) -> float:
+    """Highest dopant concentration any profile carries, whatever its shape.
+
+    A box, Gaussian or error-function source/drain is as noisy as a uniform one, so every
+    profile's concentration-valued fields count; charge densities and tables do not.
+    """
+    peak = 0.0
+    for profile in spec.profiles:
+        for name in ("value", "peak", "surface_value", "start_value", "end_value"):
+            quantity = getattr(profile, name, None)
+            if quantity is None or getattr(profile, "kind", "") == "fixed_charge":
+                continue
+            try:
+                peak = max(peak, quantity.to("cm^-3"))
+            except Exception:  # noqa: BLE001 - a value in other units is not a concentration
+                continue
+    return peak
+
+
 class ValidationEngine:
     def __init__(
         self,
@@ -81,15 +100,7 @@ class ValidationEngine:
         """
         if spec is None or not self.current_noise_per_doping:
             return 0.0
-        peak = max(
-            (
-                profile.value.to("cm^-3")
-                for profile in spec.profiles
-                if getattr(profile, "kind", "") == "constant"
-            ),
-            default=0.0,
-        )
-        return self.current_noise_per_doping * peak
+        return self.current_noise_per_doping * _peak_doping_cm3(spec)
 
     def _current_atol(self, spec: ExperimentSpec | None) -> float:
         return max(self.current_atol, self._doping_noise_floor(spec))

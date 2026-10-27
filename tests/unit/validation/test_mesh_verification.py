@@ -332,3 +332,23 @@ def test_convergence_summary_reports_observed_order_and_a_fine_grid_index() -> N
     assert wobble["datasets"]["potential"]["gci_fine"] is None  # no index without contraction
     fast = convergence_summary([comparison(0.8), comparison(0.001)])
     assert fast["datasets"]["potential"]["observed_order"] == 2.0  # clamped, never claimed higher
+
+
+def test_the_current_noise_floor_follows_the_highest_doping_whatever_its_shape() -> None:
+    from types import SimpleNamespace
+
+    from tcad_agent.domain.units import QuantityValue
+    from tcad_agent.validation.engine import _peak_doping_cm3
+
+    def q(text):
+        return QuantityValue.model_validate(text)
+
+    spec = SimpleNamespace(
+        profiles=(
+            SimpleNamespace(kind="constant", value=q("1e17 cm^-3")),
+            SimpleNamespace(kind="box", value=q("1e20 cm^-3")),
+            SimpleNamespace(kind="gaussian", peak=q("5e19 cm^-3")),
+            SimpleNamespace(kind="fixed_charge", value=q("1e12 cm^-2")),
+        )
+    )
+    assert _peak_doping_cm3(spec) == pytest.approx(1e20)
