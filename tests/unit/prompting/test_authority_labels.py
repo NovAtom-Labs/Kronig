@@ -55,6 +55,14 @@ def test_region_extents_are_checked_against_the_region_bounds():
     good = {"x_min": f"{region.x0.magnitude_si:.15g} m", "x_max": f"{region.x1.magnitude_si:.15g} m"}
     assert plan_authority_issues(spec, _intent("regions.extents", good)) == []
 
+def test_a_region_extent_confirmed_as_material_and_thickness_is_accepted():
+    spec = _spec()
+    region = spec.regions[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    assert plan_authority_issues(
+        spec, _intent("regions.extents", {"material": region.material, "thickness": thickness})
+    ) == []
+
 
 def test_a_confirmed_list_of_records_uses_the_specs_own_vocabulary():
     spec = _spec()
@@ -70,3 +78,21 @@ def test_a_confirmed_list_of_records_uses_the_specs_own_vocabulary():
     from tcad_agent.prompting.authority import _equal
 
     assert not _equal(region, wrong[0])
+
+
+def test_keyed_and_element_named_records_are_checked_by_what_they_say():
+    spec = _spec()
+    region = spec.regions[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    keyed = {region.id: {"thickness": thickness}}
+    assert plan_authority_issues(spec, _intent("regions.extents", keyed)) == []
+    profile = spec.profiles[0]
+    element = "boron" if profile.species.value == "acceptor" else "phosphorus"
+    doping = {"type": "constant", "species": element, "region": profile.region,
+              "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3"}
+    assert plan_authority_issues(spec, _intent("profiles.parameters", doping)) == []
+    other = "phosphorus" if element == "boron" else "boron"
+    from tcad_agent.prompting.authority import _holds_records
+
+    assert _holds_records(spec.profiles, doping, "parameters")
+    assert not _holds_records(spec.profiles, {**doping, "species": other}, "parameters")

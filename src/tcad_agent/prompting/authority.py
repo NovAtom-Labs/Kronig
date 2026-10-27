@@ -247,6 +247,8 @@ def _resolve(value, parts):
         if key not in fields and _FIELD_ALIASES.get(key) in fields:
             key = _FIELD_ALIASES[key]
         elif key == "extents" and "x0" in fields and "x1" in fields:
+            if not remaining:
+                return value
             extents = {"x_min": value.x0, "x_max": value.x1}
             return _resolve(extents, remaining)
     if isinstance(value, tuple | list):
@@ -339,15 +341,52 @@ def _equal(actual, expected):
 
 
 # Intent vocabulary for a record's fields, where the spec stores them under another name.
-_RECORD_ALIASES = {"profile": "kind", "concentration": "value"}
+_RECORD_ALIASES = {"profile": "kind", "concentration": "value", "x_min": "x0", "x_max": "x1"}
+
+
+# A dopant named by element fixes the doping type, so "boron" confirms an acceptor profile.
+_DOPANT_TYPES = {
+    **dict.fromkeys(("boron", "aluminum", "aluminium", "gallium", "indium"), "acceptor"),
+    **dict.fromkeys(("phosphorus", "arsenic", "antimony", "bismuth"), "donor"),
+}
 
 
 def _record_field_equal(record, key, expected):
     fields = type(record).model_fields
     if key == "thickness" and "x0" in fields and "x1" in fields:
         return _equal(_resolve(record, ["thickness"]), expected)
+    if key == "type" and "type" not in fields:
+        # "constant" names the profile kind, "donor"/"acceptor" its species.
+        target = "kind" if str(expected) in {"constant", "box", "gaussian"} else "species"
+        return target in fields and _equal(getattr(record, target), expected)
+    if key == "species" and isinstance(expected, str):
+        expected = _DOPANT_TYPES.get(expected.lower(), expected)
     key = key if key in fields else _RECORD_ALIASES.get(key, key)
     return key in fields and _equal(getattr(record, key), expected)
+
+
+def _holds_records(records, value, label=None):
+    """True when the spec's records hold every record (or one id-keyed record set) in value."""
+    if not isinstance(records, tuple | list):
+        return False
+    if isinstance(value, dict) and value and all(isinstance(v, dict) for v in value.values()):
+        # {"silicon": {...}}: each key labels one record, a lone record being unambiguous.
+        def held(label, wanted):
+            matches = [r for r in records if getattr(r, "id", None) == label]
+            return any(_equal(r, wanted) for r in (matches or records if len(records) == 1 else matches))
+
+        return all(held(label, wanted) for label, wanted in value.items())
+    if isinstance(value, dict):
+        # A bare record only speaks for the collection when the path names a field, not an
+        # entity ("profiles.parameters", never "contacts.gate"): a missing entity stays refused.
+        names = {"parameters", "extents", *(type(records[0]).model_fields if records else ())}
+        return label in names and any(_equal(record, value) for record in records)
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, dict) for item in value)
+        and all(any(_equal(record, item) for record in records) for item in value)
+    )
 
 
 def plan_authority_issues(spec, intent, *, structured_paths=()):
@@ -375,15 +414,10 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             actual = QuantityValue.model_validate(f"{length:.15g} m")
         else:
             actual = _resolve(spec, parts)
-            records = getattr(spec, parts[0], None)
-            if (
-                isinstance(field.value, list)
-                and field.value
-                and all(isinstance(item, dict) for item in field.value)
-                and isinstance(records, tuple | list)
-                and all(any(_equal(record, item) for record in records) for item in field.value)
+            if _holds_records(
+                getattr(spec, parts[0], None), field.value, parts[1] if len(parts) == 2 else None
             ):
-                # A confirmed list of records is honored when every one is held by a spec record.
+                # Confirmed records are honored when the spec's own records hold every one.
                 continue
         if field.path in unsupported:
             issues.append(
