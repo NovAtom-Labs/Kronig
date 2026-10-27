@@ -192,3 +192,18 @@ def test_a_composite_on_a_single_region_spec_is_not_falsely_rejected():
     wrong = {**composite, "species": "donor"}
     issues = plan_authority_issues(single, _intent("regions.parameters", wrong))
     assert [i["intent_path"] for i in issues] == ["regions.parameters"]
+
+
+def test_an_owner_prefixed_key_names_the_owners_field():
+    spec = _spec()
+    region = spec.regions[0]
+    profile = spec.profiles[0]
+    composite = {
+        "region_thickness": f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m",
+        "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3",
+        "profile": profile.kind,
+        "species": profile.species.value,
+    }
+    assert plan_authority_issues(spec, _intent("profiles.parameters", composite)) == []
+    composite["region_thickness"] = "123 nm"
+    assert plan_authority_issues(spec, _intent("profiles.parameters", composite)) != []

@@ -351,8 +351,18 @@ _DOPANT_TYPES = {
 }
 
 
+def _strip_owner(key):
+    """A key like "region_thickness" names that field of the record's owner."""
+    for prefix in ("region_", "profile_"):
+        if key.startswith(prefix) and key != prefix:
+            return key.removeprefix(prefix)
+    return key
+
+
 def _record_field_equal(record, key, expected):
     fields = type(record).model_fields
+    if key not in fields:
+        key = _strip_owner(key)
     if key == "thickness" and "x0" in fields and "x1" in fields:
         return _equal(_resolve(record, ["thickness"]), expected)
     if key == "type" and "type" not in fields:
@@ -401,6 +411,7 @@ def _holds_records_composite(regions, profiles, value):
     """
     if not isinstance(value, dict) or not regions or not profiles:
         return False
+    value = {_strip_owner(key): item for key, item in value.items()}
     r_model = type(regions[0])
     r_direct = set(r_model.model_fields) | {"thickness", "extents"}
     r_aliased = {k for k, v in _RECORD_ALIASES.items() if v in r_model.model_fields}
