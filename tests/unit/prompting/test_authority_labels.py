@@ -54,3 +54,19 @@ def test_region_extents_are_checked_against_the_region_bounds():
     region = spec.regions[0]
     good = {"x_min": f"{region.x0.magnitude_si:.15g} m", "x_max": f"{region.x1.magnitude_si:.15g} m"}
     assert plan_authority_issues(spec, _intent("regions.extents", good)) == []
+
+
+def test_a_confirmed_list_of_records_uses_the_specs_own_vocabulary():
+    spec = _spec()
+    region = spec.regions[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    held = [{"id": "anything", "material": region.material, "thickness": thickness}]
+    assert plan_authority_issues(spec, _intent("regions.material", held)) == []
+    profile = spec.profiles[0]
+    doping = [{"profile": profile.kind, "species": profile.species.value,
+               "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3", "region": profile.region}]
+    assert plan_authority_issues(spec, _intent("profiles.parameters", doping)) == []
+    wrong = [{**held[0], "thickness": "123 nm"}]
+    from tcad_agent.prompting.authority import _equal
+
+    assert not _equal(region, wrong[0])

@@ -331,10 +331,23 @@ def _equal(actual, expected):
         return all(key in actual and _equal(actual[key], value) for key, value in expected.items())
     if isinstance(actual, BaseModel) and isinstance(expected, dict):
         return all(
-            key in type(actual).model_fields and _equal(getattr(actual, key), value)
+            _record_field_equal(actual, key, value)
             for key, value in expected.items()
+            if key != "id"  # a record's label names it; it carries no scientific value
         )
     return actual == expected
+
+
+# Intent vocabulary for a record's fields, where the spec stores them under another name.
+_RECORD_ALIASES = {"profile": "kind", "concentration": "value"}
+
+
+def _record_field_equal(record, key, expected):
+    fields = type(record).model_fields
+    if key == "thickness" and "x0" in fields and "x1" in fields:
+        return _equal(_resolve(record, ["thickness"]), expected)
+    key = key if key in fields else _RECORD_ALIASES.get(key, key)
+    return key in fields and _equal(getattr(record, key), expected)
 
 
 def plan_authority_issues(spec, intent, *, structured_paths=()):
@@ -362,6 +375,16 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             actual = QuantityValue.model_validate(f"{length:.15g} m")
         else:
             actual = _resolve(spec, parts)
+            records = getattr(spec, parts[0], None)
+            if (
+                isinstance(field.value, list)
+                and field.value
+                and all(isinstance(item, dict) for item in field.value)
+                and isinstance(records, tuple | list)
+                and all(any(_equal(record, item) for record in records) for item in field.value)
+            ):
+                # A confirmed list of records is honored when every one is held by a spec record.
+                continue
         if field.path in unsupported:
             issues.append(
                 {
