@@ -13,6 +13,7 @@ from tcad_agent.desktop.devsim_runner import DevsimSidecarRunner
 from tcad_agent.runners.local import LocalRunner
 from tcad_agent.runners.models import CompiledJob, NativeRunResult, RunBudget
 from tcad_agent.runners.remote import RemoteRunnerConfig, RemoteSentaurusRunner
+from tcad_agent.runners.cache import CachingRunner
 from tcad_agent.runners.ssh import SSHSentaurusRunner
 
 
@@ -73,7 +74,7 @@ def get_backend(backend: str) -> BackendBinding:
         if runner_type == "ssh":
             return BackendBinding(
                 adapter=SentaurusAdapter.from_defaults("sde"),
-                runner=SSHSentaurusRunner(),
+                runner=CachingRunner.wrap(SSHSentaurusRunner()),
             )
 
         if runner_type == "remote":
