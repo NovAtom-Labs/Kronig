@@ -86,7 +86,9 @@ def _matches_scope(field_path: str, requirement: str) -> bool:
         and len(actual) == 3
         and expected[0] in {"contacts", "regions", "profiles", "interfaces"}
         and actual[0] == expected[0]
-        and actual[2] == expected[1]
+        # The entity may come before the property ("regions.oxide.material") or after it
+        # ("regions.material.oxide"); both name one entity's value of that property.
+        and expected[1] in {actual[1], actual[2]}
     )
 
 
