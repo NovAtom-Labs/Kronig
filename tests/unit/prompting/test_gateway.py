@@ -751,7 +751,7 @@ def test_preparation_budget_reserves_room_for_reasoning_and_structured_output(mo
     OpenHandsPreparationModel.from_environment()
     assert captured["num_retries"] == 0
     assert captured["max_output_tokens"] >= 16384
-    assert captured["timeout"] <= 120
+    assert captured["timeout"] <= 420
 
 
 def test_system_policy_distinguishes_absolute_current_from_current_density() -> None:

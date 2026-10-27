@@ -188,7 +188,7 @@ class OpenHandsPreparationModel:
         return cls(
             llm_from_environment().model_copy(
                 update={
-                    "timeout": 120,
+                    "timeout": 420,
                     "num_retries": 0,
                     "retry_min_wait": 2,
                     "retry_max_wait": 4,
