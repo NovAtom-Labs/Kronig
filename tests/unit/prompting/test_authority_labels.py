@@ -222,3 +222,18 @@ def test_a_two_dimensional_regions_extents_use_depth_and_lateral_bounds():
     assert plan_authority_issues(spec, _intent(f"regions.{region.id}.extents", extents)) == []
     extents["y_lateral_max"] = "999 nm"
     assert plan_authority_issues(spec, _intent(f"regions.{region.id}.extents", extents)) != []
+
+
+def test_a_key_with_no_counterpart_is_judged_by_its_value():
+    spec = _spec()
+    region = spec.regions[0]
+    profile = spec.profiles[0]
+    composite = {
+        "thickness": f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m",
+        "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3",
+        "species": profile.species.value,
+        "temperature_of_record": "300 K",
+    }
+    assert plan_authority_issues(spec, _intent("regions.parameters", composite)) == []
+    composite["temperature_of_record"] = "345 K"
+    assert plan_authority_issues(spec, _intent("regions.parameters", composite)) != []

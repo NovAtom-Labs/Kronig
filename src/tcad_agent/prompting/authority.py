@@ -410,7 +410,7 @@ def _holds_records(records, value, label=None):
     )
 
 
-def _holds_records_composite(regions, profiles, value):
+def _holds_records_composite(regions, profiles, value, spec=None):
     """Verify a confirmed dict that bundles region geometry and profile doping keys.
 
     A composite confirmed input such as ``regions.parameters = {concentration, profile,
@@ -428,16 +428,102 @@ def _holds_records_composite(regions, profiles, value):
     r_aliased = {k for k, v in _RECORD_ALIASES.items() if v in r_model.model_fields}
     r_keys = {k: v for k, v in value.items() if k != "id" and k in r_direct | r_aliased}
     s_keys = {k: v for k, v in value.items() if k != "id" and k not in r_keys}
-    if not s_keys:
+    p_fields = set(type(profiles[0]).model_fields)
+    p_known = p_fields | {"type"} | {k for k, v in _RECORD_ALIASES.items() if v in p_fields}
+    # Keys neither collection has a field for are checked by their values alone.
+    unmapped = {k: v for k, v in s_keys.items() if k not in p_known}
+    if unmapped and spec is not None and not _spec_holds_every_value(spec, unmapped):
+        return False
+    s_keys = {k: v for k, v in s_keys.items() if k in p_known}
+    if not s_keys and not unmapped:
         # Nothing to split; the primary _holds_records call already handled this.
         return False
     r_ok = not r_keys or any(
         all(_record_field_equal(r, k, v) for k, v in r_keys.items()) for r in regions
     )
-    s_ok = any(
+    s_ok = not s_keys or any(
         all(_record_field_equal(p, k, v) for k, v in s_keys.items()) for p in profiles
     )
     return r_ok and s_ok
+
+
+def _spec_leaves(node, quantities, words, numbers):
+    """Collect every quantity, word and number the spec holds (records recursed)."""
+    if isinstance(node, QuantityValue):
+        quantities.append((node.dimensionality, node.magnitude_si))
+    elif isinstance(node, BaseModel):
+        for name in type(node).model_fields:
+            _spec_leaves(getattr(node, name), quantities, words, numbers)
+        if hasattr(node, "x0") and hasattr(node, "x1"):
+            quantities.append((node.x0.dimensionality, node.x1.magnitude_si - node.x0.magnitude_si))
+        if hasattr(node, "y0") and hasattr(node, "y1"):
+            quantities.append((node.y0.dimensionality, node.y1.magnitude_si - node.y0.magnitude_si))
+    elif isinstance(node, tuple | list):
+        for item in node:
+            _spec_leaves(item, quantities, words, numbers)
+    elif isinstance(node, dict):
+        for item in node.values():
+            _spec_leaves(item, quantities, words, numbers)
+    elif isinstance(node, Enum):
+        words.add(str(node.value).lower())
+    elif isinstance(node, str):
+        words.add(node.lower())
+    elif isinstance(node, bool):
+        words.add(str(node).lower())
+    elif isinstance(node, int | float):
+        numbers.append(float(node))
+
+
+def _value_leaves(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _value_leaves(item)
+    elif isinstance(value, tuple | list):
+        for item in value:
+            yield from _value_leaves(item)
+    else:
+        yield value
+
+
+def _spec_holds_every_value(spec, value):
+    """Last resort for a confirmed record whose keys cannot be mapped to the spec's fields.
+
+    The check exists so that no confirmed value or unit is silently changed. When the model's
+    vocabulary has no counterpart, the values themselves still say whether they were kept: every
+    quantity must be held, with its dimension, by some spec quantity; every word by some spec
+    word (a dopant element standing for its doping type). A changed value fails to be found.
+    """
+    if not isinstance(value, dict | list | tuple):
+        return False
+    quantities, words, numbers = [], set(), []
+    _spec_leaves(spec, quantities, words, numbers)
+    leaves = [leaf for leaf in _value_leaves(value) if leaf is not None]
+    if not leaves:
+        return False
+    for leaf in leaves:
+        if isinstance(leaf, str):
+            try:
+                wanted = QuantityValue.model_validate(leaf)
+            except ValueError:
+                wanted = None
+            if wanted is not None:
+                if not any(
+                    dimension == wanted.dimensionality
+                    and math.isclose(magnitude, wanted.magnitude_si, rel_tol=1e-6, abs_tol=0.0)
+                    for dimension, magnitude in quantities
+                ):
+                    return False
+            elif leaf.lower() not in words and _DOPANT_TYPES.get(leaf.lower()) not in words:
+                return False
+        elif isinstance(leaf, bool):
+            if str(leaf).lower() not in words:
+                return False
+        elif isinstance(leaf, int | float):
+            if not any(math.isclose(leaf, number, rel_tol=1e-6) for number in numbers):
+                return False
+        else:
+            return False
+    return True
 
 
 def plan_authority_issues(spec, intent, *, structured_paths=()):
@@ -475,7 +561,7 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
                 parts[0] in {"regions", "profiles"}
                 and isinstance(field.value, dict)
                 and label is not None
-                and _holds_records_composite(spec.regions, spec.profiles, field.value)
+                and _holds_records_composite(spec.regions, spec.profiles, field.value, spec)
             ):
                 # Confirmed records are honored when the spec's own records hold every one.
                 continue
