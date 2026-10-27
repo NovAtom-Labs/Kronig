@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import math
 from itertools import pairwise
 
 from tcad_agent.results.datasets import AxisKind, Dataset, ScientificAxis
@@ -72,6 +73,10 @@ class DerivationRegistry:
                 "average": _average,
                 "peak_magnitude": _peak_magnitude,
                 "built_in_potential": _built_in_potential,
+                "maximum_transconductance": _maximum_transconductance,
+                "threshold_voltage": _threshold_voltage,
+                "subthreshold_swing": _subthreshold_swing,
+                "on_off_ratio": _on_off_ratio,
             },
             datasets={"gradient": _gradient, "derivative": _gradient},
         )
@@ -243,6 +248,91 @@ def _built_in_potential(
         "V",
         dataset.id,
     )
+
+
+def _transfer_curve(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> tuple[ScientificAxis, tuple[float, ...], tuple[float, ...]]:
+    """Magnitude of a current against a monotonic sweep, with its local slope."""
+    axis = _require_rank_one(dataset, axes)
+    magnitude = tuple(abs(value) for value in dataset.values)
+    slope = finite_difference(tuple(axis.values), magnitude)
+    if slope is None:
+        raise ValueError("a transfer-curve metric needs a monotonic sweep of at least 3 points")
+    return axis, magnitude, slope
+
+
+def _maximum_transconductance(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> ScalarDerivation:
+    axis, _, slope = _transfer_curve(dataset, axes)
+    index = max(range(len(slope)), key=lambda item: abs(slope[item]))
+    return ScalarDerivation(
+        "maximum_transconductance",
+        abs(slope[index]),
+        f"{dataset.unit}/{axis.unit}",
+        dataset.id,
+        coordinate=axis.values[index],
+        coordinate_unit=axis.unit,
+    )
+
+
+def _threshold_voltage(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> ScalarDerivation:
+    """Linear extrapolation at the point of maximum transconductance, to zero current.
+
+    The drain-bias correction (subtracting half the drain voltage) is not applied, so the
+    value is the extrapolated gate voltage of that curve at its own drain bias.
+    """
+    axis, magnitude, slope = _transfer_curve(dataset, axes)
+    index = max(range(len(slope)), key=lambda item: abs(slope[item]))
+    if slope[index] <= 0 or magnitude[index] <= 0:
+        raise ValueError("no rising current to extrapolate a threshold from")
+    return ScalarDerivation(
+        "threshold_voltage",
+        axis.values[index] - magnitude[index] / slope[index],
+        axis.unit,
+        dataset.id,
+        coordinate=axis.values[index],
+        coordinate_unit=axis.unit,
+    )
+
+
+def _subthreshold_swing(
+    dataset: Dataset, axes: Mapping[str, ScientificAxis]
+) -> ScalarDerivation:
+    """Steepest sweep per decade of current among points below a tenth of the maximum."""
+    axis, magnitude, _ = _transfer_curve(dataset, axes)
+    ceiling = 0.1 * max(magnitude)
+    best = None
+    for index in range(len(magnitude) - 1):
+        low, high = magnitude[index], magnitude[index + 1]
+        if min(low, high) <= 0 or max(low, high) > ceiling or low == high:
+            continue
+        decades = abs(math.log10(high) - math.log10(low))
+        swing = abs(axis.values[index + 1] - axis.values[index]) / decades
+        if best is None or swing < best[0]:
+            best = (swing, index)
+    if best is None:
+        raise ValueError("fewer than two subthreshold points are resolved")
+    swing, index = best
+    return ScalarDerivation(
+        "subthreshold_swing",
+        swing * 1000.0,
+        "mV/dec",
+        dataset.id,
+        coordinate=0.5 * (axis.values[index] + axis.values[index + 1]),
+        coordinate_unit=axis.unit,
+    )
+
+
+def _on_off_ratio(dataset: Dataset, axes: Mapping[str, ScientificAxis]) -> ScalarDerivation:
+    _require_rank_one(dataset, axes)
+    magnitude = [abs(value) for value in dataset.values if value != 0]
+    if len(magnitude) < 2:
+        raise ValueError("on/off ratio needs a non-zero off current")
+    return ScalarDerivation("on_off_ratio", max(magnitude) / min(magnitude), "1", dataset.id)
 
 
 def _gradient(dataset: Dataset, axes: Mapping[str, ScientificAxis]) -> Dataset:

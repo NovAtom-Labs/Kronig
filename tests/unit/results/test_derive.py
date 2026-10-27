@@ -150,3 +150,36 @@ def test_resistance_refuses_incompatible_axes_or_units() -> None:
 
     with pytest.raises(ValueError, match="canonical current"):
         DerivationRegistry.resistance(voltage, incompatible, {"bias": axis})
+
+
+def _transfer(values):
+    axis = ScientificAxis(
+        id="vg", kind="bias", label="Gate bias", unit="V", values=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+    )
+    dataset = Dataset(
+        id="drain_current", label="Drain current", unit="A", axes=("vg",), shape=(6,), values=values
+    )
+    return dataset, {"vg": axis}
+
+
+def test_device_metrics_recover_a_known_transfer_curve() -> None:
+    # Off below 0.4 V at one decade per 0.1 V, then ohmic: I = 1e-3 * (Vg - 0.5) above it.
+    values = (1e-12, 1e-10, 1e-8, 1e-4, 3e-4, 5e-4)
+    dataset, axes = _transfer(values)
+    registry = DerivationRegistry.default()
+    gm = registry.scalar("maximum_transconductance", dataset, axes)
+    assert gm.value == pytest.approx(1e-3, rel=0.2) and gm.unit == "A/V"
+    vt = registry.scalar("threshold_voltage", dataset, axes)
+    assert vt.value == pytest.approx(0.5, abs=0.06) and vt.unit == "V"
+    swing = registry.scalar("subthreshold_swing", dataset, axes)
+    assert swing.value == pytest.approx(100.0) and swing.unit == "mV/dec"  # 0.2 V per 2 decades
+    assert registry.scalar("on_off_ratio", dataset, axes).value == pytest.approx(5e8)
+
+
+def test_device_metrics_refuse_what_the_sweep_cannot_support() -> None:
+    dataset, axes = _transfer((1e-3,) * 6)
+    registry = DerivationRegistry.default()
+    with pytest.raises(ValueError):
+        registry.scalar("subthreshold_swing", dataset, axes)
+    with pytest.raises(ValueError):
+        registry.scalar("threshold_voltage", dataset, axes)
