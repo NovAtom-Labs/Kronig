@@ -277,6 +277,26 @@ def _resolve(value, parts):
     return _UNMAPPED
 
 
+def _candidates(value, parts):
+    """Every value `parts` can denote when a list label may name any one of its records."""
+    if not parts:
+        yield value
+        return
+    key, *remaining = parts
+    if isinstance(value, tuple | list) and not key.isdecimal():
+        resolved = _resolve(value, [key])
+        if resolved is not _UNMAPPED:
+            yield from _candidates(resolved, remaining)
+            return
+        for item in value:
+            yield from _candidates(item, parts)
+            yield from _candidates(item, remaining)
+        return
+    resolved = _resolve(value, [key])
+    if resolved is not _UNMAPPED:
+        yield from _candidates(resolved, remaining)
+
+
 def _equal(actual, expected):
     if isinstance(actual, QuantityValue):
         try:
@@ -342,6 +362,13 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             continue
         if actual is _UNMAPPED:
             if canonical_path(field.path) in structured_paths:
+                continue
+            # The model may label a record differently from the plan ("profiles.body.species"
+            # against profile id "p_body"); the confirmed value is honored when some record holds it.
+            if any(
+                candidate is not _UNMAPPED and _equal(candidate, field.value)
+                for candidate in _candidates(spec, parts)
+            ):
                 continue
             paths = [parts]
             if isinstance(field.value, dict):
