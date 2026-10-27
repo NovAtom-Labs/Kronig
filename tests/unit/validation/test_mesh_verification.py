@@ -308,3 +308,10 @@ def test_a_doping_step_is_compared_by_its_integral_across_meshes():
     metric = mesh_comparison(coarse, fine)["metrics"][0]
     assert metric["unit"] == "m^-2" and metric["compared_as"] == "running integral over position"
     assert metric["relative_linf"] < 0.5  # pointwise this is a 100% disagreement at x = 1.5
+
+def test_leakage_below_the_current_tolerance_is_not_a_response_to_compare_when_biased():
+    coarse = _profile("terminal_current", "A/m^2", (0.0, 1.0), (1e-9, 1e-9))
+    fine = _profile("terminal_current", "A/m^2", (0.0, 1.0), (5.9e-6, -2e-9))
+    assert mesh_comparison(coarse, fine, current_absolute_tolerance=1e-5)["status"] == "passed"
+    real = _profile("terminal_current", "A/m^2", (0.0, 1.0), (1.0, 2.0))
+    assert mesh_comparison(real, fine, current_absolute_tolerance=1e-5)["status"] == "failed"

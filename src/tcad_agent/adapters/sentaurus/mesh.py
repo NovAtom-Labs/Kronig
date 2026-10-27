@@ -344,7 +344,7 @@ def build_run_script() -> str:
         "    status=$?\n"
         "    [ $status -eq 0 ] && break\n"
         "    [ $status -eq 124 ] && { timedout=1; break; }\n"
-        f'    grep -q -E "{_LICENSE_ERROR}" sdevice.stdout.log sdevice.stderr.log || exit $status\n'
+        f'    grep -q -E "{_LICENSE_ERROR}" sdevice.stdout.log sdevice.stderr.log || break\n'
         f"    [ $attempt -lt {LICENSE_WAIT_ATTEMPTS} ] || exit $status\n"
         "    attempt=$((attempt + 1))\n"
         f"    sleep {LICENSE_WAIT_SECONDS}\n"
@@ -353,9 +353,9 @@ def build_run_script() -> str:
         "  # A ramp that cannot even re-solve its starting point is skipped without an error exit.\n"
         '  grep -q -E "Step-size less than MinStep|Solve for t=0 does not converge" \\\n'
         "    sdevice.stdout.log && gaveup=1 || gaveup=0\n"
-        "  [ $timedout -eq 1 ] || [ $gaveup -eq 1 ] || exit 0\n"
+        "  [ $status -eq 0 ] && [ $gaveup -eq 0 ] && break\n"
         '  stalled="$stalled $level"\n'
         "  level=$((level + 1))\n"
         "done\n"
-        "exit 0\n"
+        "exit $status\n"
     )

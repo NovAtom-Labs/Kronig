@@ -254,9 +254,10 @@ def mesh_comparison(
                 max(old_error, float(np.max(np.abs(np.array(a) - np.array(b))))),
                 max(old_scale, float(np.max(np.abs(a))), float(np.max(np.abs(b)))),
             )
-        if equilibrium and unit == "A/m^2":
-            # Two currents that both satisfy the equilibrium-zero criterion agree on the only
-            # thing equilibrium asserts; their noise difference is not a response to compare.
+        if unit == "A/m^2":
+            # Two currents that both sit below the current tolerance agree on the only thing a
+            # reading that small asserts (zero within noise: equilibrium, or an insulated gate with
+            # no dc path); their difference is not a response to compare.
             groups = {g: (0.0 if s <= floor else e, s) for g, (e, s) in groups.items()}
         ratio = max((e / s for e, s in groups.values()), default=math.inf)
         record["metrics"].append(
