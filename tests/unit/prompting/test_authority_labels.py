@@ -96,3 +96,64 @@ def test_keyed_and_element_named_records_are_checked_by_what_they_say():
 
     assert _holds_records(spec.profiles, doping, "parameters")
     assert not _holds_records(spec.profiles, {**doping, "species": other}, "parameters")
+
+
+def test_a_composite_confirmed_record_mixing_region_and_profile_keys_is_accepted():
+    """regions.parameters = {thickness, concentration, profile, species} must not raise
+    changed_confirmed_input even though no single spec model carries all four fields."""
+    spec = _spec()
+    region = spec.regions[0]
+    profile = spec.profiles[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    composite = {
+        "thickness": thickness,
+        "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3",
+        "profile": profile.kind,
+        "species": profile.species.value,
+    }
+    assert plan_authority_issues(spec, _intent("regions.parameters", composite)) == []
+
+
+def test_a_composite_record_with_wrong_concentration_is_refused():
+    spec = _spec()
+    region = spec.regions[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    profile = spec.profiles[0]
+    wrong_conc = "5e20 cm^-3" if profile.value.magnitude_si < 1e25 else "1e12 cm^-3"
+    composite = {
+        "thickness": thickness,
+        "concentration": wrong_conc,
+        "profile": profile.kind,
+        "species": profile.species.value,
+    }
+    issues = plan_authority_issues(spec, _intent("regions.parameters", composite))
+    assert [i["intent_path"] for i in issues] == ["regions.parameters"]
+
+
+def test_a_composite_record_with_wrong_species_is_refused():
+    spec = _spec()
+    region = spec.regions[0]
+    profile = spec.profiles[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    wrong_species = "donor" if profile.species.value == "acceptor" else "acceptor"
+    composite = {
+        "thickness": thickness,
+        "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3",
+        "profile": profile.kind,
+        "species": wrong_species,
+    }
+    issues = plan_authority_issues(spec, _intent("regions.parameters", composite))
+    assert [i["intent_path"] for i in issues] == ["regions.parameters"]
+
+
+def test_a_composite_record_filed_under_profiles_is_checked_the_same_way():
+    spec = _spec()
+    region = spec.regions[0]
+    profile = spec.profiles[0]
+    composite = {
+        "thickness": f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m",
+        "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3",
+        "profile": profile.kind,
+        "species": profile.species.value,
+    }
+    assert plan_authority_issues(spec, _intent("profiles.parameters", composite)) == []

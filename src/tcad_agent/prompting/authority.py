@@ -389,6 +389,35 @@ def _holds_records(records, value, label=None):
     )
 
 
+def _holds_records_composite(regions, profiles, value):
+    """Verify a confirmed dict that bundles region geometry and profile doping keys.
+
+    A composite confirmed input such as ``regions.parameters = {concentration, profile,
+    species, thickness}`` mixes fields from two spec collections.  Neither a Region1D
+    alone nor a doping profile alone carries all four keys, so a single
+    ``_holds_records`` call against one collection always fails.  This helper partitions
+    the dict keys by which collection model recognises them and verifies each partition
+    against the appropriate collection independently.
+    """
+    if not isinstance(value, dict) or not regions or not profiles:
+        return False
+    r_model = type(regions[0])
+    r_direct = set(r_model.model_fields) | {"thickness", "extents"}
+    r_aliased = {k for k, v in _RECORD_ALIASES.items() if v in r_model.model_fields}
+    r_keys = {k: v for k, v in value.items() if k != "id" and k in r_direct | r_aliased}
+    s_keys = {k: v for k, v in value.items() if k != "id" and k not in r_keys}
+    if not s_keys:
+        # Nothing to split; the primary _holds_records call already handled this.
+        return False
+    r_ok = not r_keys or any(
+        all(_record_field_equal(r, k, v) for k, v in r_keys.items()) for r in regions
+    )
+    s_ok = any(
+        all(_record_field_equal(p, k, v) for k, v in s_keys.items()) for p in profiles
+    )
+    return r_ok and s_ok
+
+
 def plan_authority_issues(spec, intent, *, structured_paths=()):
     """Refuse changed typed inputs; never invent a mapping for free-text records."""
     issues = []
@@ -414,8 +443,17 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             actual = QuantityValue.model_validate(f"{length:.15g} m")
         else:
             actual = _resolve(spec, parts)
-            if _holds_records(
-                getattr(spec, parts[0], None), field.value, parts[1] if len(parts) == 2 else None
+            primary_col = getattr(spec, parts[0], None)
+            label = parts[1] if len(parts) == 2 else None
+            if _holds_records(primary_col, field.value, label) or (
+                # A composite confirmed record (e.g. regions.parameters) may bundle
+                # region geometry (thickness) with doping profile properties
+                # (concentration, species, profile kind).  Verify each partition
+                # against its own collection.
+                parts[0] in {"regions", "profiles"}
+                and isinstance(field.value, dict)
+                and label is not None
+                and _holds_records_composite(spec.regions, spec.profiles, field.value)
             ):
                 # Confirmed records are honored when the spec's own records hold every one.
                 continue

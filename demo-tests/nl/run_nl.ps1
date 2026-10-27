@@ -4,7 +4,7 @@ $env:OPENHANDS_SUPPRESS_BANNER='1'; $env:PYTHONUTF8='1'; $env:TCAD_BACKEND='sent
 $k='C:\Development\NovAtom Labs\Kronig'; $d="$k\demo-tests\nl"; Set-Location $k
 foreach($n in ($Names -split ',' | ? { $_ })){
   $run="$d\runs\$n"; if(Test-Path $run){ Remove-Item $run -Recurse -Force }; New-Item -ItemType Directory "$run\in" | Out-Null
-  & "$k\.venv\Scripts\python.exe" -I -c "import sys,json; sys.path.insert(0, r'$d'); from catalog import TESTS; t=TESTS['$n']; open(r'$run\in\prompt.md','w',encoding='utf-8').write(t['prompt']); json.dump({'*': t['facts']}, open(r'$run\in\answers.json','w',encoding='utf-8'))"
+  & "$k\.venv\Scripts\python.exe" -I -c "import sys,json; sys.path.insert(0, r'$d'); from catalog import TESTS; t=TESTS['$n']; open(r'$run\in\prompt.md','w',encoding='utf-8').write(t['prompt']); json.dump({'*': t['facts'], 'profile_sampling.bias_values': 'Every bias point of the sweep.'}, open(r'$run\in\answers.json','w',encoding='utf-8'))"
   $t=Get-Date
   & "$k\.venv\Scripts\python.exe" "$d\drive.py" --prompt "$run\in\prompt.md" --answers "$run\in\answers.json" --output "$run\out" --deadline $Deadline > "$run\drive.log" 2>&1
   & "$k\.venv\Scripts\python.exe" "$d\check.py" $run $n > "$run\check.txt" 2>&1
