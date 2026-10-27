@@ -341,7 +341,18 @@ def _equal(actual, expected):
 
 
 # Intent vocabulary for a record's fields, where the spec stores them under another name.
-_RECORD_ALIASES = {"profile": "kind", "concentration": "value", "x_min": "x0", "x_max": "x1"}
+_RECORD_ALIASES = {
+    "profile": "kind",
+    "concentration": "value",
+    "x_min": "x0",
+    "x_max": "x1",
+    "x_depth_min": "x0",
+    "x_depth_max": "x1",
+    "y_min": "y0",
+    "y_max": "y1",
+    "y_lateral_min": "y0",
+    "y_lateral_max": "y1",
+}
 
 
 # A dopant named by element fixes the doping type, so "boron" confirms an acceptor profile.

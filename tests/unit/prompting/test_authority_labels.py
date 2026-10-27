@@ -207,3 +207,18 @@ def test_an_owner_prefixed_key_names_the_owners_field():
     assert plan_authority_issues(spec, _intent("profiles.parameters", composite)) == []
     composite["region_thickness"] = "123 nm"
     assert plan_authority_issues(spec, _intent("profiles.parameters", composite)) != []
+
+
+def test_a_two_dimensional_regions_extents_use_depth_and_lateral_bounds():
+    spec = _planar()
+    region = spec.regions[0]
+    nm = lambda quantity: f"{quantity.magnitude_si:.15g} m"  # noqa: E731
+    extents = {
+        "x_depth_min": nm(region.x0),
+        "x_depth_max": nm(region.x1),
+        "y_lateral_min": nm(region.y0),
+        "y_lateral_max": nm(region.y1),
+    }
+    assert plan_authority_issues(spec, _intent(f"regions.{region.id}.extents", extents)) == []
+    extents["y_lateral_max"] = "999 nm"
+    assert plan_authority_issues(spec, _intent(f"regions.{region.id}.extents", extents)) != []
