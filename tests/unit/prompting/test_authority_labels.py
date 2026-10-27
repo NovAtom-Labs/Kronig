@@ -157,3 +157,38 @@ def test_a_composite_record_filed_under_profiles_is_checked_the_same_way():
         "species": profile.species.value,
     }
     assert plan_authority_issues(spec, _intent("profiles.parameters", composite)) == []
+
+
+def test_a_composite_on_a_single_region_spec_is_not_falsely_rejected():
+    # Regression: on a single-region spec _resolve returns the lone Region1D via the
+    # lone-record fallback, not _UNMAPPED.  _equal(Region1D, composite) then fails
+    # because Region1D carries no doping fields, and the old code incorrectly fired
+    # changed_confirmed_input.  The composite guard must activate in this case too.
+    single = ExperimentSpec.model_validate({
+        "schema_version": "1.0",
+        "name": "schottky-single",
+        "dimension": 1,
+        "regions": [{"id": "silicon", "material": "silicon", "x0": "0 nm", "x1": "1000 nm"}],
+        "profiles": [{"kind": "constant", "region": "silicon", "species": "acceptor", "value": "1e18 cm^-3"}],
+        "contacts": [
+            {"id": "gate", "location": "x_min", "kind": "metal_work_function",
+             "work_function": "4.1 eV", "voltage_offset": "0 V"},
+            {"id": "back", "location": "x_max", "kind": "ohmic", "voltage_offset": "0 V"},
+        ],
+        "physics": {"equations": ["poisson"], "temperature": "300 K"},
+        "study": {"kind": "equilibrium"},
+        "observables": ["potential"],
+    })
+    region = single.regions[0]
+    profile = single.profiles[0]
+    thickness = f"{region.x1.magnitude_si - region.x0.magnitude_si:.15g} m"
+    composite = {
+        "thickness": thickness,
+        "concentration": f"{profile.value.magnitude_si:.15g} 1/m^3",
+        "profile": profile.kind,
+        "species": profile.species.value,
+    }
+    assert plan_authority_issues(single, _intent("regions.parameters", composite)) == []
+    wrong = {**composite, "species": "donor"}
+    issues = plan_authority_issues(single, _intent("regions.parameters", wrong))
+    assert [i["intent_path"] for i in issues] == ["regions.parameters"]
