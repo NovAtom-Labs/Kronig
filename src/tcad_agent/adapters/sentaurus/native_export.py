@@ -19,6 +19,7 @@ import numpy as np
 
 from tcad_agent.adapters.sentaurus.runtime import (
     ESCALATION_NOTES,
+    ESCALATION_NOTES_2D,
     GENERATED_MESHES,
     MINIMUM_DIGITS,
     SentaurusJobManifest,
@@ -155,7 +156,7 @@ def native_defaults(spec: ExperimentSpec) -> list[str]:
     return notes
 
 
-def escalation_notes(log_text: str) -> list[str]:
+def escalation_notes(log_text: str, *, two_dimensional: bool = False) -> list[str]:
     """Say so when the results came from a stronger numerical strategy than the default.
 
     The run script logs the level that produced them. A level above 0 means the default solver
@@ -165,7 +166,8 @@ def escalation_notes(log_text: str) -> list[str]:
     if not found or int(found[-1][0]) == 0:
         return []
     level = int(found[-1][0])
-    note = ESCALATION_NOTES[min(level, len(ESCALATION_NOTES)) - 1]
+    notes = ESCALATION_NOTES_2D if two_dimensional else ESCALATION_NOTES
+    note = notes[min(level, len(notes)) - 1]
     return [
         "numerical strategy escalated: the default solver gave up on a bias ramp, so the results "
         f"come from a rerun with the {note} (level {level}; levels{found[-1][1]} stalled)"
@@ -442,7 +444,7 @@ def build_export(raw_dir: Path, spec: ExperimentSpec, manifest: SentaurusJobMani
         raise NativeExportError("the Sentaurus Device log was not retrieved")
     log_text = log_path.read_text(errors="replace")
     version = simulator_version(log_text)
-    escalation = escalation_notes(log_text)
+    escalation = escalation_notes(log_text, two_dimensional=two_dimensional)
     contacts = [contact.id for contact in spec.contacts]
 
     stations: np.ndarray | None = None

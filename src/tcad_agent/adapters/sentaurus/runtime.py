@@ -66,6 +66,15 @@ ESCALATION_NOTES = (
     "without re-solving its starting point",
     "iterative linear solver, no restart solve, and a looser 6-digit precision",
 )
+# Two-dimensional structures start on the iterative solver (measured: on a 2D MOS capacitor the
+# direct solver crept for 25 minutes where the iterative one finished every bias in 7), so their
+# ladder starts from that and ends on the direct solver.
+ESCALATION_NOTES_2D = (
+    "bias ramps continue from the previous converged state without re-solving their starting "
+    "point (iterative linear solver)",
+    "the same with a looser 6-digit precision",
+    "direct linear solver, continuing from the previous converged state",
+)
 
 
 def _file_digest(path: Path) -> str:

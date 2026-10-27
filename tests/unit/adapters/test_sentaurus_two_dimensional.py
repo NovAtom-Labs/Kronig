@@ -195,3 +195,20 @@ def test_export_interpolates_the_cut_and_scales_current_by_width(tmp_path, monke
     # Density is per contact area (1 um contact length x the 1 um native depth): width-free.
     assert result.bias_points[1].terminal_currents_a_per_m2["drain"] == pytest.approx(2e-4 / 1e-12)
     assert all(point.state == "converged" for point in result.operating_points)
+
+
+def test_two_dimensional_ladder_starts_iterative_and_ends_on_the_direct_solver(
+    tmp_path, monkeypatch
+) -> None:
+    from tcad_agent.adapters.sentaurus.native_export import escalation_notes
+
+    monkeypatch.setenv("TCAD_SENTAURUS_VERSION", VERSION)
+    root = SentaurusAdapter.from_defaults("sde").compile(spec_with(), tmp_path / "job").entrypoint.parent
+    decks = [(root / name).read_text(encoding="utf-8") for name in (
+        "sdevice.cmd", "sdevice.r1.cmd", "sdevice.r2.cmd", "sdevice.r3.cmd")]
+    base, first, second, third = decks
+    assert "SubMethod=ILS" in base and "-DoZero" not in base
+    assert "-DoZero" in first and "Digits=8" in first
+    assert "Digits=6" in second and "-DoZero" in second
+    assert "SubMethod=ILS" not in third and "-DoZero" in third
+    assert "direct" in escalation_notes("KRONIG numerics level 3 stalled: 0 1 2", two_dimensional=True)[0]

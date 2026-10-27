@@ -92,6 +92,9 @@ _PLOT_FIELDS = {
 }
 
 
+_ITERATIVE = ("Method=Blocked", "SubMethod=ILS")
+
+
 class SentaurusCompilerSafetyError(ValueError):
     """Raised when normalized input cannot safely enter a native deck."""
 
@@ -256,8 +259,13 @@ class SentaurusAdapter:
     @staticmethod
     def _escalations(context: dict[str, object]) -> list[dict[str, object]]:
         """The same experiment with the next numerical strategies, tried only if a ramp stalls."""
-        iterative = ["Method=Blocked", "SubMethod=ILS"]
+        iterative = list(_ITERATIVE)
         iterations = max(int(context["iterations"]), 300)  # type: ignore[call-overload]
+        if context["math_lines"]:
+            # Already iterative (two-dimensional): continue ramps without the restart solve,
+            # loosen precision, and finally try the direct solver.
+            first = {**context, "skip_start_solve": True}
+            return [first, {**first, "digits": 6}, {**first, "math_lines": []}]
         first = {**context, "math_lines": iterative, "iterations": iterations}
         # A ramp restarts by re-solving its converged starting point; on a fine mesh that
         # re-solve can fail by itself, so the next strategy simply continues from the state.
@@ -431,9 +439,9 @@ class SentaurusAdapter:
             "plot_fields": plot_fields,
             "ramps": ramps,
             "equations": " ".join(equations[item] for item in spec.physics.equations),
-            "iterations": max(spec.solver.maximum_iterations, MINIMUM_ITERATIONS),
+            "iterations": max(spec.solver.maximum_iterations, MINIMUM_ITERATIONS, 300 if spec.dimension == 2 else 0),
             "digits": max(round(-math.log10(spec.solver.relative_error)), MINIMUM_DIGITS),
-            "math_lines": [],
+            "math_lines": list(_ITERATIVE) if spec.dimension == 2 else [],
             "skip_start_solve": False,
         }
 
