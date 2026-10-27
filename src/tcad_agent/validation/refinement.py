@@ -285,6 +285,46 @@ def mesh_comparison(
     return record
 
 
+def convergence_summary(history: list[dict], safety_factor: float = 1.25) -> dict:
+    """Observed order and a fine-grid convergence index per response, from the halvings so far.
+
+    With errors e_prev and e_last from two successive halvings (ratio 2) the apparent order is
+    p = log2(e_prev / e_last); Roache's index bounds the error of the finest solution as
+    GCI = Fs * e_last / (2**p - 1). It is an error band, not a corrected value, and needs two
+    comparisons (three meshes) to exist. Orders are clamped to [0.5, 2], the range a
+    first/second-order scheme can honestly show, so noise cannot claim superconvergence.
+    """
+    series: dict[str, list[float]] = {}
+    for comparison in history:
+        for metric in comparison.get("metrics", []):
+            series.setdefault(metric["dataset"], []).append(float(metric["relative_linf"]))
+    datasets = {}
+    for name, errors in series.items():
+        entry: dict = {"errors": errors, "observed_order": None, "gci_fine": None}
+        if len(errors) >= 2 and 0 < errors[-1] < errors[-2]:
+            order = min(2.0, max(0.5, math.log2(errors[-2] / errors[-1])))
+            entry["observed_order"] = order
+            entry["gci_fine"] = safety_factor * errors[-1] / (2**order - 1)
+        datasets[name] = entry
+    bands = [e["gci_fine"] for e in datasets.values() if e["gci_fine"] is not None]
+    return {
+        "method": "Roache grid convergence index over successive half-spacing solves",
+        "safety_factor": safety_factor,
+        "datasets": datasets,
+        "worst_gci": max(bands) if bands else None,
+    }
+
+
+def _convergence_sentence(record: dict) -> str:
+    worst = (record.get("convergence") or {}).get("worst_gci")
+    if worst is None:
+        return ""
+    return (
+        f" Fine-mesh grid convergence index (Roache, safety factor 1.25) over "
+        f"{len(record.get('comparisons', []))} halvings: {worst:.2%}."
+    )
+
+
 def mesh_stability_check(result: CanonicalResult):
     from tcad_agent.validation.models import ValidationCheck
 
@@ -311,6 +351,7 @@ def mesh_stability_check(result: CanonicalResult):
             "Independent half-spacing solve must preserve the approved response within "
             "the recorded mesh-comparison criteria. One comparison is not asymptotic "
             "convergence or experimental calibration.",
-        ),
+        )
+        + _convergence_sentence(record),
         evidence_paths=("result.metadata.mesh_verification", "verification/mesh/provenance.json"),
     )

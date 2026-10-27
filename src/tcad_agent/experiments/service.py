@@ -36,7 +36,7 @@ from tcad_agent.runners.models import RunBudget
 from tcad_agent.runners.process import ExecutionCancelled, raise_if_cancelled
 from tcad_agent.science.completeness import ScientificCompletenessEngine
 from tcad_agent.validation.engine import ValidationEngine
-from tcad_agent.validation.refinement import mesh_comparison, refined_spec
+from tcad_agent.validation.refinement import convergence_summary, mesh_comparison, refined_spec
 
 
 def _clearly_converging(history: list[dict]) -> bool:
@@ -328,7 +328,7 @@ class ExperimentEngine:
                         )
                     else:
                         break
-                record = {**record, "comparisons": history}
+                record = {**record, "comparisons": history, "convergence": convergence_summary(history)}
                 (mesh_root / "experiment.json").write_text(coarse_spec.model_dump_json(indent=2))
                 (mesh_root / "provenance.json").write_text(json.dumps(record, indent=2))
                 result = result.model_copy(

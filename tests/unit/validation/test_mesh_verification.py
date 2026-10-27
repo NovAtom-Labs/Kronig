@@ -315,3 +315,20 @@ def test_leakage_below_the_current_tolerance_is_not_a_response_to_compare_when_b
     assert mesh_comparison(coarse, fine, current_absolute_tolerance=1e-5)["status"] == "passed"
     real = _profile("terminal_current", "A/m^2", (0.0, 1.0), (1.0, 2.0))
     assert mesh_comparison(real, fine, current_absolute_tolerance=1e-5)["status"] == "failed"
+
+
+def test_convergence_summary_reports_observed_order_and_a_fine_grid_index() -> None:
+    from tcad_agent.validation.refinement import convergence_summary
+
+    def comparison(error):
+        return {"metrics": [{"dataset": "potential", "relative_linf": error}]}
+
+    summary = convergence_summary([comparison(0.16), comparison(0.08), comparison(0.04)])
+    entry = summary["datasets"]["potential"]
+    assert entry["observed_order"] == pytest.approx(1.0)
+    assert entry["gci_fine"] == pytest.approx(1.25 * 0.04)  # Fs * e / (2**1 - 1)
+    assert summary["worst_gci"] == entry["gci_fine"]
+    wobble = convergence_summary([comparison(0.02), comparison(0.05)])
+    assert wobble["datasets"]["potential"]["gci_fine"] is None  # no index without contraction
+    fast = convergence_summary([comparison(0.8), comparison(0.001)])
+    assert fast["datasets"]["potential"]["observed_order"] == 2.0  # clamped, never claimed higher
