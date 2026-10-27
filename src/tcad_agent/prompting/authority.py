@@ -271,7 +271,7 @@ def _resolve(value, parts):
                 item = value[0]
                 fields = type(item).model_fields if isinstance(item, BaseModel) else {}
                 parameters = getattr(item, "parameters", _UNMAPPED)
-                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key == "extents" or (
+                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key in {"extents", "thickness"} or (
                     isinstance(parameters, BaseModel) and key in type(parameters).model_fields
                 )
                 return _resolve(item, parts if is_field else remaining)

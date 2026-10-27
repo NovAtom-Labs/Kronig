@@ -200,7 +200,7 @@ class PromptPreparationService:
 
         threading.Thread(target=infer, daemon=True, name="kronig-preparation-inference").start()
         started = time.monotonic()
-        timeout = max(1, float(os.getenv("AGENT_KRONIG_PREPARATION_TIMEOUT", "900")))
+        timeout = max(1, float(os.getenv("AGENT_KRONIG_PREPARATION_TIMEOUT", "1800")))
         while True:
             try:
                 successful, result = response.get(
