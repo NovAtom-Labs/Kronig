@@ -52,6 +52,9 @@ def test_plan_refuses_changed_confirmed_schema_value(tmp_path, valid_spec, path,
         ("geometry.length", "1000 nm"),
         ("profiles.0.value", "1e23 m^-3"),
         ("contacts.left.voltage_offset", "0 mV"),
+        # A reverse sweep's step is stored as a magnitude; its direction comes from start/stop.
+        ("study.step", "-0.1 V"),
+        ("study.step", "-100 mV"),
     ],
 )
 def test_plan_accepts_equivalent_units(tmp_path, valid_spec, path, value):
@@ -64,6 +67,21 @@ def test_plan_accepts_equivalent_units(tmp_path, valid_spec, path, value):
         valid_spec.model_dump(mode="json"), backend="devsim"
     )
     assert response.status == "ok", response
+
+
+def test_band_gap_narrowing_intent_is_met_by_the_slotboom_model(tmp_path, valid_spec):
+    payload = valid_spec.model_dump(mode="json")
+    payload["physics"]["models"] = [*payload["physics"]["models"], "slotboom_bgn"]
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Include band-gap narrowing",
+        fields=(),
+        selected_capabilities=("model.band_gap_narrowing",),
+    )
+    response = DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+        payload, backend="devsim"
+    )
+    assert response.code != "requested_scope_missing", response
 
 
 def test_portable_physics_parameter_cannot_be_dropped_through_a_short_path(tmp_path, valid_spec):

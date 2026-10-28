@@ -640,6 +640,11 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
                     }
                 )
             continue
+        if parts[-1] == "step" and isinstance(field.value, str) and field.value.startswith("-"):
+            # The schema keeps a sweep step positive and infers direction from start and stop,
+            # so a researcher's "-1 V" step for a reverse sweep is honored by its magnitude.
+            if _equal(actual, field.value[1:].strip()):
+                continue
         if not _equal(actual, field.value):
             issues.append(
                 {

@@ -450,8 +450,14 @@ class DomainTools:
                         # Match ExperimentSpec's schema-1.0 migration. This
                         # alias is density, never an absolute current in A.
                         "observable.terminal_current": "observable.terminal_current_density",
+                        # Both ids name the one reviewed Slotboom model; the
+                        # researcher's intent may use either vocabulary.
+                        "model.band_gap_narrowing": "model.slotboom_bgn",
                     }.get(capability, capability)
-                    not in actual
+                    not in {
+                        "model.slotboom_bgn" if item == "model.band_gap_narrowing" else item
+                        for item in actual
+                    }
                 )
                 if missing:
                     return ToolResponse(
