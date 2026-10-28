@@ -216,3 +216,58 @@ def test_explicit_contact_location_binds_values_without_losing_authority(
         valid_spec.model_dump(mode="json"), backend="devsim"
     )
     assert response.status == expected, response
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        ("regions.region.material", "p_region"),
+        ("regions.material.material", "silicon, 1 um thick, 1D stack"),
+        ("regions.location.material", "x_min_to_x_max"),
+    ],
+)
+def test_material_path_restating_label_extent_or_narrative_is_honored(valid_spec, path, value):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep my region",
+        fields=(IntentField(path=path, value=value, origin="researcher"),),
+    )
+    assert plan_authority_issues(valid_spec, intent) == []
+
+
+def test_material_path_naming_a_different_material_is_refused(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep my region",
+        fields=(IntentField(path="regions.p_region.material", value="hafnium_oxide", origin="researcher"),),
+    )
+    assert plan_authority_issues(valid_spec, intent)
+
+
+def test_profile_record_naming_its_region_by_region_id_is_held(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    profile = valid_spec.profiles[0]
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep my doping",
+        fields=(
+            IntentField(
+                path="profiles.parameters",
+                value=[
+                    {
+                        "concentration": "1e17 cm^-3",
+                        "profile_type": "constant",
+                        "region_id": profile.region,
+                        "species": "acceptor",
+                    }
+                ],
+                origin="researcher",
+            ),
+        ),
+    )
+    assert plan_authority_issues(valid_spec, intent) == []

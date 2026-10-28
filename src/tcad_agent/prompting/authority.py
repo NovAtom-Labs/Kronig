@@ -410,6 +410,9 @@ def _strip_owner(key):
 
 def _record_field_equal(record, key, expected):
     fields = type(record).model_fields
+    if key == "region_id" and key not in fields:
+        # A profile names its region as "region"; a region is named by its own "id".
+        key = "region" if "region" in fields else "id"
     if key not in fields:
         key = _strip_owner(key)
     if key == "thickness" and "x0" in fields and "x1" in fields:
@@ -564,6 +567,21 @@ def _spec_holds_every_value(spec, value):
     return True
 
 
+def _names_a_region_material(spec, value):
+    """True when a confirmed ``regions.*.material`` text only restates what the spec holds.
+
+    A model sometimes files a region's label ("silicon_body"), its extent ("x_min_to_x_max") or a
+    narrative ("silicon, 1 um thick") under a material path. Such text claims no material the
+    spec lacks, so it is honored; a different material name still reaches the normal check.
+    """
+    if not isinstance(value, str):
+        return False
+    head = re.split(r"[,;]", value, maxsplit=1)[0].strip().lower()
+    held = {str(region.material).lower() for region in spec.regions}
+    held |= {str(region.id).lower() for region in spec.regions}
+    return head in held or bool(re.fullmatch(r"x_(min|max)(_to_x_(min|max))?", head))
+
+
 def plan_authority_issues(spec, intent, *, structured_paths=()):
     """Refuse changed typed inputs; never invent a mapping for free-text records."""
     issues = []
@@ -580,6 +598,10 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
         if field.origin not in {"researcher", "repository"}:
             continue
         parts = canonical_path(field.path, preserve_indices=True).split(".")
+        if parts[0] == "regions" and parts[-1] == "material" and _names_a_region_material(
+            spec, field.value
+        ):
+            continue
         if len(parts) > 1 and parts[0] == "contacts":
             parts[1] = locations.get(parts[1], parts[1])
         if parts == ["geometry", "length"]:
