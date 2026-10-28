@@ -170,6 +170,40 @@ def enum_value_violations(intent) -> list[tuple[str, str, list[str]]]:
     return violations
 
 
+def expand_entity_maps(fields) -> list:
+    """Split ``regions.material = {"oxide": "silicon_dioxide", ...}`` into one field per entity.
+
+    A model that records one property for several regions or contacts as a single object has
+    said everything the plan needs; only the shape is wrong. When every value of the object is a
+    plain scalar and the path names a property of a collection (no entity selected), each key is
+    taken as the entity id and the field is rewritten as ``regions.<id>.material``. Anything else
+    is left for the ambiguity check to refuse.
+    """
+    from tcad_agent.domain.models import ExperimentSpec
+
+    expanded = []
+    for field in fields:
+        value = field.value
+        if isinstance(value, dict) and value and all(
+            isinstance(item, str | int | float) and not isinstance(item, bool)
+            for item in value.values()
+        ):
+            try:
+                QuantityValue.model_validate(value)
+            except ValueError:
+                parts = canonical_path(field.path, preserve_indices=True).split(".")
+                if len(parts) == 2 and _property_used_as_selector(ExperimentSpec, parts):
+                    expanded.extend(
+                        field.model_copy(
+                            update={"path": f"{parts[0]}.{key}.{parts[1]}", "value": item}
+                        )
+                        for key, item in value.items()
+                    )
+                    continue
+        expanded.append(field)
+    return expanded
+
+
 def ambiguous_collection_paths(intent) -> list[str]:
     """Compound values filed under a path that cannot select one entity of a collection.
 

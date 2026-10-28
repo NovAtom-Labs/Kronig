@@ -365,6 +365,14 @@ class OpenHandsPreparationModel:
                             "intent": decision.intent.model_copy(update={"fields": tuple(fields)})
                         }
                     )
+                if decision.intent:
+                    from tcad_agent.prompting.authority import expand_entity_maps
+
+                    decision = decision.model_copy(update={
+                        "intent": decision.intent.model_copy(update={
+                            "fields": tuple(expand_entity_maps(decision.intent.fields))
+                        })
+                    })
                 decision = self._normalize_quantity_fields(
                     decision, workspace, capabilities, original_prompt, answers
                 )

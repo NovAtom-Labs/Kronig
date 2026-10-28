@@ -1272,3 +1272,35 @@ def test_a_dopant_named_by_element_is_accepted_as_a_species():
     )
     flagged = [(path, value) for path, value, _ in enum_value_violations(intent)]
     assert flagged == [("profiles.source.species", "unobtainium")]
+
+def test_one_property_of_several_entities_is_split_into_one_field_each():
+    from types import SimpleNamespace
+
+    from tcad_agent.prompting.authority import ambiguous_collection_paths, expand_entity_maps
+
+    class Field(SimpleNamespace):
+        def model_copy(self, update):
+            return Field(**{**self.__dict__, **update})
+
+    def field(path, value):
+        return Field(path=path, origin="researcher", value=value)
+
+    fields = [
+        field("regions.material", {"gate_oxide": "silicon_dioxide", "body": "silicon"}),
+        field("regions.silicon.material", "silicon"),
+        field("contacts.kind", {"gate": "metal_work_function", "back": "ohmic"}),
+        # A quantity written as an object is a single value, and a mixed object is not a map.
+        field("physics.temperature", {"magnitude_si": 300.0, "si_unit": "kelvin"}),
+        field("regions.material", {"oxide": {"name": "silicon_dioxide"}}),
+    ]
+    expanded = expand_entity_maps(fields)
+    assert [(f.path, f.value) for f in expanded[:5]] == [
+        ("regions.gate_oxide.material", "silicon_dioxide"),
+        ("regions.body.material", "silicon"),
+        ("regions.silicon.material", "silicon"),
+        ("contacts.gate.kind", "metal_work_function"),
+        ("contacts.back.kind", "ohmic"),
+    ]
+    assert expanded[5].path == "physics.temperature"
+    assert expanded[6].path == "regions.material"  # nested object: left for the ambiguity check
+    assert ambiguous_collection_paths(SimpleNamespace(fields=expanded)) == ["regions.material"]
