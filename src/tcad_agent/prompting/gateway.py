@@ -440,6 +440,11 @@ class OpenHandsPreparationModel:
                         "The configured model returned an invalid preparation decision: "
                         + last_validation_summary
                     ) from None
+                if not text:
+                    # An empty reply is a provider hiccup, not a decision to correct. Echoing it
+                    # back as an assistant turn invites another empty reply, so sample again from
+                    # the same conversation.
+                    continue
                 messages.extend(
                     (
                         Message(role="assistant", content=[TextContent(text=text)]),

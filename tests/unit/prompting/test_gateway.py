@@ -1304,3 +1304,39 @@ def test_one_property_of_several_entities_is_split_into_one_field_each():
     assert expanded[5].path == "physics.temperature"
     assert expanded[6].path == "regions.material"  # nested object: left for the ambiguity check
     assert ambiguous_collection_paths(SimpleNamespace(fields=expanded)) == ["regions.material"]
+
+def test_an_empty_model_reply_is_resampled_not_echoed_back_for_repair() -> None:
+    ready = json.dumps(
+        {
+            "status": "ready",
+            "summary": "The simulation request is executable.",
+            "questions": [],
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Run the requested equilibrium simulation.",
+                "fields": [],
+                "exclusions": [],
+                "deliverables": [],
+                "validation_expectations": [],
+                "unresolved_noncritical": [],
+                "unresolved_critical": [],
+            },
+            "unresolved_critical": [],
+            "warnings": [],
+            "runtime_research_needed": False,
+            "runtime_research_reason": None,
+        }
+    )
+    llm = ScriptedLLM(["", "", ready])
+
+    decision = OpenHandsPreparationModel(llm).prepare(
+        original_prompt="Run the specified simulation.",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+
+    assert decision.intent is not None
+    # Every call saw the same conversation: nothing was appended after an empty reply.
+    assert len(llm.messages) == 3
+    assert all(len(messages) == len(llm.messages[0]) for messages in llm.messages)
