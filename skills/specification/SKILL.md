@@ -30,6 +30,15 @@ The `ExperimentSpec` is the scientific contract. Describe geometry, materials, p
 - sweep endpoints and step meaning
 - symmetry, dimensional reduction, and any effective area used to convert density into total current
 
+## Observables are the researcher's request, not a default set
+
+List in `observables` only the quantities the researcher asked for. A request for a drain current
+or an I-V curve needs terminal current; do not add band edges, carrier densities, quasi-Fermi
+levels, recombination rates or other profiles "for completeness". Each extra profile is a
+deliverable nobody asked for, and it is also another field the mesh-convergence check must judge,
+so it can fail a run whose requested answer is fine. If the researcher mentions profiles or a
+cut without naming a quantity, ask which quantities they want instead of choosing a set.
+
 Never infer a micrometre value as metres or convert concentration by intuition. Store researcher units at the boundary and rely on the unit system for normalization.
 
 ## Material clarification rules
