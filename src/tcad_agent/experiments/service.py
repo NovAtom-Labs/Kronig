@@ -39,6 +39,30 @@ from tcad_agent.validation.engine import ValidationEngine
 from tcad_agent.validation.refinement import convergence_summary, mesh_comparison, refined_spec
 
 
+def _worst_error(record: dict) -> float | None:
+    values = [m["relative_linf"] for m in record.get("metrics", []) if "relative_linf" in m]
+    return max(values) if values else None
+
+
+def _cheap_and_closing(
+    history: list[dict], last_seconds: float, remaining: float, dimension: int
+) -> bool:
+    """Whether a still-shrinking error is worth another halving because halvings are cheap.
+
+    A halving costs about 2**dimension times the one before. The error must have fallen since
+    the comparison before, and the next two levels must fit in half of what is left, so a slow
+    response is followed while it is affordable and never at the expense of the allowance.
+    """
+
+    if len(history) < 2:
+        return False
+    previous, last = _worst_error(history[-2]), _worst_error(history[-1])
+    if previous is None or last is None or not 0 < last < previous:
+        return False
+    growth = 2**dimension
+    return last_seconds * growth * growth <= remaining / 2
+
+
 def _clearly_converging(history: list[dict]) -> bool:
     """Whether one more halving is justified: the last two comparisons are closing in.
 
@@ -46,9 +70,7 @@ def _clearly_converging(history: list[dict]) -> bool:
     since the comparison before, so a result that merely wobbles never earns extra solves.
     """
 
-    def worst(record: dict) -> float | None:
-        values = [m["relative_linf"] for m in record.get("metrics", []) if "relative_linf" in m]
-        return max(values) if values else None
+    worst = _worst_error
 
     if len(history) < 2:
         return False
@@ -310,12 +332,21 @@ class ExperimentEngine:
                             "reason": f"Mesh verification did not complete ({type(exc).__name__}).",
                         }
                         break
-                    elapsed += time.monotonic() - started
+                    level_seconds = time.monotonic() - started
+                    elapsed += level_seconds
                     history.append(record)
                     (level_root / "provenance.json").write_text(json.dumps(record, indent=2))
                     if record["status"] == "passed" or fine_result.status != "completed":
                         break
-                    if level == limit < _MAX_MESH_LEVELS and _clearly_converging(history):
+                    if level == limit < _MAX_MESH_LEVELS and (
+                        _clearly_converging(history)
+                        or _cheap_and_closing(
+                            history,
+                            level_seconds,
+                            _MESH_VERIFICATION_SECONDS - elapsed,
+                            prepared.spec.dimension,
+                        )
+                    ):
                         limit += 1
                     if level < limit and all(
                         p.state == "converged" for p in fine_result.operating_points

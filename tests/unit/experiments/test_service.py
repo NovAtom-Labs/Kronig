@@ -166,3 +166,19 @@ def test_a_steadily_contracting_error_earns_more_halvings_than_a_wobbling_one():
     assert _clearly_converging([record(0.47), record(0.21), record(0.089)])  # 0.4x per halving
     assert not _clearly_converging([record(0.47), record(0.40), record(0.35)])  # too slow
     assert not _clearly_converging([record(0.2), record(0.3), record(0.12)])  # not steady
+
+def test_cheap_levels_keep_halving_while_the_error_is_still_shrinking():
+    from tcad_agent.experiments.service import _cheap_and_closing
+
+    def record(worst):
+        return {"metrics": [{"relative_linf": worst}], "relative_tolerance": 0.03}
+
+    history = [record(0.38), record(0.44), record(0.35), record(0.20)]
+    # 1D: two further levels cost 4x the last one; they fit in half of what remains.
+    assert _cheap_and_closing(history, last_seconds=40.0, remaining=6000.0, dimension=1)
+    # 2D levels cost 4x each, so the same level time no longer leaves room for two more.
+    assert not _cheap_and_closing(history, last_seconds=2400.0, remaining=4000.0, dimension=2)
+    # An error that grew is not a trend worth following, however cheap.
+    assert not _cheap_and_closing([record(0.2), record(0.3)], 1.0, 6000.0, 1)
+    assert not _cheap_and_closing([record(0.2)], 1.0, 6000.0, 1)
+    assert not _cheap_and_closing([record(0.2), {"metrics": []}], 1.0, 6000.0, 1)
