@@ -32,6 +32,7 @@ from tcad_agent.ide.models import (
     RunState,
     WorkspaceBaseline,
 )
+from tcad_agent.ide.outcomes import outcome_evidence_summary
 from tcad_agent.ide.store import IDEStoreError, SqliteIDEStore
 from tcad_agent.ide.workspaces import WorkspaceManager
 from tcad_agent.prompting.errors import ResearcherInputRequiredError
@@ -793,6 +794,7 @@ class AgentSupervisor:
             outcome = self.services.store.find_run_outcome(run_id)
             if outcome is not None:
                 self._persist_change_manifest(run_id)
+                evidence = outcome_evidence_summary(outcome.project_root)
                 if outcome.overall_state == "completed":
                     final = self._transition(run_id, RunState.COMPLETED)
                     kind = "run_completed"
@@ -814,6 +816,8 @@ class AgentSupervisor:
                         "The simulation failed. Open Results to review the failure "
                         "evidence and diagnostics."
                     )
+                if evidence:
+                    terminal_detail = f"{terminal_detail} {evidence}"
                 self.services.conversations.add_assistant_message(
                     final.conversation_id,
                     terminal_detail,

@@ -24,6 +24,27 @@ class RunOutcomeValues(TypedDict):
     project_root: Path
 
 
+def outcome_evidence_summary(project_root: Path, *, max_failures: int = 3) -> str:
+    """One researcher-facing sentence on the validation evidence, or empty text."""
+
+    try:
+        report = ValidationReport.model_validate_json(
+            (project_root / "validation.json").read_text()
+        )
+    except (OSError, UnicodeDecodeError, ValidationError):
+        return ""
+    failed = [check for check in report.checks if check.status == "failed"]
+    passed = sum(check.status == "passed" for check in report.checks)
+    summary = f"Validation: {passed} checks passed, {len(failed)} failed."
+    for check in failed[:max_failures]:
+        summary += f" Failed: {check.id} - {check.message.strip()}"
+        if not summary.endswith("."):
+            summary += "."
+    if len(failed) > max_failures:
+        summary += f" (+{len(failed) - max_failures} more in the validation report.)"
+    return summary
+
+
 def derive_run_outcome(
     *,
     run_id: UUID,
