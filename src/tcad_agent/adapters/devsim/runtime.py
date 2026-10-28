@@ -603,6 +603,7 @@ def _run_payload_series(
             completed = subprocess.run(
                 [sys.executable, str(Path(__file__).resolve()), str(input_path)],
                 cwd=point_path,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=120,

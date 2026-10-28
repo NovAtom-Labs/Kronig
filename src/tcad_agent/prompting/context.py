@@ -135,6 +135,7 @@ class WorkspaceContextCollector:
         try:
             result = subprocess.run(
                 ["git", "-C", str(root), "status", "--porcelain=v1", "--branch"],
+                stdin=subprocess.DEVNULL,
                 check=False,
                 capture_output=True,
                 text=True,

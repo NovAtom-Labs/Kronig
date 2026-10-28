@@ -245,6 +245,7 @@ class WorkspaceChangeTracker:
                 completed = subprocess.run(
                     ["git", *arguments],
                     cwd=root,
+                    stdin=subprocess.DEVNULL,
                     check=False,
                     capture_output=True,
                     text=True,

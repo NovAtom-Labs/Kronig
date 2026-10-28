@@ -199,6 +199,7 @@ def select_directory() -> Path | None:
         try:
             completed = subprocess.run(
                 command,
+                stdin=subprocess.DEVNULL,
                 check=False,
                 capture_output=True,
                 text=True,

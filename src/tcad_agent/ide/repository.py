@@ -274,6 +274,9 @@ class RepositoryInspector:
                 ["git", *arguments],
                 shell=False,
                 cwd=root,
+                # The desktop backend keeps a blocking read on its own stdin (the owner pipe);
+                # a child that inherits that handle can hang on it, so give it none.
+                stdin=subprocess.DEVNULL,
                 timeout=2,
                 check=False,
                 capture_output=True,
