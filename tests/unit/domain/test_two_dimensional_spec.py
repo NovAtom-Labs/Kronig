@@ -97,6 +97,12 @@ def test_a_two_dimensional_structure_is_accepted_and_keeps_every_input() -> None
         ("unknown region", lambda d: d["contacts"][2].update(region="nowhere"), "needs a region"),
         ("cut outside", lambda d: d["profile_cuts"][0].update(at="5 um"), "inside the structure"),
         (
+            # A depth below the interface written as if it were a coordinate from the top.
+            "cut in the insulator",
+            lambda d: d["profile_cuts"][0].update(at="0.001 um"),
+            "outside every doped region",
+        ),
+        (
             "duplicate cut",
             lambda d: d["profile_cuts"].append({"id": "cut", "at": "0.1 um"}),
             "unique",

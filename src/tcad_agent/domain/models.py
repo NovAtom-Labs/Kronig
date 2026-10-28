@@ -741,6 +741,23 @@ class ExperimentSpec(StrictModel):
             raise ValueError("profile cut IDs must be unique")
         if any(not depth_lo <= cut.at.to("m") <= depth_hi for cut in self.profile_cuts):
             raise ValueError("every profile cut must lie inside the structure")
+        doped = [
+            region
+            for region in regions
+            if any(profile.region == region.id for profile in self.profiles)
+        ]
+        for cut in self.profile_cuts:
+            at = cut.at.to("m")
+            if doped and not any(region.x0.to("m") <= at <= region.x1.to("m") for region in doped):
+                lo = min(region.x0.to("m") for region in doped)
+                hi = max(region.x1.to("m") for region in doped)
+                raise ValueError(
+                    f"profile cut {cut.id} at {at:.3g} m lies outside every doped region "
+                    f"({lo:.3g} to {hi:.3g} m), so it carries no carriers or band structure. "
+                    "A cut's position is a coordinate along the stack axis measured from the top "
+                    "of the structure; a depth below an interface is that interface's coordinate "
+                    "plus the depth."
+                )
         if self.width is not None:
             self.width.require("m", "length")
             if self.width.to("m") <= 0:
