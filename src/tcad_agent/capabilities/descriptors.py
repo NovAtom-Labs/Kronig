@@ -485,7 +485,14 @@ def _legacy_required_inputs(
         return common + schedules.get(value, ())
     if category == "material":
         inputs: tuple[CapabilityInputDescriptor, ...] = (
-            _researcher_input("regions.material", "Material assignment for every spatial region"),
+            _researcher_input(
+                "regions.material",
+                "Material assignment for every spatial region",
+                question_hint=(
+                    "Which material is each region made of (for example silicon, silicon "
+                    "dioxide, or a named high-k dielectric)?"
+                ),
+            ),
         )
         if value == "generic_dielectric":
             inputs += (
@@ -653,6 +660,7 @@ def _researcher_input(
     description: str,
     *,
     unit: str | None = None,
+    question_hint: str | None = None,
 ) -> CapabilityInputDescriptor:
     return CapabilityInputDescriptor(
         path=path,
@@ -660,6 +668,7 @@ def _researcher_input(
         authority=InputAuthority.RESEARCHER,
         required=True,
         unit=unit,
+        question_hint=question_hint,
     )
 
 
