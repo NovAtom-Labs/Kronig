@@ -162,6 +162,8 @@ class OpenHandsPreparationModel:
         "validation.",
     )
     _default_prefixes = (
+        # Which unit a quantity is displayed in is presentation, not research intent.
+        "display_units",
         "operational.",
         "output.",
         "outputs.",

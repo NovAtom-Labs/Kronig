@@ -930,6 +930,49 @@ def test_gateway_allows_platform_to_choose_an_output_file_format() -> None:
     assert decision.intent is not None
     assert decision.intent.fields[0].path == "outputs.file_format"
 
+def test_gateway_allows_platform_to_choose_a_display_unit() -> None:
+    # A unit for showing a quantity is presentation; rejecting it failed a whole preparation
+    # after the researcher had already answered every question.
+    response = json.dumps(
+        {
+            "status": "ready",
+            "summary": "The simulation request is executable.",
+            "questions": [],
+            "intent": {
+                "task_kind": "simulation",
+                "objective": "Run the requested equilibrium simulation.",
+                "fields": [
+                    {
+                        "path": "display_units.conduction_band",
+                        "value": "eV",
+                        "origin": "platform_default",
+                        "source_reference": "platform presentation default",
+                        "evidence_refs": [],
+                    }
+                ],
+                "exclusions": [],
+                "deliverables": [],
+                "validation_expectations": [],
+                "unresolved_noncritical": [],
+                "unresolved_critical": [],
+            },
+            "unresolved_critical": [],
+            "warnings": [],
+            "runtime_research_needed": False,
+            "runtime_research_reason": None,
+        }
+    )
+
+    decision = OpenHandsPreparationModel(ScriptedLLM([response])).prepare(
+        original_prompt="Run the specified simulation.",
+        answers=(),
+        workspace=workspace(),
+        evidence=(),
+    )
+
+    assert decision.intent is not None
+    assert decision.intent.fields[0].path == "display_units.conduction_band"
+
 
 def test_gateway_allows_reviewed_evidence_to_choose_interface_coupling() -> None:
     response = json.dumps(
