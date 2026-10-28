@@ -162,6 +162,10 @@ def enum_value_violations(intent) -> list[tuple[str, str, list[str]]]:
         parts = canonical_path(field.path, preserve_indices=True).split(".")
         allowed = _allowed_values(_leaf_annotations(ExperimentSpec, parts))
         if allowed and field.value not in allowed:
+            # The plan gate already reads a dopant named by element as its doping type, so
+            # "phosphorus" for a species is the researcher's wording, not a mismatch to repair.
+            if _DOPANT_TYPES.get(field.value.lower()) in allowed:
+                continue
             violations.append((field.path, field.value, allowed))
     return violations
 

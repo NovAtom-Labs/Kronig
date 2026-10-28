@@ -1253,3 +1253,22 @@ def test_a_description_in_place_of_an_allowed_value_is_refused_before_a_plan_exi
         ("study.kind", "DC sweep"),
     ]
     assert "x_min" in enum_value_violations(intent)[0][2]
+
+def test_a_dopant_named_by_element_is_accepted_as_a_species():
+    from types import SimpleNamespace
+
+    from tcad_agent.prompting.authority import enum_value_violations
+
+    def field(path, value):
+        return SimpleNamespace(path=path, origin="researcher", value=value)
+
+    intent = SimpleNamespace(
+        fields=[
+            field("profiles.source.species", "phosphorus"),
+            field("profiles.body.species", "Boron"),
+            field("profiles.drain.species", "donor"),
+            field("profiles.source.species", "unobtainium"),
+        ]
+    )
+    flagged = [(path, value) for path, value, _ in enum_value_violations(intent)]
+    assert flagged == [("profiles.source.species", "unobtainium")]
