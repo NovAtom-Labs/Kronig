@@ -527,7 +527,11 @@ class DomainTools:
             # ledger; timeout never substitutes scientific output.
             # Reserve time for the mandatory independent mesh solves as well
             # as the original solve. Explicit caller budgets remain unchanged.
-            timeout_value = request.get("timeout_seconds", 1200)
+            # A two-dimensional structure solves every bias point on a far larger mesh, so it
+            # gets the longer allowance unless the caller states one.
+            timeout_value = request.get(
+                "timeout_seconds", 3600 if prepared.spec.dimension == 2 else 1200
+            )
             if not isinstance(timeout_value, (str, int, float)):
                 raise TypeError("timeout_seconds must be numeric")
             budget = RunBudget(seconds=float(timeout_value))
