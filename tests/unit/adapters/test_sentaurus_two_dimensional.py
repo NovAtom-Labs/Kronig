@@ -240,3 +240,27 @@ def test_any_contact_that_can_carry_current_keeps_the_full_system(tmp_path, monk
 
     swept = _deck(tmp_path / "other", monkeypatch, sweep_an_ohmic_contact)
     assert "Poisson Electron Hole" in swept
+
+
+def test_a_semiconductor_split_into_several_regions_is_refused() -> None:
+    def split(data):
+        data["regions"][1].update(id="body_top", x1="0.1 um")
+        data["regions"].append(
+            {
+                "id": "body_bottom",
+                "material": "silicon",
+                "x0": "0.1 um",
+                "x1": "0.205 um",
+                "y0": "0 um",
+                "y1": "0.3 um",
+            }
+        )
+        data["profiles"][0]["region"] = "body_top"
+        data["profiles"][1]["region"] = "body_top"
+        data["contacts"][1]["region"] = "body_top"
+        data["contacts"][2]["region"] = "body_bottom"
+
+    manifest = CapabilityManifest.from_backend("sentaurus")
+    decision = CapabilityService().check(spec_with(split), manifest)
+    assert [issue.code for issue in decision.issues] == ["split_semiconductor_region"]
+    assert CapabilityService().check(spec_with(), manifest).status.value == "supported"

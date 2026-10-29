@@ -518,6 +518,31 @@ class CapabilityService:
                             ),
                         )
                     )
+        if spec.dimension == 2:
+            # A reviewed layout holds each semiconductor in one region with doping windows and
+            # contact spans placed in it. Splitting one into source, channel and drain regions
+            # produced a gate current in a device whose oxide carries none (the same device as
+            # one region gave exactly zero), so it is refused before a remote run is spent.
+            counts: dict[str, int] = {}
+            for region in spec.regions:
+                material = str(region.material)
+                counts[material] = counts.get(material, 0) + 1
+            split = sorted(m for m, n in counts.items() if n > 1 and m != "silicon_dioxide")
+            if split:
+                issues.append(
+                    CapabilityIssue(
+                        path="regions",
+                        code="split_semiconductor_region",
+                        message=(
+                            f"the {', '.join(split)} body is split into several regions; in a "
+                            "two-dimensional structure keep each semiconductor as one region, "
+                            "and place source and drain with box doping profiles and contact "
+                            "spans inside it"
+                        ),
+                        requested=", ".join(split),
+                        supported=("one region per semiconductor",),
+                    )
+                )
         if spec.dimension == 2 and not spec.profile_cuts:
             spatial = sorted(
                 str(observable)
