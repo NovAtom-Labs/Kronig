@@ -65,6 +65,22 @@ PREPARATION_ATTEMPTS = 5
 EMPTY_REPLY_ATTEMPTS = 6
 
 
+def _reply_shape(response) -> str:
+    """Why a reply came back empty, without any of its text: stop reason and token counts."""
+    try:
+        raw = response.raw_response
+        choice = raw.choices[0]
+        usage = getattr(raw, "usage", None)
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+        return (
+            f"finish_reason={getattr(choice, 'finish_reason', None)}, "
+            f"completion_tokens={getattr(usage, 'completion_tokens', None)}, "
+            f"reasoning_chars={len(reasoning)}"
+        )
+    except Exception:
+        return "no reply metadata"
+
+
 def _repair_clarification_paths(text: str) -> str:
     """Derive omitted unresolved paths from already typed clarification questions."""
 
@@ -315,7 +331,11 @@ class OpenHandsPreparationModel:
                     if text:
                         break
                     # An empty reply is a provider hiccup, not a decision: sample again.
-                    _LOG.warning("empty preparation reply %d", empty_replies + 1)
+                    _LOG.warning(
+                        "empty preparation reply %d (%s)",
+                        empty_replies + 1,
+                        _reply_shape(response),
+                    )
                     time.sleep(min(5.0 * (empty_replies + 1), 30.0))
             except Exception:
                 raise ModelResponseError(
