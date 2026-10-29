@@ -61,6 +61,8 @@ MODEL_CALL_ATTEMPTS = 8
 MODEL_RETRY_SECONDS = 15.0
 # The model may return invalid or non-JSON text; each failure is explained back to it.
 PREPARATION_ATTEMPTS = 5
+# Empty replies do not count against those attempts: they carry no decision to correct.
+EMPTY_REPLY_ATTEMPTS = 6
 
 
 def _repair_clarification_paths(text: str) -> str:
@@ -301,14 +303,22 @@ class OpenHandsPreparationModel:
                     if "on_token" in inspect.signature(self._llm.completion).parameters
                     else {}
                 )
-                response = self._complete_with_retries(messages, kwargs)
+                for empty_replies in range(EMPTY_REPLY_ATTEMPTS):
+                    response = self._complete_with_retries(messages, kwargs)
+                    text = "".join(
+                        item.text
+                        for item in response.message.content
+                        if isinstance(item, TextContent)
+                    ).strip()
+                    if text:
+                        break
+                    # An empty reply is a provider hiccup, not a decision: sample again.
+                    _LOG.warning("empty preparation reply %d", empty_replies + 1)
+                    time.sleep(min(5.0 * (empty_replies + 1), 30.0))
             except Exception:
                 raise ModelResponseError(
                     "The configured model could not prepare the request."
                 ) from None
-            text = "".join(
-                item.text for item in response.message.content if isinstance(item, TextContent)
-            ).strip()
             try:
                 decision = PreparationDecision.model_validate_json(
                     _repair_clarification_paths(_unwrap_json_fence(text))
@@ -440,6 +450,11 @@ class OpenHandsPreparationModel:
                     str(item.get("msg", "invalid value")) for item in details[:4]
                 )
                 if attempt == PREPARATION_ATTEMPTS - 1:
+                    # Shape only (never the model's text, which can echo the researcher's request).
+                    _LOG.warning(
+                        "preparation reply rejected: %s, length %d, starts with %r",
+                        type(error).__name__, len(text), text[:1],
+                    )
                     if isinstance(error, _ResearcherAuthorityViolation):
                         raise ResearcherInputRequiredError(
                             (error.field_path,), last_validation_summary
