@@ -304,7 +304,9 @@ class OpenHandsPreparationModel:
                     else {}
                 )
                 for empty_replies in range(EMPTY_REPLY_ATTEMPTS):
-                    response = self._complete_with_retries(messages, kwargs)
+                    response = self._complete_with_retries(
+                        messages, kwargs, self._lighter_after_empty_replies(empty_replies)
+                    )
                     text = "".join(
                         item.text
                         for item in response.message.content
@@ -495,15 +497,29 @@ class OpenHandsPreparationModel:
                     on_progress("repairing_preparation_response")
         raise AssertionError("unreachable preparation retry loop")
 
-    def _complete_with_retries(self, messages, kwargs):
+    def _lighter_after_empty_replies(self, empty_replies: int):
+        """The model for the next sample: lighter reasoning once it keeps returning nothing.
+
+        A long structured decision can be spent entirely on reasoning, leaving no text. The
+        same request at low reasoning effort answers, so two empty replies in a row switch to it.
+        """
+        if empty_replies < 2:
+            return self._llm
+        try:
+            return self._llm.model_copy(update={"reasoning_effort": "low"})
+        except Exception:
+            return self._llm
+
+    def _complete_with_retries(self, messages, kwargs, llm=None):
         """Call the model, retrying rate limits, timeouts and dropped connections.
 
         A provider hiccup should not end a researcher's request. The final error is logged with
         its type (never its text, which can carry credentials) before it is reported generically.
         """
+        llm = llm or self._llm
         for attempt in range(MODEL_CALL_ATTEMPTS):
             try:
-                return self._llm.completion(messages, **kwargs)
+                return llm.completion(messages, **kwargs)
             except Exception as error:
                 _LOG.warning(
                     "preparation model call failed (attempt %d of %d): %s",

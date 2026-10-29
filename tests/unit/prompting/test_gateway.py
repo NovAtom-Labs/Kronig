@@ -1352,3 +1352,18 @@ def test_decision_wrapped_in_prose_or_commentary_is_unwrapped():
     assert _unwrap_json_fence('```json\n{"a": 1}\n```') == '{"a": 1}'
     assert _unwrap_json_fence("no json here") == "no json here"
     assert _unwrap_json_fence("brace { but not json }") == "brace { but not json }"
+
+
+def test_repeated_empty_replies_switch_to_lighter_reasoning():
+    class Heavy(ScriptedLLM):
+        def model_copy(self, update):
+            return ("lighter", update)
+
+    llm = Heavy([])
+    model = OpenHandsPreparationModel(llm)
+    assert model._lighter_after_empty_replies(0) is llm
+    assert model._lighter_after_empty_replies(1) is llm
+    assert model._lighter_after_empty_replies(2) == ("lighter", {"reasoning_effort": "low"})
+    # A model that cannot be copied simply keeps being sampled.
+    plain = ScriptedLLM([])
+    assert OpenHandsPreparationModel(plain)._lighter_after_empty_replies(5) is plain
