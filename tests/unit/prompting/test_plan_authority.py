@@ -271,3 +271,24 @@ def test_profile_record_naming_its_region_by_region_id_is_held(valid_spec):
         ),
     )
     assert plan_authority_issues(valid_spec, intent) == []
+
+
+def test_record_keys_carrying_their_unit_in_the_name_are_compared_by_value(valid_spec):
+    from tcad_agent.prompting.authority import _holds_records
+
+    region = valid_spec.regions[0]
+    thickness_um = round((region.x1.to("m") - region.x0.to("m")) * 1e6, 9)
+    profile = valid_spec.profiles[0]
+    concentration_cm3 = profile.value.to("1/m^3") * 1e-6 if hasattr(profile.value, "to") else None
+    assert _holds_records(
+        valid_spec.regions, [{"region": region.id, "thickness_um": thickness_um}], "extents"
+    )
+    assert not _holds_records(
+        valid_spec.regions, [{"region": region.id, "thickness_um": thickness_um * 2}], "extents"
+    )
+    if concentration_cm3 is not None:
+        assert _holds_records(
+            valid_spec.profiles,
+            [{"region": profile.region, "concentration_cm3": concentration_cm3, "profile": "constant"}],
+            "parameters",
+        )

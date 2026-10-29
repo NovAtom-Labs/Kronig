@@ -400,6 +400,9 @@ _DOPANT_TYPES = {
 }
 
 
+_KEY_UNITS = {"cm3": "cm^-3", "cm_3": "cm^-3", "m3": "m^-3", "ev": "eV", "k": "K"}
+
+
 def _strip_owner(key):
     """A key like "region_thickness" names that field of the record's owner."""
     for prefix in ("region_", "profile_"):
@@ -410,6 +413,13 @@ def _strip_owner(key):
 
 def _record_field_equal(record, key, expected):
     fields = type(record).model_fields
+    suffixed = re.fullmatch(r"(.+?)_(nm|um|m|cm3|cm_3|m3|ev|v|k)", key)
+    if key not in fields and suffixed and isinstance(expected, int | float) and not isinstance(expected, bool):
+        # "thickness_um": 2 states a number whose unit the key carries.
+        key, unit = suffixed.groups()
+        expected = f"{expected} {_KEY_UNITS.get(unit, unit)}"
+    if key == "region" and "region" not in fields and "id" in fields:
+        key = "id"  # a region's name is its id
     if key == "region_id" and key not in fields:
         # A profile names its region as "region"; a region is named by its own "id".
         key = "region" if "region" in fields else "id"
