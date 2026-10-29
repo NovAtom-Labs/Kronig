@@ -291,6 +291,15 @@ class SentaurusAdapter:
                 raise SentaurusCompilerSafetyError(
                     f"unsafe identifier rejected by Sentaurus compiler: {value!r}"
                 )
+        shared = sorted({region.id for region in spec.regions} & {c.id for c in spec.contacts})
+        if shared:
+            # The structure editor keeps regions and contact sets in one namespace and aborts
+            # (core dump) when they collide, so name the clash before spending a remote run.
+            raise SentaurusCompilerSafetyError(
+                f"a contact and a region share the name {shared[0]!r}; the Sentaurus structure "
+                "editor needs distinct names, so rename the contact (for example "
+                f"'{shared[0]}_contact')"
+            )
         unknown_models = set(spec.physics.models) - set(_MODEL_LINES)
         if unknown_models:
             raise SentaurusCompilerSafetyError(f"unknown model mapping: {sorted(unknown_models)}")

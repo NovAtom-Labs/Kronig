@@ -149,6 +149,14 @@ def test_unsafe_identifier_is_rejected(tmp_path: Path, unsafe_name: str) -> None
         SentaurusAdapter.from_defaults().compile(spec, tmp_path / "job")
 
 
+def test_contact_named_like_a_region_is_refused_before_a_remote_run(tmp_path: Path) -> None:
+    spec = equilibrium_spec()
+    clash = spec.contacts[0].model_copy(update={"id": spec.regions[0].id})
+    spec = spec.model_copy(update={"contacts": (clash, *spec.contacts[1:])})
+    with pytest.raises(SentaurusCompilerSafetyError, match="share the name"):
+        SentaurusAdapter.from_defaults().compile(spec, tmp_path / "job")
+
+
 def test_unsupported_model_is_refused(tmp_path: Path) -> None:
     spec = equilibrium_spec()
     physics = spec.physics.model_copy(update={"models": (*spec.physics.models, "hydrodynamic")})
