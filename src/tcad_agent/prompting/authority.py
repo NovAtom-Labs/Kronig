@@ -577,6 +577,35 @@ def _spec_holds_every_value(spec, value):
     return True
 
 
+_DOPING_POLARITY = {
+    "p-type": "acceptor", "p": "acceptor", "acceptor": "acceptor",
+    "n-type": "donor", "n": "donor", "donor": "donor",
+}
+
+
+def _profile_alias_held(spec, key, value):
+    """A confirmed "substrate_doping_type" or "..._doping_concentration" the profiles hold.
+
+    A model sometimes labels a profile's polarity or magnitude with a descriptive key of its
+    own. Such a key is read by its meaning (polarity names the species, concentration the
+    value) and honored only when some profile in the spec carries that exact fact.
+    """
+    key = key.lower()
+    if re.search(r"(doping_type|dopant_type|polarity|conductivity_type)$", key):
+        species = _DOPING_POLARITY.get(str(value).strip().lower())
+        return species is not None and any(
+            str(getattr(getattr(p, "species", None), "value", getattr(p, "species", None)))
+            == species
+            for p in spec.profiles
+        )
+    if re.search(r"(doping_concentration|dopant_concentration|doping_level|concentration)$", key):
+        return any(
+            isinstance(getattr(p, "value", None), QuantityValue) and _equal(p.value, value)
+            for p in spec.profiles
+        )
+    return False
+
+
 def _names_a_region_material(spec, value):
     """True when a confirmed ``regions.*.material`` text only restates what the spec holds.
 
@@ -615,6 +644,8 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
         ):
             # "boron" confirms an acceptor profile; the spec stores the doping type.
             field = field.model_copy(update={"value": _DOPANT_TYPES[field.value.lower()]})
+        if parts[0] == "profiles" and _profile_alias_held(spec, parts[-1], field.value):
+            continue
         if parts[0] == "regions" and parts[-1] == "material" and _names_a_region_material(
             spec, field.value
         ):

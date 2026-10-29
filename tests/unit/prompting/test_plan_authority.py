@@ -305,3 +305,18 @@ def test_dopant_element_in_confirmed_species_is_met_by_the_dopant_type(valid_spe
         ),
     )
     assert plan_authority_issues(valid_spec, intent) == []
+
+
+def test_descriptive_doping_keys_are_read_by_meaning(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    def issues(path, value):
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Keep my substrate",
+            fields=(IntentField(path=path, value=value, origin="researcher"),),
+        )
+        return plan_authority_issues(valid_spec, intent)
+
+    assert issues("profiles.substrate_doping_type", "p-type") == []
+    assert issues("profiles.substrate_doping_concentration", "1e17 cm^-3") == []
