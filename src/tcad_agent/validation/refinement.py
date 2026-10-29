@@ -261,6 +261,18 @@ def mesh_comparison(
             "V": 1e-6,
             "eV": 1e-6,
         }.get(unit, 1e-30)
+        if unit == "A" and name.startswith("absolute_terminal_current__"):
+            # The same current in amperes is the density times the contact area, so its noise
+            # floor is the density floor times that area; otherwise a leakage far below the
+            # current tolerance would be compared relatively in one form and ignored in the other.
+            density = coarse.datasets.get(
+                name.replace("absolute_terminal_current__", "terminal_current_density__", 1)
+            )
+            if density is not None:
+                peak_density = float(np.max(np.abs(np.asarray(density.values, dtype=float))))
+                peak_current = float(np.max(np.abs(np.asarray(left.values, dtype=float))))
+                if peak_density > 0:
+                    floor = current_absolute_tolerance * peak_current / peak_density
         if left.unit == "m^-3/s" and equilibrium:
             # q * integral(delta R dx) is a current-density perturbation. Bound
             # equilibrium-zero rates by the existing continuity resolution.
@@ -279,7 +291,7 @@ def mesh_comparison(
                 max(old_error, float(np.max(np.abs(np.array(a) - np.array(b))))),
                 max(old_scale, float(np.max(np.abs(a))), float(np.max(np.abs(b)))),
             )
-        if unit == "A/m^2":
+        if unit in {"A/m^2", "A"}:
             # Two currents that both sit below the current tolerance agree on the only thing a
             # reading that small asserts (zero within noise: equilibrium, or an insulated gate with
             # no dc path); their difference is not a response to compare.

@@ -388,3 +388,42 @@ def test_an_unstable_requested_current_still_fails_with_by_products_set_aside():
     fine = _with_current(curve((0.003, 0.004)), (1.5, 2.5))
     result = mesh_comparison(coarse, fine, requested=frozenset({"terminal_current_density"}))
     assert result["status"] == "failed"
+
+
+def _current_pair(result, density, area=0.01):
+    datasets = {}
+    for name, unit, scale in (
+        ("terminal_current_density__body", "A/m^2", 1.0),
+        ("absolute_terminal_current__body", "A", area),
+    ):
+        datasets[name] = Dataset(
+            id=name,
+            label="I",
+            unit=unit,
+            axes=("bias",),
+            shape=(2,),
+            values=tuple(v * scale for v in density),
+        )
+    return result.model_copy(update={"datasets": {**result.datasets, **datasets}})
+
+
+def test_a_current_in_amperes_shares_the_noise_floor_of_its_density():
+    base = curve((0.003, 0.004))
+    # Leakage a million times below the 1e-6 A/m^2 tolerance moves 40% between meshes: noise.
+    quiet = mesh_comparison(
+        _current_pair(base, (1e-12, 2e-12)),
+        _current_pair(base, (1.4e-12, 2.8e-12)),
+        current_absolute_tolerance=1e-6,
+    )
+    body = {m["dataset"]: m["relative_linf"] for m in quiet["metrics"]}
+    assert body["terminal_current_density__body"] == 0.0
+    assert body["absolute_terminal_current__body"] == 0.0
+    # A real current that moves 40% is still a failure in both forms.
+    loud = mesh_comparison(
+        _current_pair(base, (1.0, 2.0)),
+        _current_pair(base, (1.4, 2.8)),
+        current_absolute_tolerance=1e-6,
+    )
+    body = {m["dataset"]: m["relative_linf"] for m in loud["metrics"]}
+    assert body["absolute_terminal_current__body"] > 0.2
+    assert loud["status"] == "failed"
