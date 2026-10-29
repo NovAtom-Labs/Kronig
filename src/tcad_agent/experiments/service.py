@@ -303,6 +303,10 @@ class ExperimentEngine:
                             result,
                             fine_result,
                             equilibrium=prepared.spec.study.kind == "equilibrium",
+                            requested=frozenset(
+                                str(getattr(item, "value", item))
+                                for item in prepared.spec.observables
+                            ),
                             # At equilibrium the true current is zero, so what the solver
                             # leaves is noise bounded by the equilibrium criterion itself.
                             current_absolute_tolerance=(

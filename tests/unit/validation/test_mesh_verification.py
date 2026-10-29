@@ -352,3 +352,39 @@ def test_the_current_noise_floor_follows_the_highest_doping_whatever_its_shape()
         )
     )
     assert _peak_doping_cm3(spec) == pytest.approx(1e20)
+
+
+def _with_current(result, values):
+    current = Dataset(
+        id="terminal_current__drain",
+        label="I",
+        unit="A/m^2",
+        axes=("bias",),
+        shape=(2,),
+        values=values,
+    )
+    return result.model_copy(update={"datasets": {**result.datasets, current.id: current}})
+
+
+def test_by_products_do_not_decide_the_verdict_unless_requested():
+    coarse = _with_current(curve((0.003, 0.004)), (1.0, 2.0))
+    fine = _with_current(curve((0.005, 0.006)), (1.001, 2.001))
+    # A requested current is stable; the unrequested capacitance moved 40-60%.
+    only_current = mesh_comparison(coarse, fine, requested=frozenset({"terminal_current"}))
+    assert only_current["status"] == "passed"
+    flagged = {m["dataset"] for m in only_current["metrics"] if m.get("informational")}
+    assert flagged == {"capacitance__random"}
+    # Asking for the capacitance puts it back in the verdict.
+    asked = mesh_comparison(
+        coarse, fine, requested=frozenset({"terminal_current", "capacitance"})
+    )
+    assert asked["status"] == "failed"
+    # Nothing is set aside when the request is unknown.
+    assert mesh_comparison(coarse, fine)["status"] == "failed"
+
+
+def test_an_unstable_requested_current_still_fails_with_by_products_set_aside():
+    coarse = _with_current(curve((0.003, 0.004)), (1.0, 2.0))
+    fine = _with_current(curve((0.003, 0.004)), (1.5, 2.5))
+    result = mesh_comparison(coarse, fine, requested=frozenset({"terminal_current_density"}))
+    assert result["status"] == "failed"

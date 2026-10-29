@@ -60,6 +60,30 @@ def refined_spec(spec: ExperimentSpec) -> ExperimentSpec:
     )
 
 
+_BY_PRODUCTS = frozenset({"terminal_charge", "capacitance"})
+
+
+def _quantity_family(name: str) -> str:
+    """The researcher-facing quantity a canonical dataset carries ("absolute_terminal_current__drain")."""
+    base = name.split("__")[0].removeprefix("absolute_")
+    return "terminal_current" if base == "terminal_current_density" else base
+
+
+def _judged(name: str, requested: frozenset[str] | None) -> bool:
+    """Whether the mesh verdict rests on this dataset.
+
+    The verdict is about what the researcher asked for. Datasets the solver derives on the way
+    (terminal charge and capacitance beside a requested current) are still compared and
+    reported, but as information: they are not verified and do not decide the check.
+    """
+    if requested is None:
+        return True
+    family = _quantity_family(name)
+    # Only the solver's by-products are ever set aside; any other dataset is judged, so a
+    # requested quantity under an unfamiliar name can never slip out of the verdict.
+    return family not in _BY_PRODUCTS or family in {_quantity_family(item) for item in requested}
+
+
 def mesh_comparison(
     coarse: CanonicalResult,
     fine: CanonicalResult,
@@ -67,6 +91,7 @@ def mesh_comparison(
     *,
     current_absolute_tolerance: float = 1e-6,
     equilibrium: bool = False,
+    requested: frozenset[str] | None = None,
 ) -> dict:
     record = {
         "status": "failed",
@@ -274,6 +299,7 @@ def mesh_comparison(
                     else {}
                 ),
                 "stable": ratio <= relative_tolerance,
+                **({"informational": True} if not _judged(name, requested) else {}),
             }
         )
     missing = set(coarse.datasets) - set(fine.datasets)
@@ -281,7 +307,8 @@ def mesh_comparison(
         return {**record, "reason": f"Refinement lost datasets: {sorted(missing)}."}
     if not record["metrics"]:
         return {**record, "reason": "No comparable canonical evidence."}
-    record["status"] = "passed" if all(m["stable"] for m in record["metrics"]) else "failed"
+    judged = [m for m in record["metrics"] if not m.get("informational")] or record["metrics"]
+    record["status"] = "passed" if all(m["stable"] for m in judged) else "failed"
     return record
 
 
@@ -295,9 +322,12 @@ def convergence_summary(history: list[dict], safety_factor: float = 1.25) -> dic
     first/second-order scheme can honestly show, so noise cannot claim superconvergence.
     """
     series: dict[str, list[float]] = {}
+    informational: set[str] = set()
     for comparison in history:
         for metric in comparison.get("metrics", []):
             series.setdefault(metric["dataset"], []).append(float(metric["relative_linf"]))
+            if metric.get("informational"):
+                informational.add(metric["dataset"])
     datasets = {}
     for name, errors in series.items():
         entry: dict = {"errors": errors, "observed_order": None, "gci_fine": None}
@@ -306,7 +336,8 @@ def convergence_summary(history: list[dict], safety_factor: float = 1.25) -> dic
             entry["observed_order"] = order
             entry["gci_fine"] = safety_factor * errors[-1] / (2**order - 1)
         datasets[name] = entry
-    bands = [e["gci_fine"] for e in datasets.values() if e["gci_fine"] is not None]
+    decisive = {n: e for n, e in datasets.items() if n not in informational} or datasets
+    bands = [e["gci_fine"] for e in decisive.values() if e["gci_fine"] is not None]
     return {
         "method": "Roache grid convergence index over successive half-spacing solves",
         "safety_factor": safety_factor,
@@ -338,7 +369,16 @@ def mesh_stability_check(result: CanonicalResult):
             "spatial discretization error is unverified.",
             evidence_paths=("result.metadata.mesh_verification",),
         )
-    ratios = [m["relative_linf"] for m in record.get("metrics", [])]
+    all_metrics = record.get("metrics", [])
+    judged = [m for m in all_metrics if not m.get("informational")] or all_metrics
+    ratios = [m["relative_linf"] for m in judged]
+    unverified = sorted({m["dataset"] for m in all_metrics if m.get("informational")})
+    note = (
+        f" Not requested, compared for information only and not verified: "
+        f"{', '.join(unverified)}."
+        if unverified and record.get("status") == "passed"
+        else ""
+    )
     return ValidationCheck(
         id="mesh-refinement-stability",
         level="numerical",
@@ -352,6 +392,7 @@ def mesh_stability_check(result: CanonicalResult):
             "the recorded mesh-comparison criteria. One comparison is not asymptotic "
             "convergence or experimental calibration.",
         )
-        + _convergence_sentence(record),
+        + _convergence_sentence(record)
+        + note,
         evidence_paths=("result.metadata.mesh_verification", "verification/mesh/provenance.json"),
     )
