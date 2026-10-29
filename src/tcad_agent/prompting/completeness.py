@@ -170,6 +170,22 @@ def covers(path: str, requirement: str) -> bool:
     )
 
 
+def _friendly_prompt(path: str) -> str | None:
+    """A plain question for inputs whose generic wording ("the dimension") means nothing."""
+    if path == "dimension":
+        return (
+            "Should the device be modelled as a 1D stack of layers (one vertical cut) "
+            "or as a 2D cross-section?"
+        )
+    if path == "study.contact":
+        return "Which contact's voltage is swept? The other contacts stay at their fixed voltages."
+    held = re.fullmatch(r"contacts\.([a-z0-9_-]+)\.voltage_offset", path)
+    if held:
+        contact = held.group(1).replace("_", " ")
+        return f"What fixed voltage (in V) should the {contact} contact be held at?"
+    return None
+
+
 def question_for_path(
     path: str, catalog: CapabilityCatalogView | None = None, *, selected: tuple[str, ...] = ()
 ) -> ClarificationQuestion:
@@ -191,7 +207,8 @@ def question_for_path(
         prompt=(
             descriptor.question_hint
             if descriptor and descriptor.question_hint
-            else f"What should be used for the {label.lower()}{unit}?"
+            else _friendly_prompt(canonical_path(path))
+            or f"What should be used for the {label.lower()}{unit}?"
         ),
         reason=(
             f"This determines the {label.lower()}; it must not be chosen without your instruction."
