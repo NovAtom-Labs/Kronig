@@ -1340,3 +1340,14 @@ def test_an_empty_model_reply_is_resampled_not_echoed_back_for_repair() -> None:
     # Every call saw the same conversation: nothing was appended after an empty reply.
     assert len(llm.messages) == 3
     assert all(len(messages) == len(llm.messages[0]) for messages in llm.messages)
+
+
+def test_decision_wrapped_in_prose_or_commentary_is_unwrapped():
+    from tcad_agent.prompting.gateway import _unwrap_json_fence
+
+    assert _unwrap_json_fence('Here is the decision:\n{"status": "ready"}\nHope that helps.') == (
+        '{"status": "ready"}'
+    )
+    assert _unwrap_json_fence('```json\n{"a": 1}\n```') == '{"a": 1}'
+    assert _unwrap_json_fence("no json here") == "no json here"
+    assert _unwrap_json_fence("brace { but not json }") == "brace { but not json }"

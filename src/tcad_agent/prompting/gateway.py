@@ -43,6 +43,14 @@ def _unwrap_json_fence(text: str) -> str:
         return stripped[len("```json") : -3].strip()
     if stripped.startswith("```") and stripped.endswith("```"):
         return stripped[3:-3].strip()
+    if not stripped.startswith("{") and "{" in stripped and "}" in stripped:
+        # The decision wrapped in a sentence of prose or a fence with commentary after it.
+        wrapped = stripped[stripped.index("{") : stripped.rindex("}") + 1]
+        try:
+            json.loads(wrapped)
+        except ValueError:
+            return stripped
+        return wrapped
     return stripped
 
 
