@@ -292,3 +292,16 @@ def test_record_keys_carrying_their_unit_in_the_name_are_compared_by_value(valid
             [{"region": profile.region, "concentration_cm3": concentration_cm3, "profile": "constant"}],
             "parameters",
         )
+
+
+def test_dopant_element_in_confirmed_species_is_met_by_the_dopant_type(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep my dopant",
+        fields=(
+            IntentField(path="profiles.p_region.species", value="boron", origin="researcher"),
+        ),
+    )
+    assert plan_authority_issues(valid_spec, intent) == []

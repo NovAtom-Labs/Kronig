@@ -608,6 +608,13 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
         if field.origin not in {"researcher", "repository"}:
             continue
         parts = canonical_path(field.path, preserve_indices=True).split(".")
+        if (
+            parts[-1] == "species"
+            and isinstance(field.value, str)
+            and field.value.lower() in _DOPANT_TYPES
+        ):
+            # "boron" confirms an acceptor profile; the spec stores the doping type.
+            field = field.model_copy(update={"value": _DOPANT_TYPES[field.value.lower()]})
         if parts[0] == "regions" and parts[-1] == "material" and _names_a_region_material(
             spec, field.value
         ):
