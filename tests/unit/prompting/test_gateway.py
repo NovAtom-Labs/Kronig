@@ -1305,7 +1305,8 @@ def test_one_property_of_several_entities_is_split_into_one_field_each():
     assert expanded[6].path == "regions.material"  # nested object: left for the ambiguity check
     assert ambiguous_collection_paths(SimpleNamespace(fields=expanded)) == ["regions.material"]
 
-def test_an_empty_model_reply_is_resampled_not_echoed_back_for_repair() -> None:
+def test_an_empty_model_reply_is_resampled_not_echoed_back_for_repair(monkeypatch) -> None:
+    monkeypatch.setattr("tcad_agent.prompting.gateway.time.sleep", lambda seconds: None)
     ready = json.dumps(
         {
             "status": "ready",
