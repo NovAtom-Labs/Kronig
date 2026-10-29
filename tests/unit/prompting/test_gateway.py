@@ -1367,3 +1367,14 @@ def test_repeated_empty_replies_switch_to_lighter_reasoning():
     # A model that cannot be copied simply keeps being sampled.
     plain = ScriptedLLM([])
     assert OpenHandsPreparationModel(plain)._lighter_after_empty_replies(5) is plain
+
+
+def test_the_model_is_given_room_to_answer_after_reasoning(monkeypatch):
+    from tcad_agent.agent.runtime import llm_from_environment
+
+    monkeypatch.setenv('AWS_BEARER_TOKEN_BEDROCK', 'test-token')
+    monkeypatch.delenv('TCAD_MAX_OUTPUT_TOKENS', raising=False)
+    assert llm_from_environment().max_output_tokens == 48000
+    monkeypatch.setenv('TCAD_MAX_OUTPUT_TOKENS', '30000')
+    assert llm_from_environment().max_output_tokens == 30000
+

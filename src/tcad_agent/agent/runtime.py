@@ -118,6 +118,9 @@ def llm_from_environment() -> LLM:
         api_key=SecretStr(token),
         aws_region_name=os.getenv("AWS_REGION_NAME", DEFAULT_AWS_REGION),
         reasoning_effort=cast(Any, os.getenv("TCAD_REASONING_EFFORT", "medium")),
+        # The provider's default of 16384 tokens was spent entirely on reasoning for a long
+        # structured request (finish_reason=length, no text), so give the answer room.
+        max_output_tokens=int(os.getenv("TCAD_MAX_OUTPUT_TOKENS", "48000")),
         stream=True,
         # Bedrock sometimes reports the service as unavailable for a minute; wait it out.
         num_retries=8,
