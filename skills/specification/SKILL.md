@@ -45,6 +45,8 @@ Never infer a micrometre value as metres or convert concentration by intuition. 
 
 Ask when the request omits a contact type, material at a region, sweep terminal, temperature for temperature-sensitive physics, or geometry needed to define the domain. State an assumption instead of asking only when it is conventional, low-impact, reversible, and represented explicitly in the proposed specification. The researcher must see that assumption before execution.
 
+Carrier statistics are a physics choice, not a default. Boltzmann statistics hold only while carrier populations stay dilute (n/Nc and p/Nv at most 0.1). A MOS stack, a MOSFET, or a metal contact with a large barrier drives accumulation or inversion, and any region doped above about 1e18 cm^-3 is degenerate. In those cases ask for the statistics, or state Fermi-Dirac as the proposed assumption with that reason, instead of silently choosing Boltzmann.
+
 Do not ask for simulator syntax, mesh command names, or file layout. Those are implementation choices owned by adapters.
 
 ## Composition, not taxonomy
