@@ -92,3 +92,30 @@ def test_planner_added_bgn_does_not_block_a_two_dimensional_devsim_plan(tmp_path
     assert code() != "requested_scope_missing"
     asked = IntentField(path="physics.models", value=["slotboom_bgn"], origin="researcher")
     assert code(asked) == "requested_scope_missing"
+
+
+def test_gate_over_an_insulator_refuses_planner_chosen_boltzmann(valid_spec, tmp_path):
+    from tcad_agent.domain.models import Contact
+
+    oxide = valid_spec.regions[0].model_copy(update={"material": "silicon_dioxide"})
+    gate = Contact.model_validate(
+        {"id": "gate", "location": "x_min", "kind": "metal_work_function", "work_function": "4.6 eV"}
+    )
+    spec = valid_spec.model_copy(
+        update={"regions": (oxide, *valid_spec.regions[1:]), "contacts": (gate, *valid_spec.contacts[1:])}
+    )
+    spec = spec.model_copy(
+        update={
+            "physics": spec.physics.model_copy(
+                update={
+                    "models": tuple(
+                        m for m in spec.physics.models if m not in {"boltzmann", "fermi"}
+                    )
+                    + ("boltzmann",)
+                }
+            )
+        }
+    )
+    response = DomainTools(tmp_path)._degenerate_surface_statistics_response(spec)
+    assert response is not None
+    assert response.code == "gated_surface_requires_fermi_statistics"

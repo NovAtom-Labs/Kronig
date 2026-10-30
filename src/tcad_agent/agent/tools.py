@@ -337,10 +337,33 @@ class DomainTools:
         if self._researcher_stated_boltzmann():
             return None
         affinity_ev, gap_ev, margin_ev = 4.05, 1.12, 0.1
+
+        def adjacent(contact):
+            if spec.dimension == 2:
+                return next(r for r in spec.regions if r.id == contact.region)
+            return spec.regions[0 if str(contact.location) == "x_min" else -1]
+
+        if any(
+            str(contact.kind) in {"metal_work_function", "ideal_gate"}
+            and adjacent(contact).material != "silicon"
+            for contact in spec.contacts
+        ):
+            # A gate over an insulator drives the surface into accumulation or inversion as the
+            # gate moves; the carrier density there leaves the dilute range Boltzmann needs.
+            return ToolResponse(
+                status="refused",
+                code="gated_surface_requires_fermi_statistics",
+                message=(
+                    "A gate over an insulator drives the silicon surface into accumulation or "
+                    "inversion, where Boltzmann statistics do not hold. Select Fermi-Dirac "
+                    "statistics (physics.models 'fermi' in place of 'boltzmann') and say why in "
+                    "the plan, or ask the researcher to confirm Boltzmann explicitly."
+                ),
+            )
         for contact in spec.contacts:
             if contact.work_function is None:
                 continue
-            region = spec.regions[0 if str(contact.location) == "x_min" else -1]
+            region = adjacent(contact)
             if region.material != "silicon":
                 continue
             work_function_ev = contact.work_function.to("eV")
