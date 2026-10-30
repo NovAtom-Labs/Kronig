@@ -32,6 +32,44 @@ _AIR = "air"
 _MAX_NODES = 250_000
 
 
+# Measured: the coupled direct solve of this system peaks near 15 kB per mesh node; the reserve
+# keeps the rest of the machine usable while a run is going.
+_BYTES_PER_NODE = 20_000
+_MEMORY_RESERVE_BYTES = 1_000_000_000
+
+
+def _available_memory_bytes() -> int | None:
+    """Memory that can be used without paging, or None when it cannot be read."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            class Status(ctypes.Structure):
+                _fields_ = [
+                    ("length", ctypes.c_ulong),
+                    ("load", ctypes.c_ulong),
+                    ("total_physical", ctypes.c_ulonglong),
+                    ("available_physical", ctypes.c_ulonglong),
+                    ("total_page_file", ctypes.c_ulonglong),
+                    ("available_page_file", ctypes.c_ulonglong),
+                    ("total_virtual", ctypes.c_ulonglong),
+                    ("available_virtual", ctypes.c_ulonglong),
+                    ("available_extended", ctypes.c_ulonglong),
+                ]
+
+            status = Status()
+            status.length = ctypes.sizeof(Status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return int(status.available_physical)
+            return None
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, AttributeError):
+        return None
+    return None
+
+
 def _tag(value: float) -> float:
     return round(float(value), 14)
 
@@ -417,6 +455,13 @@ def main(payload_path: str = "input.json") -> int:
         for region in regions
     )
     print(f"KRONIG 2D mesh: {node_count} nodes", flush=True)
+    available = _available_memory_bytes()
+    needed = node_count * _BYTES_PER_NODE
+    if available is not None and available < needed + _MEMORY_RESERVE_BYTES:
+        raise RuntimeError(
+            f"a {node_count}-node mesh needs about {needed / 1e9:.1f} GB and only "
+            f"{available / 1e9:.1f} GB of memory is free; close other programs or coarsen the mesh"
+        )
     if node_count > _MAX_NODES:
         raise RuntimeError(
             f"the mesh has {node_count} nodes, above the {_MAX_NODES} this machine can solve; "
