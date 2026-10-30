@@ -309,14 +309,14 @@ def _resolve(value, parts):
                 item = value[0]
                 fields = type(item).model_fields if isinstance(item, BaseModel) else {}
                 parameters = getattr(item, "parameters", _UNMAPPED)
-                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key in {"extents", "extent", "thickness"} or (
+                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key in {"extents", "extent", "length", "thickness"} or (
                     isinstance(parameters, BaseModel) and key in type(parameters).model_fields
                 )
                 return _resolve(item, parts if is_field else remaining)
             else:
                 selected = _UNMAPPED
         return _resolve(selected, remaining)
-    if key in {"thickness", "extent"} and hasattr(value, "x0") and hasattr(value, "x1"):
+    if key in {"thickness", "extent", "length"} and hasattr(value, "x0") and hasattr(value, "x1"):
         return QuantityValue.model_validate(f"{value.x1.to('m') - value.x0.to('m'):.15g} m")
     if isinstance(value, BaseModel) and key in type(value).model_fields:
         return _resolve(getattr(value, key), remaining)

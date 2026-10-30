@@ -365,3 +365,13 @@ def test_list_of_composite_region_and_doping_records_is_held_by_the_spec(valid_s
     assert _composite_records_held(valid_spec, [record])
     assert not _composite_records_held(valid_spec, [{**record, "thickness": f"{thickness_um * 7.3} um"}])
     assert not _composite_records_held(valid_spec, [])
+
+
+def test_lone_region_length_is_its_thickness(valid_spec):
+    from tcad_agent.prompting.authority import _equal, _resolve
+
+    region = valid_spec.regions[0]
+    spec = valid_spec.model_copy(update={"regions": (region,)})
+    thickness_um = round((region.x1.to("m") - region.x0.to("m")) * 1e6, 9)
+    assert _equal(_resolve(spec, ["regions", "length"]), f"{thickness_um} um")
+    assert not _equal(_resolve(spec, ["regions", "length"]), f"{thickness_um * 3} um")
