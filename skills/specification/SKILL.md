@@ -47,6 +47,8 @@ Ask when the request omits a contact type, material at a region, sweep terminal,
 
 Carrier statistics are a physics choice, not a default. Boltzmann statistics hold only while carrier populations stay dilute (n/Nc and p/Nv at most 0.1). A MOS stack, a MOSFET, or a metal contact with a large barrier drives accumulation or inversion, and any region doped above about 1e18 cm^-3 is degenerate. In those cases ask for the statistics, or state Fermi-Dirac as the proposed assumption with that reason, instead of silently choosing Boltzmann.
 
+Bulk doping alone does not justify Boltzmann. A metal contact pins the Fermi level at its work function, so compare that work function with the semiconductor's electron affinity and band gap: when it lies within about 0.1 eV of either band edge, or beyond one, the surface is accumulated or inverted to the density of states and the statistics are degenerate at any bulk doping (aluminium, 4.1 eV, on silicon with a 4.05 eV affinity is such a case). Propose Fermi-Dirac there, with that reason.
+
 Do not ask for simulator syntax, mesh command names, or file layout. Those are implementation choices owned by adapters.
 
 ## Composition, not taxonomy
