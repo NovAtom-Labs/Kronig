@@ -433,6 +433,11 @@ def _record_field_equal(record, key, expected):
         return target in fields and _equal(getattr(record, target), expected)
     if key == "species" and isinstance(expected, str):
         expected = _DOPANT_TYPES.get(expected.lower(), expected)
+    if key in {"profile", "kind"} and isinstance(expected, str):
+        # "Uniform" doping is the constant profile.
+        expected = {"uniform": "constant", "flat": "constant", "homogeneous": "constant"}.get(
+            expected.lower(), expected
+        )
     key = key if key in fields else _RECORD_ALIASES.get(key, key)
     return key in fields and _equal(getattr(record, key), expected)
 
