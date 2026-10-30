@@ -264,3 +264,25 @@ def test_a_semiconductor_split_into_several_regions_is_refused() -> None:
     decision = CapabilityService().check(spec_with(split), manifest)
     assert [issue.code for issue in decision.issues] == ["split_semiconductor_region"]
     assert CapabilityService().check(spec_with(), manifest).status.value == "supported"
+
+
+def test_high_field_saturation_next_to_an_insulator_uses_the_channel_driving_force(tmp_path) -> None:
+    spec = spec_with(
+        lambda d: d["physics"].update(
+            models=["fermi", "klaassen_mobility", "high_field_saturation", "srh"]
+        )
+    )
+    job = SentaurusAdapter.from_defaults().compile(spec, tmp_path / "job")
+    deck = (tmp_path / "job" / "sdevice.cmd").read_text()
+    assert "Mobility( PhuMob HighFieldSaturation( EparallelToInterface ) )" in deck
+    # With no insulator in the structure the simulator's default form is kept.
+    only_silicon = spec_with(
+        lambda d: (
+            d["physics"].update(models=["fermi", "constant_mobility", "high_field_saturation"]),
+            d.update(regions=[d["regions"][1]]),
+            d.update(contacts=[d["contacts"][1], d["contacts"][2]]),
+            d.update(study={"kind": "dc", "contact": "left", "start": "0 V", "stop": "0.2 V", "step": "0.1 V"}),
+        )
+    )
+    job = SentaurusAdapter.from_defaults().compile(only_silicon, tmp_path / "job2")
+    assert "Mobility( HighFieldSaturation )" in (tmp_path / "job2" / "sdevice.cmd").read_text()

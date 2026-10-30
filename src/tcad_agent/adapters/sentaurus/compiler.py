@@ -395,6 +395,15 @@ class SentaurusAdapter:
             if model in spec.physics.models
             for term in _MODEL_LINES[model]
         ]
+        if "HighFieldSaturation" in mobility_terms and any(
+            str(region.material) == "silicon_dioxide" for region in spec.regions
+        ):
+            # Next to an insulator the field along the channel is the driving force. The
+            # simulator's default form stalled the Newton solve of a two-dimensional MOSFET
+            # at its first bias point; this standard channel form converged in minutes.
+            mobility_terms[mobility_terms.index("HighFieldSaturation")] = (
+                "HighFieldSaturation( EparallelToInterface )"
+            )
         if mobility_terms:
             physics_lines.append(f"Mobility( {' '.join(mobility_terms)} )")
         recombination = [
