@@ -449,3 +449,23 @@ def test_uniform_doping_is_the_constant_profile(valid_spec):
     assert issues("uniform") == []
     assert issues("constant") == []
     assert issues("gaussian")
+
+
+def test_box_profile_in_a_one_dimensional_stack_means_the_constant_profile(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    spec = valid_spec.model_copy(
+        update={"regions": (valid_spec.regions[0],), "profiles": (valid_spec.profiles[0],)}
+    )
+    profile = spec.profiles[0]
+    record = {
+        "concentration": f"{profile.value.to('1/m^3')} m^-3",
+        "profile": "box",
+        "type": str(profile.species),
+    }
+    intent = ResolvedResearchIntent(
+        task_kind="simulation",
+        objective="Keep my doping",
+        fields=(IntentField(path="profiles.parameters", value=record, origin="researcher"),),
+    )
+    assert plan_authority_issues(spec, intent) == []

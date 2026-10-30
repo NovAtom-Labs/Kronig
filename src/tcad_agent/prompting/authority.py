@@ -684,6 +684,19 @@ def _region_extent_held(spec, label, value):
     )
 
 
+def _one_dimensional_vocabulary(value):
+    if isinstance(value, dict):
+        return {
+            key: "constant"
+            if key in {"profile", "kind"} and item == "box"
+            else _one_dimensional_vocabulary(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_one_dimensional_vocabulary(item) for item in value]
+    return value
+
+
 _MESH_SPACING_FIELDS = ("mesh_spacing", "minimum_mesh_spacing", "maximum_mesh_spacing")
 
 
@@ -742,6 +755,10 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
         ):
             # "boron" confirms an acceptor profile; the spec stores the doping type.
             field = field.model_copy(update={"value": _DOPANT_TYPES[field.value.lower()]})
+        if spec.dimension == 1:
+            # A box window only exists in a two-dimensional structure; in a one-dimensional
+            # stack the planner's "box" can only mean the uniform (constant) profile.
+            field = field.model_copy(update={"value": _one_dimensional_vocabulary(field.value)})
         if parts[0] == "profiles" and _profile_alias_held(spec, parts[-1], field.value):
             continue
         if parts[0] == "regions" and parts[-1] == "material" and _names_a_region_material(

@@ -69,3 +69,26 @@ def test_planner_inferred_boltzmann_scope_is_met_by_fermi_statistics(valid_spec,
     assert code() != "requested_scope_missing"
     stated = IntentField(path="physics.models", value=["boltzmann"], origin="researcher")
     assert code(stated) == "requested_scope_missing"
+
+
+def test_planner_added_bgn_does_not_block_a_two_dimensional_devsim_plan(tmp_path):
+    from tests.unit.adapters.test_sentaurus_two_dimensional import spec_with
+
+    spec = spec_with(
+        lambda d: d["physics"].update(models=["fermi", "constant_mobility", "srh"])
+    )
+
+    def code(*fields):
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="MOSFET",
+            fields=fields,
+            selected_capabilities=("model.slotboom_bgn",),
+        )
+        return DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+            spec.model_dump(mode="json"), backend="devsim"
+        ).code
+
+    assert code() != "requested_scope_missing"
+    asked = IntentField(path="physics.models", value=["slotboom_bgn"], origin="researcher")
+    assert code(asked) == "requested_scope_missing"

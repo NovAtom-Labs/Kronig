@@ -308,6 +308,15 @@ class DomainTools:
             },
         )
 
+    def _researcher_stated(self, words: tuple[str, ...]) -> bool:
+        """Whether a researcher- or repository-origin physics field mentions any of ``words``."""
+        return bool(self.research_intent) and any(
+            field.origin in {"researcher", "repository"}
+            and field.path.startswith("physics.models")
+            and any(word in f"{field.path} {field.value}".lower() for word in words)
+            for field in self.research_intent.fields
+        )
+
     def _researcher_stated_boltzmann(self) -> bool:
         return bool(self.research_intent) and any(
             field.origin in {"researcher", "repository"}
@@ -479,10 +488,20 @@ class DomainTools:
                     # Fermi-Dirac contains Boltzmann; a statistics model the planner inferred
                     # (not one the researcher stated) is met by the stricter one.
                     actual.add("model.boltzmann")
+                # Refinements the planner added on its own initiative, which this backend cannot
+                # honor for this structure, are left out rather than blocking the run; a
+                # researcher who asked for them still gets the refusal.
+                droppable: set[str] = set()
+                if backend == "devsim" and spec.dimension == 2:
+                    if not self._researcher_stated(("bgn", "narrowing", "slotboom")):
+                        droppable |= {"model.slotboom_bgn", "model.band_gap_narrowing"}
+                    if not self._researcher_stated(("auger",)):
+                        droppable.add("model.auger")
                 missing = sorted(
                     capability
                     for capability in self.research_intent.selected_capabilities
-                    if capability.startswith(
+                    if capability not in droppable
+                    and capability.startswith(
                         (
                             "study.",
                             "observable.",
