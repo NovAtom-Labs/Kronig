@@ -461,6 +461,27 @@ def _holds_records(records, value, label=None):
     )
 
 
+_LENGTH_TOKEN = re.compile(
+    r"(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*(nm|um|µm|μm|mm|cm|m)\b"
+)
+_LENGTH_TO_M = {"nm": 1e-9, "um": 1e-6, "µm": 1e-6, "μm": 1e-6, "mm": 1e-3, "cm": 1e-2, "m": 1.0}
+
+
+def _extent_text_held(regions, text):
+    """True when a spelled-out extent only names the regions' own bounds or says "full"."""
+    bounds = set()
+    for region in regions:
+        x0, x1 = float(region.x0.to("m")), float(region.x1.to("m"))
+        bounds |= {x0, x1, x1 - x0}
+    tokens = [float(n) * _LENGTH_TO_M[u] for n, u in _LENGTH_TOKEN.findall(text)]
+    if tokens:
+        return all(
+            any(math.isclose(token, bound, rel_tol=1e-6, abs_tol=1e-15) for bound in bounds)
+            for token in tokens
+        )
+    return text.strip().lower().startswith(("full", "entire", "whole", "all", "complete"))
+
+
 def _holds_records_composite(regions, profiles, value, spec=None):
     """Verify a confirmed dict that bundles region geometry and profile doping keys.
 
@@ -474,6 +495,17 @@ def _holds_records_composite(regions, profiles, value, spec=None):
     if not isinstance(value, dict) or not regions or not profiles:
         return False
     value = {_strip_owner(key): item for key, item in value.items()}
+    # A spelled-out extent ("full region 0 to 1.5e-6 m") is judged against the region bounds
+    # it names; one that matches them states nothing the spec lacks, a different one stays.
+    value = {
+        key: item
+        for key, item in value.items()
+        if not (
+            key in {"extent", "extents", "range"}
+            and isinstance(item, str)
+            and _extent_text_held(regions, item)
+        )
+    }
     r_model = type(regions[0])
     r_direct = set(r_model.model_fields) | {"thickness", "extents"}
     r_aliased = {k for k, v in _RECORD_ALIASES.items() if v in r_model.model_fields}

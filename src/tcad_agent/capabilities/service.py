@@ -400,18 +400,19 @@ class CapabilityService:
                         supported=("equilibrium", "dc", "dc_points"),
                     )
                 )
-            if "fermi" in spec.physics.models:
+            unavailable = sorted({"auger", "slotboom_bgn"} & set(spec.physics.models))
+            if unavailable:
                 issues.append(
                     CapabilityIssue(
                         path="physics.models",
-                        code="unsupported_two_dimensional_statistics",
+                        code="unsupported_two_dimensional_model",
                         message=(
-                            "Fermi-Dirac statistics are not yet available for two-dimensional "
-                            "DEVSIM structures; use Boltzmann statistics there, or run the "
+                            "Auger recombination and band-gap narrowing are not yet available "
+                            "for two-dimensional DEVSIM structures; leave them out, or run the "
                             "structure on Sentaurus"
                         ),
-                        requested="fermi",
-                        supported=("boltzmann",),
+                        requested=",".join(unavailable),
+                        supported=("boltzmann", "fermi", "srh"),
                     )
                 )
             for index, contact in enumerate(spec.contacts):

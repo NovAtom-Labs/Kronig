@@ -78,11 +78,15 @@ def test_devsim_accepts_two_dimensional_boltzmann_structures() -> None:
     assert decision.status.value == "supported", decision.issues
 
 
-def test_devsim_refuses_fermi_statistics_in_two_dimensions_for_now() -> None:
-    spec = spec_with(lambda d: d["physics"].update(models=["fermi", "constant_mobility", "srh"]))
-    decision = CapabilityService().check(spec, CapabilityManifest.from_backend("devsim"))
-    assert [issue.code for issue in decision.issues] == ["unsupported_two_dimensional_statistics"]
-
+def test_devsim_accepts_fermi_but_refuses_unimplemented_models_in_two_dimensions() -> None:
+    manifest = CapabilityManifest.from_backend("devsim")
+    fermi = spec_with(lambda d: d["physics"].update(models=["fermi", "constant_mobility", "srh"]))
+    assert CapabilityService().check(fermi, manifest).status.value == "supported"
+    auger = spec_with(
+        lambda d: d["physics"].update(models=["fermi", "constant_mobility", "srh", "auger"])
+    )
+    decision = CapabilityService().check(auger, manifest)
+    assert [issue.code for issue in decision.issues] == ["unsupported_two_dimensional_model"]
 
 def test_vector_fields_are_refused_along_a_line_cut(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("TCAD_SENTAURUS_VERSION", VERSION)

@@ -394,3 +394,32 @@ def test_layer_thickness_filed_under_profiles_is_held_by_the_regions(valid_spec)
     assert issues(f"{thickness_um} um") == []
     assert issues(f"{thickness_um * 7.3} um")
     assert issues(f"{thickness_um} um") == []  # label matches the silicon regions
+
+
+def test_spelled_out_extent_in_a_doping_record_is_judged_against_the_region(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    region = valid_spec.regions[0]
+    spec = valid_spec.model_copy(
+        update={"regions": (region,), "profiles": (valid_spec.profiles[0],)}
+    )
+    profile = spec.profiles[0]
+    stop = float(region.x1.to("m"))
+
+    def issues(extent):
+        record = {
+            "concentration": f"{profile.value.to('1/m^3')} m^-3",
+            "extent": extent,
+            "profile": "constant",
+            "species": str(profile.species),
+        }
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Keep my doping",
+            fields=(IntentField(path="profiles.parameters", value=record, origin="researcher"),),
+        )
+        return plan_authority_issues(spec, intent)
+
+    assert issues(f"full region 0 to {stop} m") == []
+    assert issues("entire layer") == []
+    assert issues(f"0 to {stop * 3} m")
