@@ -60,7 +60,8 @@ def refined_spec(spec: ExperimentSpec) -> ExperimentSpec:
     )
 
 
-_BY_PRODUCTS = frozenset({"terminal_charge", "capacitance"})
+# Datasets the solver or exporter produces on the way; each is judged only when requested.
+_BY_PRODUCTS = frozenset({"terminal_charge", "capacitance", "electron_density", "hole_density"})
 
 
 def _quantity_family(name: str) -> str:
