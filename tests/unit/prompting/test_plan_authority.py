@@ -491,3 +491,34 @@ def test_contact_voltage_filed_under_physics_is_judged_as_the_contacts_offset(va
     assert unsupported_physics_inputs(intent(voltage)) == []
     assert plan_authority_issues(valid_spec, intent(voltage)) == []
     assert plan_authority_issues(valid_spec, intent("7.5 V"))
+
+
+def test_doping_record_vocabulary_variants_are_the_same_dopant_and_profile(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    spec = valid_spec.model_copy(
+        update={"regions": (valid_spec.regions[0],), "profiles": (valid_spec.profiles[0],)}
+    )
+    profile = spec.profiles[0]
+    species = str(profile.species)
+    plural = {"donor": "donors", "acceptor": "acceptors"}[species]
+    n_or_p = {"donor": "n-type", "acceptor": "p-type"}[species]
+
+    def issues(**record):
+        base = {"concentration": f"{profile.value.to('1/m^3')} m^-3", "region": spec.regions[0].id}
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Keep my doping",
+            fields=(
+                IntentField(
+                    path="profiles.parameters", value={**base, **record}, origin="researcher"
+                ),
+            ),
+        )
+        return plan_authority_issues(spec, intent)
+
+    assert issues(profile_type="constant", species=plural) == []
+    assert issues(profile_type="uniform", doping_type=n_or_p) == []
+    assert issues(profile="constant", type=plural) == []
+    other = "acceptors" if species == "donor" else "donors"
+    assert issues(profile_type="constant", species=other)

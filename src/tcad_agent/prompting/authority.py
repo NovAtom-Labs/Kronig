@@ -440,12 +440,29 @@ def _record_field_equal(record, key, expected):
         key = _strip_owner(key)
     if key == "thickness" and "x0" in fields and "x1" in fields:
         return _equal(_resolve(record, ["thickness"]), expected)
+    if key in {"species", "type", "doping_type"} and isinstance(expected, str):
+        word = expected.lower().strip().replace("_", "-")
+        word = {
+            "donors": "donor",
+            "acceptors": "acceptor",
+            "n-type": "donor",
+            "p-type": "acceptor",
+        }.get(word, word)
+        mapped = _DOPANT_TYPES.get(word, word)
+        if mapped in {"donor", "acceptor"}:
+            expected, key = mapped, "species"  # "donors", "n-type" and boron all name the species
+    if key == "profile_type":
+        key = "kind"
     if key == "type" and "type" not in fields:
         # "constant" names the profile kind, "donor"/"acceptor" its species.
-        target = "kind" if str(expected) in {"constant", "box", "gaussian"} else "species"
-        return target in fields and _equal(getattr(record, target), expected)
-    if key == "species" and isinstance(expected, str):
-        expected = _DOPANT_TYPES.get(expected.lower(), expected)
+        word = str(expected).lower()
+        if word in {"uniform", "flat", "homogeneous"}:
+            word = "constant"  # uniform doping is the constant profile
+        kinds = {"constant", "box", "gaussian", "linear", "tabulated", "error_function"}
+        target = "kind" if word in kinds else "species"
+        return target in fields and _equal(
+            getattr(record, target), word if target == "kind" else expected
+        )
     if key in {"profile", "kind"} and isinstance(expected, str):
         # "Uniform" doping is the constant profile.
         expected = {"uniform": "constant", "flat": "constant", "homogeneous": "constant"}.get(
@@ -530,7 +547,11 @@ def _holds_records_composite(regions, profiles, value, spec=None):
     r_keys = {k: v for k, v in value.items() if k != "id" and k in r_direct | r_aliased}
     s_keys = {k: v for k, v in value.items() if k != "id" and k not in r_keys}
     p_fields = set(type(profiles[0]).model_fields)
-    p_known = p_fields | {"type"} | {k for k, v in _RECORD_ALIASES.items() if v in p_fields}
+    p_known = (
+        p_fields
+        | {"type", "profile_type", "doping_type"}
+        | {k for k, v in _RECORD_ALIASES.items() if v in p_fields}
+    )
     # Keys neither collection has a field for are checked by their values alone.
     unmapped = {k: v for k, v in s_keys.items() if k not in p_known}
     if unmapped and spec is not None and not _spec_holds_every_value(spec, unmapped):
