@@ -498,6 +498,18 @@ def _holds_records_composite(regions, profiles, value, spec=None):
     return r_ok and s_ok
 
 
+def _composite_records_held(spec, value):
+    """A composite region+doping record, or a list of them, each held by the spec's collections."""
+    if isinstance(value, dict):
+        return _holds_records_composite(spec.regions, spec.profiles, value, spec)
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, dict) for item in value)
+        and all(_holds_records_composite(spec.regions, spec.profiles, item, spec) for item in value)
+    )
+
+
 def _spec_leaves(node, quantities, words, numbers):
     """Collect every quantity, word and number the spec holds (records recursed)."""
     if isinstance(node, QuantityValue):
@@ -691,9 +703,8 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
                 # (concentration, species, profile kind).  Verify each partition
                 # against its own collection.
                 parts[0] in {"regions", "profiles"}
-                and isinstance(field.value, dict)
                 and label is not None
-                and _holds_records_composite(spec.regions, spec.profiles, field.value, spec)
+                and _composite_records_held(spec, field.value)
             ):
                 # Confirmed records are honored when the spec's own records hold every one.
                 continue

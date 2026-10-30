@@ -1,4 +1,4 @@
-"""Confirmed schema-addressable intent must survive agent plan generation."""
+﻿"""Confirmed schema-addressable intent must survive agent plan generation."""
 
 import pytest
 
@@ -347,3 +347,21 @@ def test_mesh_spacing_is_judged_by_value_not_by_the_models_label(valid_spec):
         ("regions.extent", f"{thickness_um} um"),
     ) == []
     assert issues(("regions.min_nm.mesh_spacing", "3 nm"))
+
+
+def test_list_of_composite_region_and_doping_records_is_held_by_the_spec(valid_spec):
+    from tcad_agent.prompting.authority import _composite_records_held
+
+    region = valid_spec.regions[0]
+    profile = valid_spec.profiles[0]
+    thickness_um = round((region.x1.to("m") - region.x0.to("m")) * 1e6, 9)
+    record = {
+        "id": "silicon_layer",
+        "material": region.material,
+        "thickness": f"{thickness_um} um",
+        "profile": "constant",
+        "species": profile.species,
+    }
+    assert _composite_records_held(valid_spec, [record])
+    assert not _composite_records_held(valid_spec, [{**record, "thickness": f"{thickness_um * 7.3} um"}])
+    assert not _composite_records_held(valid_spec, [])
