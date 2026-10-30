@@ -469,3 +469,25 @@ def test_box_profile_in_a_one_dimensional_stack_means_the_constant_profile(valid
         fields=(IntentField(path="profiles.parameters", value=record, origin="researcher"),),
     )
     assert plan_authority_issues(spec, intent) == []
+
+
+def test_contact_voltage_filed_under_physics_is_judged_as_the_contacts_offset(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues, unsupported_physics_inputs
+
+    contact = valid_spec.contacts[0]
+    voltage = f"{contact.voltage_offset.to('V')} V"
+
+    def intent(value):
+        return ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Hold a contact",
+            fields=(
+                IntentField(
+                    path=f"physics.bias_offsets.{contact.id}", value=value, origin="researcher"
+                ),
+            ),
+        )
+
+    assert unsupported_physics_inputs(intent(voltage)) == []
+    assert plan_authority_issues(valid_spec, intent(voltage)) == []
+    assert plan_authority_issues(valid_spec, intent("7.5 V"))

@@ -252,6 +252,17 @@ def _quantity_paths(value, parts):
         yield parts
 
 
+_MISFILED_BIAS = re.compile(
+    r"physics\.(?:bias_offsets?|contact_biases|contact_voltages|fixed_biases|biases|bias)\.([a-z0-9_-]+)"
+)
+
+
+def misfiled_contact_voltage(path: str) -> str | None:
+    """``contacts.<id>.voltage_offset`` for a fixed contact voltage filed under ``physics``."""
+    match = _MISFILED_BIAS.fullmatch(path)
+    return f"contacts.{match.group(1)}.voltage_offset" if match else None
+
+
 def unsupported_physics_inputs(intent):
     """Explicit quantity overrides need an actual portable contract field."""
     unsupported = []
@@ -260,6 +271,8 @@ def unsupported_physics_inputs(intent):
             "physics."
         ):
             continue
+        if misfiled_contact_voltage(field.path):
+            continue  # a contact voltage, judged under the contact it belongs to
         paths = _quantity_paths(field.value, field.path.removeprefix("physics.").split("."))
         if any(
             not (
@@ -747,6 +760,8 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
     for field in intent.fields:
         if field.origin not in {"researcher", "repository"}:
             continue
+        if (moved := misfiled_contact_voltage(field.path)) is not None:
+            field = field.model_copy(update={"path": moved})
         parts = canonical_path(field.path, preserve_indices=True).split(".")
         if (
             parts[-1] == "species"
