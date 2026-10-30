@@ -326,7 +326,10 @@ class CapabilityService:
         for index, contact in enumerate(spec.contacts):
             if manifest.backend != "devsim":
                 continue
-            adjacent = spec.regions[0 if str(contact.location) == "x_min" else -1]
+            if spec.dimension == 2:
+                adjacent = next(r for r in spec.regions if r.id == contact.region)
+            else:
+                adjacent = spec.regions[0 if str(contact.location) == "x_min" else -1]
             kind = str(contact.kind)
             allowed_materials = {
                 "ohmic": ("silicon",),
@@ -381,6 +384,51 @@ class CapabilityService:
                             ),
                             requested="metal_work_function:silicon",
                             supported=("electron_continuity", "hole_continuity"),
+                        )
+                    )
+        if manifest.backend == "devsim" and spec.dimension == 2:
+            if spec.study.kind not in {"equilibrium", "dc", "dc_points"}:
+                issues.append(
+                    CapabilityIssue(
+                        path="study.kind",
+                        code="unsupported_two_dimensional_study",
+                        message=(
+                            "two-dimensional DEVSIM structures are benchmarked for equilibrium "
+                            "and DC studies only"
+                        ),
+                        requested=str(spec.study.kind),
+                        supported=("equilibrium", "dc", "dc_points"),
+                    )
+                )
+            if "fermi" in spec.physics.models:
+                issues.append(
+                    CapabilityIssue(
+                        path="physics.models",
+                        code="unsupported_two_dimensional_statistics",
+                        message=(
+                            "Fermi-Dirac statistics are not yet available for two-dimensional "
+                            "DEVSIM structures; use Boltzmann statistics there, or run the "
+                            "structure on Sentaurus"
+                        ),
+                        requested="fermi",
+                        supported=("boltzmann",),
+                    )
+                )
+            for index, contact in enumerate(spec.contacts):
+                region = next(r for r in spec.regions if r.id == contact.region)
+                if str(contact.kind) in {"metal_work_function", "ideal_gate"} and (
+                    region.material == "silicon"
+                ):
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"contacts[{index}]",
+                            code="unsupported_two_dimensional_contact",
+                            message=(
+                                "two-dimensional DEVSIM structures take ohmic contacts on "
+                                "silicon and gate contacts on an insulator only"
+                            ),
+                            requested=f"{contact.kind}:{region.material}",
+                            supported=("ohmic:silicon", "metal_work_function:silicon_dioxide"),
                         )
                     )
         self._check_one(issues, "study.kind", spec.study.kind, manifest.studies)

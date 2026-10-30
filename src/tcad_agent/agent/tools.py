@@ -501,6 +501,9 @@ class DomainTools:
                         # Both ids name the one reviewed Slotboom model; the
                         # researcher's intent may use either vocabulary.
                         "model.band_gap_narrowing": "model.slotboom_bgn",
+                        # A box window only exists in a two-dimensional structure; "uniform"
+                        # doping in a one-dimensional stack is the constant profile.
+                        **({"profile.box": "profile.constant"} if spec.dimension == 1 else {}),
                     }.get(capability, capability)
                     not in {
                         "model.slotboom_bgn" if item == "model.band_gap_narrowing" else item

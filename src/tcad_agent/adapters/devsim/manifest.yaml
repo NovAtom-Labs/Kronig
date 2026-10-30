@@ -3,11 +3,11 @@ backend: devsim
 adapter_version: "0.2.4"
 execution_state: configured
 aliases: []
-dimensions: [1]
+dimensions: [1, 2]
 equations: [poisson, electron_continuity, hole_continuity]
 models: [boltzmann, fermi, constant_mobility, klaassen_mobility, high_field_saturation, srh, auger, slotboom_bgn]
 materials: [silicon, silicon_dioxide, generic_dielectric]
-profiles: [constant, fixed_charge, piecewise_constant, linear, gaussian, error_function, tabulated]
+profiles: [constant, box, fixed_charge, piecewise_constant, linear, gaussian, error_function, tabulated]
 interfaces: [continuity, fixed_charge, surface_srh, interface_trap]
 contacts: [ohmic, ideal_gate, metal_work_function, insulating]
 studies: [equilibrium, dc, dc_points, ac, frequency, transient, temperature, parameter]

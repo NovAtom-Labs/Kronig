@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import cast
 
-from tcad_agent.adapters.devsim import density_solver, runtime, statistics
+from tcad_agent.adapters.devsim import density_solver, runtime, runtime2d, statistics
 from tcad_agent.adapters.devsim.extract import normalize_native_field
 from tcad_agent.adapters.devsim.models.materials import (
     SILICON_PARAMETER_SET_ID,
@@ -15,11 +15,13 @@ from tcad_agent.adapters.devsim.models.materials import (
     SILICON_PARAMETERS,
 )
 from tcad_agent.adapters.devsim.payload import DevsimPayload
+from tcad_agent.adapters.sentaurus.tables import normalize_tables
 from tcad_agent.capabilities.models import CapabilityManifest, CapabilityStatus
 from tcad_agent.capabilities.service import CapabilityService
 from tcad_agent.domain.errors import CapabilityError
-from tcad_agent.domain.models import ExperimentSpec
+from tcad_agent.domain.models import ExperimentSpec, Region2D
 from tcad_agent.domain.profiles import (
+    BoxProfile,
     ConstantProfile,
     ConstantTemperatureProfile,
     ErrorFunctionProfile,
@@ -69,6 +71,8 @@ class DevsimAdapter:
         if decision.status is not CapabilityStatus.SUPPORTED:
             details = "; ".join(f"{issue.path}: {issue.message}" for issue in decision.issues)
             raise CapabilityError(details)
+        if spec.dimension == 2:
+            return self._compile_two_dimensional(spec, workspace)
         payload = self._payload(spec)
         workspace = workspace.resolve()
         input_bytes = (payload.model_dump_json(indent=2) + "\n").encode()
@@ -102,6 +106,141 @@ class DevsimAdapter:
             ).hexdigest(),
             compiler_version=self.compiler_version,
         )
+
+    def _compile_two_dimensional(self, spec: ExperimentSpec, workspace: Path) -> CompiledJob:
+        payload = self._payload_two_dimensional(spec)
+        workspace = workspace.resolve()
+        input_bytes = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+        runtime_bytes = Path(runtime2d.__file__).read_bytes()
+        statistics_bytes = Path(statistics.__file__).read_bytes()
+        workspace.mkdir(parents=True, exist_ok=False)
+        input_path = workspace / "input.json"
+        entrypoint = workspace / "run_devsim.py"
+        statistics_path = workspace / "devsim_statistics.py"
+        input_path.write_bytes(input_bytes)
+        entrypoint.write_bytes(runtime_bytes)
+        statistics_path.write_bytes(statistics_bytes)
+        return CompiledJob(
+            backend="devsim",
+            entrypoint=entrypoint,
+            arguments=(str(input_path.name),),
+            environment={},
+            input_files=(input_path, entrypoint, statistics_path),
+            input_digest=hashlib.sha256(input_bytes).hexdigest(),
+            runtime_digest=hashlib.sha256(
+                b"run_devsim.py\0" + runtime_bytes + b"\0devsim_statistics.py\0" + statistics_bytes
+            ).hexdigest(),
+            compiler_version=self.compiler_version,
+        )
+
+    def _payload_two_dimensional(self, spec: ExperimentSpec) -> dict[str, object]:
+        """Rectangular 2D structure in centimetres. ``x`` is depth and ``y`` is lateral."""
+        regions = []
+        for region in spec.regions:
+            assert isinstance(region, Region2D)
+            extent = min(
+                region.x1.to("cm") - region.x0.to("cm"), region.y1.to("cm") - region.y0.to("cm")
+            )
+            regions.append(
+                {
+                    "id": region.id,
+                    "material": region.material,
+                    "x0_cm": region.x0.to("cm"),
+                    "x1_cm": region.x1.to("cm"),
+                    "y0_cm": region.y0.to("cm"),
+                    "y1_cm": region.y1.to("cm"),
+                    "mesh_spacing_cm": (
+                        region.mesh_spacing.to("cm")
+                        if region.mesh_spacing is not None
+                        else max(extent / 50.0, 1e-9)
+                    ),
+                    "minimum_mesh_spacing_cm": (
+                        region.minimum_mesh_spacing.to("cm")
+                        if region.minimum_mesh_spacing is not None
+                        else None
+                    ),
+                    "maximum_mesh_spacing_cm": (
+                        region.maximum_mesh_spacing.to("cm")
+                        if region.maximum_mesh_spacing is not None
+                        else None
+                    ),
+                    "relative_permittivity": region.relative_permittivity,
+                }
+            )
+        profiles = []
+        for profile in spec.profiles:
+            record: dict[str, object] = {
+                "kind": profile.kind,
+                "region": profile.region,
+                "species": str(profile.species),
+                "value_cm3": profile.value.to("cm^-3"),
+            }
+            if isinstance(profile, BoxProfile):
+                record.update(
+                    x0_cm=profile.x0.to("cm"),
+                    x1_cm=profile.x1.to("cm"),
+                    y0_cm=profile.y0.to("cm"),
+                    y1_cm=profile.y1.to("cm"),
+                )
+            profiles.append(record)
+        contacts = [
+            {
+                "id": contact.id,
+                "region": contact.region,
+                "location": str(contact.location),
+                "kind": str(contact.kind),
+                "span_cm": (
+                    [contact.span[0].to("cm"), contact.span[1].to("cm")]
+                    if contact.span is not None
+                    else None
+                ),
+                "work_function_ev": (
+                    contact.work_function.to("eV") if contact.work_function is not None else None
+                ),
+                "voltage_offset_v": contact.voltage_offset.to("V"),
+            }
+            for contact in spec.contacts
+        ]
+        parameters = spec.physics.parameters
+        material_parameters = dict(SILICON_PARAMETERS)
+        for key, quantity, unit in (
+            ("electron_lifetime_s", parameters.electron_lifetime, "s"),
+            ("hole_lifetime_s", parameters.hole_lifetime, "s"),
+            ("auger_electron_cm6_s", parameters.auger_electron_coefficient, "cm^6/s"),
+            ("auger_hole_cm6_s", parameters.auger_hole_coefficient, "cm^6/s"),
+        ):
+            if quantity is not None:
+                material_parameters[key] = quantity.to(unit)
+        points = [point.to("V") for point in expand_study_points(spec.study)] or [0.0]
+        return {
+            "schema_version": "2.0",
+            "dimension": 2,
+            "compiler_version": self.compiler_version,
+            "experiment_name": spec.name,
+            "regions": regions,
+            "profiles": profiles,
+            "contacts": contacts,
+            "physics": {
+                "equations": [str(value) for value in spec.physics.equations],
+                "models": list(spec.physics.models),
+                "temperature_k": spec.physics.temperature.to("K"),
+                "parameter_set_id": SILICON_PARAMETER_SET_ID,
+                **material_parameters,
+            },
+            "solver": {
+                **spec.solver.model_dump(mode="json", exclude={"mesh_refinement_level"}),
+            },
+            "study": {
+                "kind": spec.study.kind,
+                "contact": getattr(spec.study, "contact", None),
+                "points_v": points,
+            },
+            "profile_cuts": [
+                {"id": cut.id, "depth_cm": cut.at.to("cm")} for cut in spec.profile_cuts
+            ],
+            "observables": [str(value) for value in spec.observables],
+            "width_m": spec.width.to("m") if spec.width is not None else None,
+        }
 
     def _payload(self, spec: ExperimentSpec) -> DevsimPayload:
         regions: list[dict[str, object]] = [
@@ -607,7 +746,12 @@ class DevsimAdapter:
                 native_result_path=native.result_path,
                 error=native.error,
             )
-        data = json.loads(native.result_path.read_text())
+        raw = native.result_path.read_bytes()
+        data = json.loads(raw)
+        if "datasets" in data and "operating_points" in data:
+            return normalize_tables(
+                data, native.result_path, hashlib.sha256(raw).hexdigest(), backend="devsim"
+            )
         points = tuple(
             BiasPoint(
                 bias_v=point["bias_v"],

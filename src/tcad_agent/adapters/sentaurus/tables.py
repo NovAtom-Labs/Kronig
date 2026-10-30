@@ -357,7 +357,12 @@ def _csv_values(root: Path, column: CSVColumn, source_hashes: dict[str, str]):
     return tuple(values), tuple(imaginary) if column.imaginary_column else None
 
 
-def normalize_tables(payload: dict, path: Path, export_sha256: str) -> CanonicalResult:
+def normalize_tables(
+    payload: dict,
+    path: Path,
+    export_sha256: str,
+    backend: Literal["devsim", "sentaurus"] = "sentaurus",
+) -> CanonicalResult:
     export = TableExport.model_validate(payload)
     if sum(math.prod(item.shape) for item in export.datasets.values()) > 4_000_000:
         raise ValueError("export exceeds aggregate dataset value budget")
@@ -414,7 +419,7 @@ def normalize_tables(payload: dict, path: Path, export_sha256: str) -> Canonical
             if imaginary is not None
             else None,
             validity=item.validity,
-            source="sentaurus-exported-table",
+            source=f"{backend}-exported-table",
             metadata={
                 "quantity": item.quantity,
                 **({"file": item.table.file, "sha256": item.table.sha256} if item.table else {}),
@@ -472,7 +477,7 @@ def normalize_tables(payload: dict, path: Path, export_sha256: str) -> Canonical
     # Exporter-supplied datasets win over derived terminal curves of the same name.
     datasets = {**_terminal_curves(axes, bias_axes, export), **datasets}
     return CanonicalResult(
-        backend="sentaurus",
+        backend=backend,
         simulator_version=export.simulator_version,
         status=export.status,
         terminals=export.terminals,

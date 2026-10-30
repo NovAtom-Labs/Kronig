@@ -70,9 +70,18 @@ def test_profiles_need_a_cut_and_absolute_current_needs_a_width() -> None:
     assert ready.status.value == "supported"
 
 
-def test_devsim_refuses_two_dimensional_structures() -> None:
-    decision = CapabilityService().check(spec_with(), CapabilityManifest.from_backend("devsim"))
-    assert decision.status.value == "backend_unsupported"
+def test_devsim_accepts_two_dimensional_boltzmann_structures() -> None:
+    spec = spec_with(
+        lambda d: d["physics"].update(models=["boltzmann", "constant_mobility", "srh"])
+    )
+    decision = CapabilityService().check(spec, CapabilityManifest.from_backend("devsim"))
+    assert decision.status.value == "supported", decision.issues
+
+
+def test_devsim_refuses_fermi_statistics_in_two_dimensions_for_now() -> None:
+    spec = spec_with(lambda d: d["physics"].update(models=["fermi", "constant_mobility", "srh"]))
+    decision = CapabilityService().check(spec, CapabilityManifest.from_backend("devsim"))
+    assert [issue.code for issue in decision.issues] == ["unsupported_two_dimensional_statistics"]
 
 
 def test_vector_fields_are_refused_along_a_line_cut(tmp_path, monkeypatch) -> None:
