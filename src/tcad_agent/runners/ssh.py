@@ -556,6 +556,21 @@ class SSHSentaurusRunner:
             stage = "Sentaurus license unavailable (no free seat or server unreachable)"
         return f"{stage} (exit {return_code}): {detail}"[:4000]
 
+    @staticmethod
+    def _stall_detail(output_dir: Path) -> str:
+        """Say what the simulator was doing when the time ran out, from its own log."""
+        path = output_dir / "sdevice.stdout.log"
+        if not path.is_file():
+            return " before the device simulator started (structure or license wait)"
+        text = path.read_text(errors="replace")
+        stalled = len(re.findall(r"KRONIG numerics level \d+ stalled", text))
+        return (
+            f"; the device simulator was still iterating after {stalled} stalled numerical "
+            f"strateg{'y' if stalled == 1 else 'ies'}, so the solve did not converge in the time "
+            "allowed. A coupled mobility model on a two-dimensional device is a common cause; a "
+            "simpler physics selection or a smaller structure usually converges"
+        )
+
     def run(
         self,
         job: CompiledJob,
@@ -727,7 +742,9 @@ class SSHSentaurusRunner:
                 error = None
             elif return_code == 124:
                 status = "timed_out"
-                error = "Sentaurus execution timed out"
+                error = "Sentaurus execution timed out" + (
+                    self._stall_detail(output_dir) if generated else ""
+                )
             else:
                 status = "execution_failed"
                 error = (

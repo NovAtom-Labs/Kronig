@@ -88,3 +88,13 @@ def test_failure_summary_quotes_the_native_error_not_the_license_banner(tmp_path
     text = SSHSentaurusRunner._failure_summary(tmp_path, 5, "")
     assert "cannot overlap or touch" in text
     assert "license unavailable" not in text and "agreement" not in text
+
+
+def test_a_stalled_solve_is_described_from_the_simulator_log(tmp_path) -> None:
+    assert 'before the device simulator started' in SSHSentaurusRunner._stall_detail(tmp_path)
+    (tmp_path / 'sdevice.stdout.log').write_text(
+        'KRONIG numerics level 0 stalled:\nKRONIG numerics level 1 stalled: 0\n'
+    )
+    detail = SSHSentaurusRunner._stall_detail(tmp_path)
+    assert 'after 2 stalled numerical strategies' in detail and 'did not converge' in detail
+
