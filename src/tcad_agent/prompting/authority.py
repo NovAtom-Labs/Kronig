@@ -618,6 +618,35 @@ def _profile_alias_held(spec, key, value):
     return False
 
 
+_LAYER_ALIASES = {"oxide": "dioxide", "sio2": "dioxide", "insulator": "dielectric"}
+
+
+def _region_extent_held(spec, label, value):
+    """A layer thickness the researcher gave is honored when the region the label names (by id,
+    material or a common layer name) has that extent, whichever collection the model filed it
+    under ("profiles.oxide.thickness"). A label naming no region is not guessed at."""
+    try:
+        quantity = QuantityValue.model_validate(value)
+    except ValueError:
+        return False
+    if not quantity.is_compatible_with("meter"):
+        return False
+    wanted = _LAYER_ALIASES.get(label, label)
+
+    def named(region):
+        names = {str(region.id).lower(), str(region.material).lower()}
+        tokens = {token for name in names for token in re.split(r"[_-]", name)}
+        return label is None or wanted in names | tokens
+
+    return any(
+        named(region)
+        and math.isclose(
+            quantity.to("m"), float(region.x1.to("m") - region.x0.to("m")), rel_tol=1e-9
+        )
+        for region in spec.regions
+    )
+
+
 _MESH_SPACING_FIELDS = ("mesh_spacing", "minimum_mesh_spacing", "maximum_mesh_spacing")
 
 
@@ -680,6 +709,10 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             continue
         if parts[0] == "regions" and parts[-1] == "material" and _names_a_region_material(
             spec, field.value
+        ):
+            continue
+        if parts[0] in {"regions", "profiles"} and parts[-1] in {"thickness", "extent", "length"} and (
+            _region_extent_held(spec, parts[1].lower() if len(parts) > 2 else None, field.value)
         ):
             continue
         if parts[0] == "regions" and parts[-1] == "mesh_spacing" and _mesh_spacing_held(

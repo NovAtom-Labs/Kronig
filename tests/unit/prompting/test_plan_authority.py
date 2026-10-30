@@ -1,4 +1,4 @@
-﻿"""Confirmed schema-addressable intent must survive agent plan generation."""
+"""Confirmed schema-addressable intent must survive agent plan generation."""
 
 import pytest
 
@@ -375,3 +375,22 @@ def test_lone_region_length_is_its_thickness(valid_spec):
     thickness_um = round((region.x1.to("m") - region.x0.to("m")) * 1e6, 9)
     assert _equal(_resolve(spec, ["regions", "length"]), f"{thickness_um} um")
     assert not _equal(_resolve(spec, ["regions", "length"]), f"{thickness_um * 3} um")
+
+
+def test_layer_thickness_filed_under_profiles_is_held_by_the_regions(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    region = valid_spec.regions[0]
+    thickness_um = round((region.x1.to("m") - region.x0.to("m")) * 1e6, 9)
+
+    def issues(value):
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Keep my layers",
+            fields=(IntentField(path="profiles.silicon.thickness", value=value, origin="researcher"),),
+        )
+        return plan_authority_issues(valid_spec, intent)
+
+    assert issues(f"{thickness_um} um") == []
+    assert issues(f"{thickness_um * 7.3} um")
+    assert issues(f"{thickness_um} um") == []  # label matches the silicon regions
