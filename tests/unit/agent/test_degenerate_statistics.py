@@ -47,3 +47,25 @@ def test_explicit_researcher_boltzmann_request_is_honored(valid_spec, tmp_path):
         fields=(IntentField(path="physics.models", value=["boltzmann"], origin="researcher"),),
     )
     assert _code(tmp_path, _schottky(valid_spec, "4.10 eV", "boltzmann"), intent) is None
+
+
+def test_planner_inferred_boltzmann_scope_is_met_by_fermi_statistics(valid_spec, tmp_path):
+    models = tuple(m for m in valid_spec.physics.models if m not in {"boltzmann", "fermi"})
+    spec = valid_spec.model_copy(
+        update={"physics": valid_spec.physics.model_copy(update={"models": (*models, "fermi")})}
+    )
+
+    def code(*fields):
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Band bending",
+            fields=fields,
+            selected_capabilities=("model.boltzmann",),
+        )
+        return DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+            spec.model_dump(mode="json"), backend="devsim"
+        ).code
+
+    assert code() != "requested_scope_missing"
+    stated = IntentField(path="physics.models", value=["boltzmann"], origin="researcher")
+    assert code(stated) == "requested_scope_missing"

@@ -308,6 +308,14 @@ class DomainTools:
             },
         )
 
+    def _researcher_stated_boltzmann(self) -> bool:
+        return bool(self.research_intent) and any(
+            field.origin in {"researcher", "repository"}
+            and field.path.startswith("physics.models")
+            and "boltzmann" in str(field.value).lower()
+            for field in self.research_intent.fields
+        )
+
     def _degenerate_surface_statistics_response(self, spec: ExperimentSpec) -> ToolResponse | None:
         """Refuse a planner-chosen Boltzmann model where a metal contact degenerates the surface.
 
@@ -317,12 +325,7 @@ class DomainTools:
         """
         if "boltzmann" not in spec.physics.models or "fermi" in spec.physics.models:
             return None
-        if self.research_intent and any(
-            field.origin in {"researcher", "repository"}
-            and field.path.startswith("physics.models")
-            and "boltzmann" in str(field.value).lower()
-            for field in self.research_intent.fields
-        ):
+        if self._researcher_stated_boltzmann():
             return None
         affinity_ev, gap_ev, margin_ev = 4.05, 1.12, 0.1
         for contact in spec.contacts:
@@ -472,6 +475,10 @@ class DomainTools:
                         ),
                         data={"missing_capabilities": sorted(set(changed_policy))},
                     )
+                if "model.fermi" in actual and not self._researcher_stated_boltzmann():
+                    # Fermi-Dirac contains Boltzmann; a statistics model the planner inferred
+                    # (not one the researcher stated) is met by the stricter one.
+                    actual.add("model.boltzmann")
                 missing = sorted(
                     capability
                     for capability in self.research_intent.selected_capabilities
