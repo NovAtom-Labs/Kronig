@@ -308,6 +308,44 @@ class DomainTools:
             },
         )
 
+    def _degenerate_surface_statistics_response(self, spec: ExperimentSpec) -> ToolResponse | None:
+        """Refuse a planner-chosen Boltzmann model where a metal contact degenerates the surface.
+
+        The contact pins the surface Fermi level at its work function, so a work function within
+        0.1 eV of (or beyond) a silicon band edge accumulates or inverts the surface to the
+        density of states whatever the bulk doping. An explicit researcher request is honored.
+        """
+        if "boltzmann" not in spec.physics.models or "fermi" in spec.physics.models:
+            return None
+        if self.research_intent and any(
+            field.origin in {"researcher", "repository"}
+            and field.path.startswith("physics.models")
+            and "boltzmann" in str(field.value).lower()
+            for field in self.research_intent.fields
+        ):
+            return None
+        affinity_ev, gap_ev, margin_ev = 4.05, 1.12, 0.1
+        for contact in spec.contacts:
+            if contact.work_function is None:
+                continue
+            region = spec.regions[0 if str(contact.location) == "x_min" else -1]
+            if region.material != "silicon":
+                continue
+            work_function_ev = contact.work_function.to("eV")
+            if not affinity_ev + margin_ev < work_function_ev < affinity_ev + gap_ev - margin_ev:
+                return ToolResponse(
+                    status="refused",
+                    code="degenerate_surface_requires_fermi_statistics",
+                    message=(
+                        f"The {work_function_ev:g} eV contact lies within {margin_ev} eV of a "
+                        "silicon band edge or beyond it, so the surface carrier density reaches "
+                        "the density of states and Boltzmann statistics cannot hold, whatever the "
+                        "bulk doping. Select Fermi-Dirac statistics (physics.models 'fermi' in "
+                        "place of 'boltzmann') and say why in the plan."
+                    ),
+                )
+        return None
+
     def prepare_experiment(self, payload: dict[str, object], *, backend: str) -> ToolResponse:
         try:
             spec = ExperimentSpec.model_validate(payload)
@@ -327,6 +365,9 @@ class DomainTools:
             area_refusal = self._contact_area_authority_response(spec)
             if area_refusal is not None:
                 return area_refusal
+            statistics_refusal = self._degenerate_surface_statistics_response(spec)
+            if statistics_refusal is not None:
+                return statistics_refusal
             if self.research_intent:
                 catalog = CapabilityCatalog.from_manifest(CapabilityManifest.from_backend(backend))
                 structured_paths = {
