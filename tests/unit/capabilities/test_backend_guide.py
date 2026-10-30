@@ -30,8 +30,11 @@ def test_guide_reaches_the_preparation_view_and_is_part_of_the_digest() -> None:
     assert edited.digest != catalog.digest
 
 
-def test_backend_without_a_guide_still_loads() -> None:
-    assert CapabilityManifest.from_backend("devsim").guide == ""
+def test_devsim_guide_inventory_equals_the_manifest() -> None:
+    manifest = CapabilityManifest.from_backend("devsim")
+    inventory = _inventory(manifest.guide)
+    for field, values in inventory.items():
+        assert sorted(getattr(manifest, field)) == sorted(values), field
 
 
 def test_the_simulator_a_request_names_selects_the_backend(monkeypatch) -> None:
