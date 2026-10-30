@@ -309,14 +309,14 @@ def _resolve(value, parts):
                 item = value[0]
                 fields = type(item).model_fields if isinstance(item, BaseModel) else {}
                 parameters = getattr(item, "parameters", _UNMAPPED)
-                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key in {"extents", "thickness"} or (
+                is_field = key in fields or _FIELD_ALIASES.get(key) in fields or key in {"extents", "extent", "thickness"} or (
                     isinstance(parameters, BaseModel) and key in type(parameters).model_fields
                 )
                 return _resolve(item, parts if is_field else remaining)
             else:
                 selected = _UNMAPPED
         return _resolve(selected, remaining)
-    if key == "thickness" and hasattr(value, "x0") and hasattr(value, "x1"):
+    if key in {"thickness", "extent"} and hasattr(value, "x0") and hasattr(value, "x1"):
         return QuantityValue.model_validate(f"{value.x1.to('m') - value.x0.to('m'):.15g} m")
     if isinstance(value, BaseModel) and key in type(value).model_fields:
         return _resolve(getattr(value, key), remaining)
@@ -606,6 +606,26 @@ def _profile_alias_held(spec, key, value):
     return False
 
 
+_MESH_SPACING_FIELDS = ("mesh_spacing", "minimum_mesh_spacing", "maximum_mesh_spacing")
+
+
+def _mesh_spacing_held(spec, value):
+    """A spacing the researcher gave is honored when any region carries it as its uniform,
+    minimum or maximum spacing; the model's label for which one it is carries no value.
+    Text that is not a length ("Al-Si interface") only says where to refine, so it is not judged."""
+    try:
+        quantity = QuantityValue.model_validate(value)
+    except ValueError:
+        return True
+    return any(
+        isinstance(actual, QuantityValue)
+        and quantity.is_compatible_with(actual.si_unit)
+        and math.isclose(quantity.to(actual.si_unit), actual.magnitude_si, rel_tol=1e-12)
+        for region in spec.regions
+        for actual in (getattr(region, name, None) for name in _MESH_SPACING_FIELDS)
+    )
+
+
 def _names_a_region_material(spec, value):
     """True when a confirmed ``regions.*.material`` text only restates what the spec holds.
 
@@ -647,6 +667,10 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
         if parts[0] == "profiles" and _profile_alias_held(spec, parts[-1], field.value):
             continue
         if parts[0] == "regions" and parts[-1] == "material" and _names_a_region_material(
+            spec, field.value
+        ):
+            continue
+        if parts[0] == "regions" and parts[-1] == "mesh_spacing" and _mesh_spacing_held(
             spec, field.value
         ):
             continue

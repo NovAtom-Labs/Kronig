@@ -320,3 +320,30 @@ def test_descriptive_doping_keys_are_read_by_meaning(valid_spec):
 
     assert issues("profiles.substrate_doping_type", "p-type") == []
     assert issues("profiles.substrate_doping_concentration", "1e17 cm^-3") == []
+
+
+def test_mesh_spacing_is_judged_by_value_not_by_the_models_label(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    region = valid_spec.regions[0]
+    payload = valid_spec.model_dump(mode="json")
+    payload["regions"][0]["minimum_mesh_spacing"] = "2 nm"
+    payload["regions"][0]["maximum_mesh_spacing"] = "10 nm"
+    spec = type(valid_spec).model_validate(payload)
+    thickness_um = round((region.x1.to("m") - region.x0.to("m")) * 1e6, 9)
+
+    def issues(*fields):
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Keep my mesh",
+            fields=tuple(IntentField(path=p, value=v, origin="researcher") for p, v in fields),
+        )
+        return plan_authority_issues(spec, intent)
+
+    assert issues(
+        ("regions.min_nm.mesh_spacing", "2 nm"),
+        ("regions.max_nm.mesh_spacing", "10 nm"),
+        ("regions.refines_at.mesh_spacing", "Al-Si interface (x_min)"),
+        ("regions.extent", f"{thickness_um} um"),
+    ) == []
+    assert issues(("regions.min_nm.mesh_spacing", "3 nm"))
