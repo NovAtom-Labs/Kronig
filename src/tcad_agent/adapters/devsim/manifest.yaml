@@ -61,3 +61,11 @@ observables:
 limits:
   max_bias_points: 10000
   max_regions: 32
+# Two-dimensional structures only (one-dimensional DEVSIM results keep the default limits).
+# Measured on DEVSIM 2.9.1 two-dimensional MOSFETs with 1e20 /cm3 source and drain: the
+# algebraic sum of terminal currents leaves 4e-4 to 2.2e-2 A/m2 whatever the bias, because the
+# coupled Newton solve stops at its residual floor (extended precision lowered it about tenfold
+# at twelve times the run time; tighter standard-precision tolerances do not converge). This is
+# the largest measured ratio (2.2e-22 A/m2 per /cm3 of peak doping) with 40 percent margin.
+validation_limits:
+  current_noise_per_doping_2d: 3.0e-22

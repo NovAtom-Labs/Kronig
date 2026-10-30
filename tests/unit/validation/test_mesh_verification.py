@@ -427,3 +427,14 @@ def test_a_current_in_amperes_shares_the_noise_floor_of_its_density():
     body = {m["dataset"]: m["relative_linf"] for m in loud["metrics"]}
     assert body["absolute_terminal_current__body"] > 0.2
     assert loud["status"] == "failed"
+
+
+def test_a_two_dimensional_noise_floor_does_not_loosen_one_dimensional_limits(valid_spec) -> None:
+    from tcad_agent.validation.engine import ValidationEngine
+
+    engine = ValidationEngine(current_noise_per_doping_2d=3.0e-22)
+    assert engine._doping_noise_floor(valid_spec) == 0.0
+    assert engine.acceptance_limits()["current_noise_per_doping_2d"] == 3.0e-22
+    declared = ValidationEngine.for_backend("devsim")
+    assert declared.current_noise_per_doping_2d == 3.0e-22
+    assert declared.current_noise_per_doping == 0.0

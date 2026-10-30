@@ -69,8 +69,10 @@ class ValidationEngine:
         contact_charge_rtol: float = 0.03,
         contact_charge_atol: float = 1e-10,
         current_noise_per_doping: float = 0.0,
+        current_noise_per_doping_2d: float = 0.0,
     ) -> None:
         tolerances = (
+            current_noise_per_doping_2d,
             current_rtol,
             current_atol,
             equilibrium_current_atol,
@@ -90,17 +92,25 @@ class ValidationEngine:
         self.contact_charge_rtol = contact_charge_rtol
         self.contact_charge_atol = contact_charge_atol
         self.current_noise_per_doping = current_noise_per_doping
+        self.current_noise_per_doping_2d = current_noise_per_doping_2d
 
     def _doping_noise_floor(self, spec: ExperimentSpec | None) -> float:
         """Current-density evaluation noise (A/m^2) a backend declares for this experiment.
 
         Opposing drift and diffusion fluxes cancel to zero at equilibrium; the leftover
         scales with the carrier concentration, so the declared coefficient (A/m^2 per cm^-3)
-        multiplies the highest doping in the experiment. Zero for backends that declare none.
+        multiplies the highest doping in the experiment. A backend may declare a separate
+        coefficient for two-dimensional structures, whose coupled solve leaves a larger residual.
+        Zero for backends that declare none.
         """
-        if spec is None or not self.current_noise_per_doping:
+        if spec is None:
             return 0.0
-        return self.current_noise_per_doping * _peak_doping_cm3(spec)
+        coefficient = self.current_noise_per_doping
+        if spec.dimension == 2 and self.current_noise_per_doping_2d:
+            coefficient = self.current_noise_per_doping_2d
+        if not coefficient:
+            return 0.0
+        return coefficient * _peak_doping_cm3(spec)
 
     def _current_atol(self, spec: ExperimentSpec | None) -> float:
         return max(self.current_atol, self._doping_noise_floor(spec))
@@ -134,6 +144,7 @@ class ValidationEngine:
             "contact_charge_rtol": self.contact_charge_rtol,
             "contact_charge_atol": self.contact_charge_atol,
             "current_noise_per_doping": self.current_noise_per_doping,
+            "current_noise_per_doping_2d": self.current_noise_per_doping_2d,
         }
 
     def validate(
