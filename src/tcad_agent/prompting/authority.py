@@ -263,6 +263,17 @@ def misfiled_contact_voltage(path: str) -> str | None:
     return f"contacts.{match.group(1)}.voltage_offset" if match else None
 
 
+_STATED_DIMENSION = re.compile(r"\s*([12])\s*(?:-?\s*d|[- ]?dim\w*)?\s*", re.IGNORECASE)
+
+
+def stated_dimension(path: str, value) -> int | None:
+    """The structure dimension a planner filed under ``physics`` ("2", "2D", 2)."""
+    if path not in {"physics.dimension", "physics.dimensions", "physics.dimensionality"}:
+        return None
+    match = _STATED_DIMENSION.fullmatch(str(value))
+    return int(match.group(1)) if match else None
+
+
 def unsupported_physics_inputs(intent):
     """Explicit quantity overrides need an actual portable contract field."""
     unsupported = []
@@ -273,6 +284,8 @@ def unsupported_physics_inputs(intent):
             continue
         if misfiled_contact_voltage(field.path):
             continue  # a contact voltage, judged under the contact it belongs to
+        if stated_dimension(field.path, field.value) is not None:
+            continue  # the structure's dimension, judged against the spec's own
         paths = _quantity_paths(field.value, field.path.removeprefix("physics.").split("."))
         if any(
             not (
@@ -783,6 +796,16 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             continue
         if (moved := misfiled_contact_voltage(field.path)) is not None:
             field = field.model_copy(update={"path": moved})
+        if (dimension := stated_dimension(field.path, field.value)) is not None:
+            if dimension != spec.dimension:
+                issues.append(
+                    {
+                        "intent_path": field.path,
+                        "reason": "changed_confirmed_input",
+                        "expected": field.value,
+                    }
+                )
+            continue
         if field.path.startswith("study.bias_schedule.") and getattr(
             spec.study, "bias_schedule", None
         ) is None:

@@ -493,6 +493,24 @@ def test_contact_voltage_filed_under_physics_is_judged_as_the_contacts_offset(va
     assert plan_authority_issues(valid_spec, intent("7.5 V"))
 
 
+def test_stated_structure_dimension_is_judged_against_the_spec(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues, unsupported_physics_inputs
+
+    def intent(value):
+        return ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="State the dimension",
+            fields=(IntentField(path="physics.dimension", value=value, origin="researcher"),),
+        )
+
+    held = valid_spec.dimension
+    other = 2 if held == 1 else 1
+    for text in (held, str(held), f"{held}D", f"{held}-D", f"{held} dimensional"):
+        assert unsupported_physics_inputs(intent(text)) == []
+        assert plan_authority_issues(valid_spec, intent(text)) == []
+    assert plan_authority_issues(valid_spec, intent(f"{other}D"))
+
+
 def test_doping_record_vocabulary_variants_are_the_same_dopant_and_profile(valid_spec):
     from tcad_agent.prompting.authority import plan_authority_issues
 
