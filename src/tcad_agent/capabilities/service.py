@@ -6,6 +6,7 @@ from tcad_agent.capabilities.models import (
     CapabilityManifest,
     CapabilityStatus,
 )
+from tcad_agent.domain import geometry2d
 from tcad_agent.domain.models import DCStudy, ExperimentSpec
 from tcad_agent.domain.studies import (
     ACStudy,
@@ -17,6 +18,32 @@ from tcad_agent.domain.studies import (
 )
 from tcad_agent.physics.parameters import REGISTERED_PARAMETERS
 from tcad_agent.physics.registry import PhysicsRegistry
+
+def _doping_types_along_contact(spec, contact, region) -> set[str]:
+    """Net doping types ("n", "p") found along a two-dimensional contact segment."""
+    start, end, _ = geometry2d.contact_segment(contact, region)
+    profiles = [p for p in spec.profiles if p.region == region.id]
+    tolerance = 1e-12
+    found: set[str] = set()
+    for step in range(21):
+        fraction = step / 20
+        x = start[0] + fraction * (end[0] - start[0])
+        y = start[1] + fraction * (end[1] - start[1])
+        net = 0.0
+        for profile in profiles:
+            if str(getattr(profile, "species", "")) not in {"donor", "acceptor"}:
+                continue
+            if profile.kind == "box" and not (
+                profile.x0.to("m") - tolerance <= x <= profile.x1.to("m") + tolerance
+                and profile.y0.to("m") - tolerance <= y <= profile.y1.to("m") + tolerance
+            ):
+                continue
+            sign = 1.0 if str(profile.species) == "donor" else -1.0
+            net += sign * profile.value.to("m^-3")
+        if net:
+            found.add("n" if net > 0 else "p")
+    return found
+
 
 # Spatial quantities that need a line to be read along in a two-dimensional structure.
 _PROFILE_OBSERVABLES = frozenset(
@@ -592,6 +619,27 @@ class CapabilityService:
                         supported=("one region per semiconductor",),
                     )
                 )
+        if spec.dimension == 2:
+            for index, contact in enumerate(spec.contacts):
+                if str(contact.kind) != "ohmic":
+                    continue
+                region = next(r for r in spec.regions if r.id == contact.region)
+                kinds = _doping_types_along_contact(spec, contact, region)
+                if len(kinds) > 1:
+                    issues.append(
+                        CapabilityIssue(
+                            path=f"contacts[{index}]",
+                            code="contact_spans_junction",
+                            message=(
+                                f"ohmic contact {contact.id} lies over both n-type and p-type "
+                                "material, which shorts the junction; give it a span inside "
+                                "one doped region, for example the source implant on the "
+                                "surface"
+                            ),
+                            requested=contact.id,
+                            supported=("a span inside one doping type",),
+                        )
+                    )
         if spec.dimension == 2 and not spec.profile_cuts:
             spatial = sorted(
                 str(observable)

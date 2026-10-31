@@ -206,6 +206,14 @@ def mesh_lines(payload: dict[str, Any]) -> tuple[dict[float, float], dict[float,
     low_l, high_l = min(lateral), max(lateral)
     low_d, high_d = min(depth), max(depth)
     outer = max(_bulk_spacing(region) for region in regions)
+    # A tensor mesh carries every line across the whole device, so a fine line would otherwise
+    # make everything between it and the next line fine too. Grow the spacing geometrically
+    # away from each fine line (the same growth Sentaurus applies) to keep it local.
+    for lines, low, high in ((lateral, low_l, high_l), (depth, low_d, high_d)):
+        for position, spacing in list(lines.items()):
+            if spacing < outer:
+                _grade(lines, position, +1, spacing, outer, high)
+                _grade(lines, position, -1, spacing, outer, low)
     note(lateral, low_l - _PAD_CM, outer)
     note(lateral, high_l + _PAD_CM, outer)
     note(depth, low_d - _PAD_CM, outer)

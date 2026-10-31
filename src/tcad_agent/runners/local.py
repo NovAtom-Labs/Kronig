@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 
 from tcad_agent.runners.models import CompiledJob, NativeRunResult, RunBudget
 from tcad_agent.runners.process import raise_if_cancelled, wait_for_process
+
+
+def _failure_detail(stderr_path: Path) -> str:
+    """The simulator's own last error line, so a refusal says why instead of only that it failed."""
+    try:
+        lines = [line.strip() for line in stderr_path.read_text(errors="replace").splitlines()]
+    except OSError:
+        return ""
+    lines = [line for line in lines if line]
+    errors = [line for line in lines if re.match(r"^[A-Za-z_.]*(Error|Exception)\b", line)]
+    last = (errors or lines or [""])[-1]
+    return f": {last[:300]}" if last else ""
 
 
 class LocalRunner:
@@ -83,7 +96,8 @@ class LocalRunner:
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
                 elapsed_seconds=elapsed,
-                error="simulator process returned a nonzero exit status",
+                error="simulator process returned a nonzero exit status"
+                + _failure_detail(stderr_path),
             )
 
         if not result_path.is_file():

@@ -299,3 +299,13 @@ def test_high_field_saturation_next_to_an_insulator_uses_the_channel_driving_for
     )
     job = SentaurusAdapter.from_defaults().compile(only_silicon, tmp_path / "job2")
     assert "Mobility( HighFieldSaturation )" in (tmp_path / "job2" / "sdevice.cmd").read_text()
+
+
+def test_an_ohmic_contact_over_both_doping_types_is_refused() -> None:
+    manifest = CapabilityManifest.from_backend("sentaurus")
+    base = CapabilityService().check(spec_with(), manifest)
+    assert "contact_spans_junction" not in [issue.code for issue in base.issues]
+    # A source implant that runs the full depth puts the bottom contact over n-type and p-type.
+    deep = spec_with(lambda d: d["profiles"][1].update(x1="0.205 um"))
+    decision = CapabilityService().check(deep, manifest)
+    assert "contact_spans_junction" in [issue.code for issue in decision.issues]
