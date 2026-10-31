@@ -783,6 +783,27 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             continue
         if (moved := misfiled_contact_voltage(field.path)) is not None:
             field = field.model_copy(update={"path": moved})
+        if field.path.startswith("study.bias_schedule.") and getattr(
+            spec.study, "bias_schedule", None
+        ) is None:
+            # A held contact voltage the model filed as a schedule on a study that has none:
+            # the contact carries it as its voltage offset.
+            leaf = field.path.rsplit(".", 1)[-1]
+            held = next(
+                (
+                    str(other.value)
+                    for other in intent.fields
+                    if other.path == "study.bias_schedule.contact"
+                ),
+                None,
+            )
+            if leaf == "contact":
+                if held in {contact.id for contact in spec.contacts}:
+                    continue
+            elif leaf in {"value", "voltage", "bias", "level", "constant", "fixed"} and held:
+                field = field.model_copy(
+                    update={"path": f"contacts.{held}.voltage_offset"}
+                )
         parts = canonical_path(field.path, preserve_indices=True).split(".")
         if (
             parts[-1] == "species"

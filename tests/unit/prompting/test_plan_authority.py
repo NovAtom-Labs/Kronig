@@ -522,3 +522,29 @@ def test_doping_record_vocabulary_variants_are_the_same_dopant_and_profile(valid
     assert issues(profile="constant", type=plural) == []
     other = "acceptors" if species == "donor" else "donors"
     assert issues(profile_type="constant", species=other)
+
+
+def test_a_held_contact_voltage_filed_as_a_bias_schedule_belongs_to_the_contact(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues
+
+    contact = valid_spec.contacts[0]
+    voltage = f"{contact.voltage_offset.to('V')} V"
+
+    def issues(value):
+        return plan_authority_issues(
+            valid_spec,
+            ResolvedResearchIntent(
+                task_kind="simulation",
+                objective="Hold a contact",
+                fields=(
+                    IntentField(
+                        path="study.bias_schedule.contact", value=contact.id, origin="researcher"
+                    ),
+                    IntentField(
+                        path="study.bias_schedule.value", value=value, origin="researcher"
+                    ),
+                ),
+            ),
+        )
+
+    assert issues(voltage) == []
