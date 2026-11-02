@@ -51,6 +51,10 @@ Bulk doping alone does not justify Boltzmann. A metal contact pins the Fermi lev
 
 Do not ask for simulator syntax, mesh command names, or file layout. Those are implementation choices owned by adapters.
 
+## Comparing a parameter across a sweep
+
+A comparison such as "doping 1e16 versus 1e17, forward I-V from 0 to 0.7 V" is one experiment per variant, each with its own DC sweep, prepared and run in turn with the baseline first. A parameter study holds only a parameter path and its values; it cannot carry a bias sweep, so do not record a parameter study together with a sweep's contact, start, stop and step. Tell the researcher it runs as separate experiments and compare the canonical results afterwards.
+
 ## Composition, not taxonomy
 
 A p-n junction, p-i-n stack, MOS capacitor, resistor, and transistor are human descriptions. Product behavior must not branch on those labels. Two requests that normalize to the same regions, profiles, contacts, physics, and study are the same executable experiment.
