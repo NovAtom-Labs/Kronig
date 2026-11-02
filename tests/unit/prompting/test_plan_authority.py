@@ -538,6 +538,10 @@ def test_doping_record_vocabulary_variants_are_the_same_dopant_and_profile(valid
     assert issues(profile_type="constant", species=plural) == []
     assert issues(profile_type="uniform", doping_type=n_or_p) == []
     assert issues(profile="constant", type=plural) == []
+    letter = {"donor": "n", "acceptor": "p"}[species]
+    assert issues(profile="constant", species=species, type=letter) == []
+    other_letter = "p" if letter == "n" else "n"
+    assert issues(profile="constant", type=other_letter)
     other = "acceptors" if species == "donor" else "donors"
     assert issues(profile_type="constant", species=other)
 

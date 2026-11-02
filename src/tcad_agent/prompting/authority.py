@@ -460,6 +460,12 @@ def _record_field_equal(record, key, expected):
             "acceptors": "acceptor",
             "n-type": "donor",
             "p-type": "acceptor",
+            "n": "donor",
+            "p": "acceptor",
+            "n type": "donor",
+            "p type": "acceptor",
+            "ntype": "donor",
+            "ptype": "acceptor",
         }.get(word, word)
         mapped = _DOPANT_TYPES.get(word, word)
         if mapped in {"donor", "acceptor"}:
