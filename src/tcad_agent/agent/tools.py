@@ -325,7 +325,9 @@ class DomainTools:
             for field in self.research_intent.fields
         )
 
-    def _degenerate_surface_statistics_response(self, spec: ExperimentSpec) -> ToolResponse | None:
+    def _degenerate_surface_statistics_response(
+        self, spec: ExperimentSpec, backend: str | None = None
+    ) -> ToolResponse | None:
         """Refuse a planner-chosen Boltzmann model where a metal contact degenerates the surface.
 
         The contact pins the surface Fermi level at its work function, so a work function within
@@ -367,6 +369,21 @@ class DomainTools:
             if region.material != "silicon":
                 continue
             work_function_ev = contact.work_function.to("eV")
+            if backend == "devsim" and spec.dimension == 1:
+                # DEVSIM solves a Schottky contact reliably only with its positive-density
+                # (Fermi-Dirac) solver; plain Newton on Boltzmann densities can settle on a
+                # non-physical first bias point and never leave it.
+                return ToolResponse(
+                    status="refused",
+                    code="schottky_contact_requires_fermi_statistics",
+                    message=(
+                        f"The {work_function_ev:g} eV metal contact is solved reliably on this "
+                        "backend only with Fermi-Dirac statistics, which contain Boltzmann at "
+                        "low carrier density. Select Fermi-Dirac statistics (physics.models "
+                        "'fermi' in place of 'boltzmann') and say why in the plan, or ask the "
+                        "researcher to confirm Boltzmann explicitly."
+                    ),
+                )
             if not affinity_ev + margin_ev < work_function_ev < affinity_ev + gap_ev - margin_ev:
                 return ToolResponse(
                     status="refused",
@@ -400,7 +417,7 @@ class DomainTools:
             area_refusal = self._contact_area_authority_response(spec)
             if area_refusal is not None:
                 return area_refusal
-            statistics_refusal = self._degenerate_surface_statistics_response(spec)
+            statistics_refusal = self._degenerate_surface_statistics_response(spec, backend)
             if statistics_refusal is not None:
                 return statistics_refusal
             if self.research_intent:

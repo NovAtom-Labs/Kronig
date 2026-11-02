@@ -40,6 +40,20 @@ def test_midgap_contact_and_fermi_statistics_are_left_alone(valid_spec, tmp_path
     assert _code(tmp_path, _schottky(valid_spec, "4.10 eV", "fermi")) is None
 
 
+def test_a_one_dimensional_devsim_schottky_contact_refuses_planner_chosen_boltzmann(
+    valid_spec, tmp_path
+):
+    spec = _schottky(valid_spec, "4.60 eV", "boltzmann")
+    tools = DomainTools(tmp_path)
+    refused = tools._degenerate_surface_statistics_response(spec, "devsim")
+    assert refused is not None
+    assert refused.code == "schottky_contact_requires_fermi_statistics"
+    # Other backends, and Fermi statistics, are left alone.
+    assert tools._degenerate_surface_statistics_response(spec, "sentaurus") is None
+    fermi = _schottky(valid_spec, "4.60 eV", "fermi")
+    assert tools._degenerate_surface_statistics_response(fermi, "devsim") is None
+
+
 def test_explicit_researcher_boltzmann_request_is_honored(valid_spec, tmp_path):
     intent = ResolvedResearchIntent(
         task_kind="simulation",
@@ -72,7 +86,7 @@ def test_planner_inferred_boltzmann_scope_is_met_by_fermi_statistics(valid_spec,
 
 
 def test_a_replaced_gate_answer_does_not_block_the_plan(valid_spec, tmp_path):
-    spec = _schottky(valid_spec, "4.60 eV", "boltzmann")
+    spec = _schottky(valid_spec, "4.60 eV", "fermi")
 
     def code(*capabilities):
         intent = ResolvedResearchIntent(
