@@ -429,6 +429,36 @@ def test_a_current_in_amperes_shares_the_noise_floor_of_its_density():
     assert loud["status"] == "failed"
 
 
+def test_conservation_allows_one_noise_floor_per_terminal_but_still_catches_a_loud_breach() -> None:
+    from types import SimpleNamespace
+
+    from tcad_agent.validation.engine import ValidationEngine
+
+    class Engine(ValidationEngine):
+        def _doping_noise_floor(self, spec):
+            return 0.03
+
+    engine = Engine(current_noise_per_doping_2d=3.0e-22)
+    spec = SimpleNamespace(dimension=2)
+
+    def check(engine, spec, **currents):
+        point = SimpleNamespace(converged=True, terminal_currents_a_per_m2=currents)
+        result = SimpleNamespace(
+            operating_points=(point,), bias_points=(), terminals=tuple(currents)
+        )
+        return engine._terminal_current_check(result, spec)
+
+    # Source and drain each carry the floor's noise at equilibrium; their sum may be two floors.
+    noisy = check(engine, spec, gate=0.0, source=0.0337, drain=0.0319, body=-7.5e-7)
+    assert noisy.status == "passed"
+    # A real imbalance at an on-state current is still a failure.
+    loud = check(engine, spec, gate=0.0, source=-1.0e9, drain=1.001e9, body=0.0)
+    assert loud.status == "failed"
+    # Without a declared two-dimensional floor the strict limit stays.
+    strict = check(ValidationEngine(), SimpleNamespace(dimension=1), a=0.0337, b=0.0319)
+    assert strict.status == "failed"
+
+
 def test_a_two_dimensional_noise_floor_does_not_loosen_one_dimensional_limits(valid_spec) -> None:
     from tcad_agent.validation.engine import ValidationEngine
 

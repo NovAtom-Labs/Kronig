@@ -698,6 +698,11 @@ class ValidationEngine:
         self, result: CanonicalResult, spec: ExperimentSpec | None = None
     ) -> ValidationCheck:
         current_atol = self._current_atol(spec)
+        noise_per_terminal = (
+            self._doping_noise_floor(spec)
+            if spec is not None and spec.dimension == 2 and self.current_noise_per_doping_2d
+            else 0.0
+        )
         points = tuple(
             point
             for point in (result.operating_points or result.bias_points)
@@ -745,7 +750,10 @@ class ValidationEngine:
                 )
             residual = abs(sum(currents))
             scale = max(abs(value) for value in currents)
-            limit = current_atol + self.current_rtol * scale
+            # Every terminal current carries the declared evaluation noise, so their sum can
+            # carry up to one floor per terminal.
+            atol = max(current_atol, noise_per_terminal * len(currents))
+            limit = atol + self.current_rtol * scale
             ratio = residual / limit if limit else (math.inf if residual else 0.0)
             residuals.append((ratio, residual, limit, scale))
         _ratio, residual, limit, scale = max(residuals)
@@ -756,7 +764,7 @@ class ValidationEngine:
             measured_value=residual,
             limit=limit,
             unit="A/m^2",
-            absolute_tolerance=current_atol,
+            absolute_tolerance=limit - self.current_rtol * scale,
             relative_tolerance=self.current_rtol,
             scale=scale,
             message="The algebraic sum of terminal currents must satisfy the configured tolerance.",
