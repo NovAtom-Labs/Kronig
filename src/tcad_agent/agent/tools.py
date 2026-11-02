@@ -515,6 +515,16 @@ class DomainTools:
                 # honor for this structure, are left out rather than blocking the run; a
                 # researcher who asked for them still gets the refusal.
                 droppable: set[str] = set()
+                selected = set(self.research_intent.selected_capabilities)
+                # An ideal gate and a metal gate with a work function are two answers to the
+                # one question of what the gate contact is. When the intent carries both, the
+                # earlier answer was replaced, and the plan's gate honors the one it keeps.
+                for kept, replaced in (
+                    ("contact.metal_work_function", "contact.ideal_gate"),
+                    ("contact.ideal_gate", "contact.metal_work_function"),
+                ):
+                    if {kept, replaced} <= selected and kept in actual and replaced not in actual:
+                        droppable.add(replaced)
                 if backend == "devsim" and spec.dimension == 2:
                     if not self._researcher_stated(("bgn", "narrowing", "slotboom")):
                         droppable |= {"model.slotboom_bgn", "model.band_gap_narrowing"}

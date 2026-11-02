@@ -71,6 +71,26 @@ def test_planner_inferred_boltzmann_scope_is_met_by_fermi_statistics(valid_spec,
     assert code(stated) == "requested_scope_missing"
 
 
+def test_a_replaced_gate_answer_does_not_block_the_plan(valid_spec, tmp_path):
+    spec = _schottky(valid_spec, "4.60 eV", "boltzmann")
+
+    def code(*capabilities):
+        intent = ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Gate contact",
+            fields=(),
+            selected_capabilities=capabilities,
+        )
+        return DomainTools(tmp_path, research_intent=intent).prepare_experiment(
+            spec.model_dump(mode="json"), backend="devsim"
+        ).code
+
+    # The researcher first said ideal gate, then gave a work function: the metal gate is kept.
+    assert code("contact.metal_work_function", "contact.ideal_gate") != "requested_scope_missing"
+    # An ideal gate asked for on its own is not what the plan holds.
+    assert code("contact.ideal_gate") == "requested_scope_missing"
+
+
 def test_planner_added_bgn_does_not_block_a_two_dimensional_devsim_plan(tmp_path):
     from tests.unit.adapters.test_sentaurus_two_dimensional import spec_with
 
