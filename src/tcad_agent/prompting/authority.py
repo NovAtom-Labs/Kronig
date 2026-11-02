@@ -829,9 +829,15 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             if leaf == "contact":
                 if held in {contact.id for contact in spec.contacts}:
                     continue
-            elif leaf in {"value", "voltage", "bias", "level", "constant", "fixed"} and held:
+            elif (
+                leaf in {"value", "values", "voltage", "voltages", "bias", "level", "constant", "fixed"}
+                and held
+            ):
+                held_value = field.value
+                if isinstance(held_value, list | tuple) and len(held_value) == 1:
+                    held_value = held_value[0]  # one level held at every point
                 field = field.model_copy(
-                    update={"path": f"contacts.{held}.voltage_offset"}
+                    update={"path": f"contacts.{held}.voltage_offset", "value": held_value}
                 )
         parts = canonical_path(field.path, preserve_indices=True).split(".")
         if (

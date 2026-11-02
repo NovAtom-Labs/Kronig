@@ -570,3 +570,4 @@ def test_a_held_contact_voltage_filed_as_a_bias_schedule_belongs_to_the_contact(
         )
 
     assert issues(voltage) == []
+    assert issues([voltage]) == []  # the model's "values: [one level]" form
