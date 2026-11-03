@@ -274,6 +274,36 @@ def stated_dimension(path: str, value) -> int | None:
     return int(match.group(1)) if match else None
 
 
+_MISFILED_LIFETIME = re.compile(
+    r"physics\.(?:models\.|parameters\.)?(?:srh_|carrier_)*lifetimes?"
+)
+
+
+def misfiled_lifetimes(path: str, value) -> list[tuple[str, object]] | None:
+    """``physics.parameters.<carrier>_lifetime`` fields for SRH lifetimes filed elsewhere.
+
+    One value stands for both carriers; a record is read by carrier name. ``None`` when the
+    path is not a lifetime or a record key cannot be told to a carrier.
+    """
+    if not _MISFILED_LIFETIME.fullmatch(path):
+        return None
+    if not isinstance(value, dict):
+        return [
+            ("physics.parameters.electron_lifetime", value),
+            ("physics.parameters.hole_lifetime", value),
+        ]
+    mapped = []
+    for key, item in value.items():
+        word = str(key).lower()
+        if re.search(r"electron|tau_?n\b|^n$|^e$", word):
+            mapped.append(("physics.parameters.electron_lifetime", item))
+        elif re.search(r"hole|tau_?p\b|^p$|^h$", word):
+            mapped.append(("physics.parameters.hole_lifetime", item))
+        else:
+            return None
+    return mapped or None
+
+
 def unsupported_physics_inputs(intent):
     """Explicit quantity overrides need an actual portable contract field."""
     unsupported = []
@@ -286,6 +316,8 @@ def unsupported_physics_inputs(intent):
             continue  # a contact voltage, judged under the contact it belongs to
         if stated_dimension(field.path, field.value) is not None:
             continue  # the structure's dimension, judged against the spec's own
+        if misfiled_lifetimes(field.path, field.value) is not None:
+            continue  # SRH lifetimes, judged under the physics parameters they belong to
         paths = _quantity_paths(field.value, field.path.removeprefix("physics.").split("."))
         if any(
             not (
@@ -802,6 +834,17 @@ def plan_authority_issues(spec, intent, *, structured_paths=()):
             continue
         if (moved := misfiled_contact_voltage(field.path)) is not None:
             field = field.model_copy(update={"path": moved})
+        if (lifetimes := misfiled_lifetimes(field.path, field.value)) is not None:
+            for lifetime_path, lifetime in lifetimes:
+                if not _equal(_resolve(spec, lifetime_path.split(".")), lifetime):
+                    issues.append(
+                        {
+                            "intent_path": lifetime_path,
+                            "reason": "changed_confirmed_input",
+                            "expected": lifetime,
+                        }
+                    )
+            continue
         if (dimension := stated_dimension(field.path, field.value)) is not None:
             if dimension != spec.dimension:
                 issues.append(

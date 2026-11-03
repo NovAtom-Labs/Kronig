@@ -511,6 +511,33 @@ def test_stated_structure_dimension_is_judged_against_the_spec(valid_spec):
     assert plan_authority_issues(valid_spec, intent(f"{other}D"))
 
 
+def test_srh_lifetimes_filed_outside_the_physics_parameters_are_judged_there(valid_spec):
+    from tcad_agent.prompting.authority import plan_authority_issues, unsupported_physics_inputs
+
+    from tcad_agent.domain.units import QuantityValue
+
+    microsecond = QuantityValue.model_validate("1 us")
+    parameters = valid_spec.physics.parameters.model_copy(
+        update={"electron_lifetime": microsecond, "hole_lifetime": microsecond}
+    )
+    spec = valid_spec.model_copy(
+        update={"physics": valid_spec.physics.model_copy(update={"parameters": parameters})}
+    )
+
+    def intent(value, path="physics.models.srh_lifetimes"):
+        return ResolvedResearchIntent(
+            task_kind="simulation",
+            objective="Keep my lifetimes",
+            fields=(IntentField(path=path, value=value, origin="researcher"),),
+        )
+
+    for value in ("1 us", {"electron": "1 us", "hole": "1 us"}, {"tau_n": "1e-6 s", "tau_p": "1 us"}):
+        assert unsupported_physics_inputs(intent(value)) == []
+        assert plan_authority_issues(spec, intent(value)) == []
+    assert plan_authority_issues(spec, intent("2 us"))
+    assert plan_authority_issues(valid_spec, intent("1 us"))  # a plan without them changed them
+
+
 def test_doping_record_vocabulary_variants_are_the_same_dopant_and_profile(valid_spec):
     from tcad_agent.prompting.authority import plan_authority_issues
 
