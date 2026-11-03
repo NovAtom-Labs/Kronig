@@ -536,6 +536,15 @@ def test_srh_lifetimes_filed_outside_the_physics_parameters_are_judged_there(val
         assert plan_authority_issues(spec, intent(value)) == []
     assert plan_authority_issues(spec, intent("2 us"))
     assert plan_authority_issues(valid_spec, intent("1 us"))  # a plan without them changed them
+    # The lifetimes may arrive inside the recombination record, beside the model's name.
+    record = {"model": "srh", "electron_lifetime": "1 us", "hole_lifetime": "1 us"}
+    assert unsupported_physics_inputs(intent(record, "physics.models.recombination")) == []
+    assert plan_authority_issues(spec, intent(record, "physics.models.recombination")) == []
+    assert plan_authority_issues(
+        spec, intent({**record, "hole_lifetime": "3 us"}, "physics.models.recombination")
+    )
+    # A bare model name carries no lifetime and is left to the existing handling.
+    assert plan_authority_issues(spec, intent("srh", "physics.models.recombination")) is not None
 
 
 def test_doping_record_vocabulary_variants_are_the_same_dopant_and_profile(valid_spec):

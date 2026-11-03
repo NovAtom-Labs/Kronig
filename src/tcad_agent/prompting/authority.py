@@ -275,8 +275,11 @@ def stated_dimension(path: str, value) -> int | None:
 
 
 _MISFILED_LIFETIME = re.compile(
-    r"physics\.(?:models\.|parameters\.)?(?:srh_|carrier_)*lifetimes?"
+    r"physics\.(?:models\.|parameters\.)?"
+    r"(?:(?:srh_|carrier_)*lifetimes?|(?:recombination|srh)(?:\.(?:srh_|carrier_)*lifetimes?)?)"
 )
+# Keys of a recombination record that name the model, not a lifetime.
+_RECOMBINATION_LABELS = {"model", "models", "type", "name", "kind", "enabled", "mechanism"}
 
 
 def misfiled_lifetimes(path: str, value) -> list[tuple[str, object]] | None:
@@ -287,7 +290,10 @@ def misfiled_lifetimes(path: str, value) -> list[tuple[str, object]] | None:
     """
     if not _MISFILED_LIFETIME.fullmatch(path):
         return None
+    names_a_model = re.search(r"(recombination|srh)$", path) is not None
     if not isinstance(value, dict):
+        if names_a_model:
+            return None  # a bare model name, not a lifetime
         return [
             ("physics.parameters.electron_lifetime", value),
             ("physics.parameters.hole_lifetime", value),
@@ -295,6 +301,8 @@ def misfiled_lifetimes(path: str, value) -> list[tuple[str, object]] | None:
     mapped = []
     for key, item in value.items():
         word = str(key).lower()
+        if names_a_model and word in _RECOMBINATION_LABELS:
+            continue
         if re.search(r"electron|tau_?n\b|^n$|^e$", word):
             mapped.append(("physics.parameters.electron_lifetime", item))
         elif re.search(r"hole|tau_?p\b|^p$|^h$", word):
