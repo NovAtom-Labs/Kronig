@@ -44,7 +44,7 @@ class WorkspaceResultComparison(StrictModel):
 class WorkspaceResultReader:
     """Read and verify the canonical artifacts behind a workbench view."""
 
-    json_limit = 32 * 1024 * 1024
+    json_limit = 128 * 1024 * 1024  # see BundleReader.json_limit
     required_artifacts = (
         "experiment.json",
         "results/canonical.json",

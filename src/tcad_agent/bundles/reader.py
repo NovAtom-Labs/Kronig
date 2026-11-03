@@ -28,7 +28,9 @@ class VerifiedBundle(StrictModel):
 
 
 class BundleReader:
-    json_limit = 16 * 1024 * 1024
+    # A fine 1D mesh with many bias points and every profile is tens of megabytes of JSON; the
+    # bound stays as a guard against a corrupt or hostile file, not as a ceiling on real results.
+    json_limit = 128 * 1024 * 1024
     required = (
         "experiment.json",
         "results/canonical.json",

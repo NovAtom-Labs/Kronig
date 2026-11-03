@@ -340,4 +340,27 @@ assertEqual(
   if (pick(sweep) !== "terminal_current__anode") throw new Error("a sweep curve should still lead");
   if (pick([dataset("terminal_current__a", 1, ["bias"])]) !== "terminal_current__a") throw new Error("a lone dataset is kept");
   if (pick([]) !== "") throw new Error("no datasets, no choice");
+  // Real results list the profiles before the terminal curves: the sweep curve still leads,
+  // and it is the terminal that carries the current, not the insulated gate.
+  const mosfet = [
+    dataset("charge_density", 800, ["bias", "position"]),
+    {name: "terminal_current__gate", values: [0, 1e-9, 2e-9], axes: [{kind: "bias"}]},
+    {name: "terminal_current__drain", values: [1, 50, 900], axes: [{kind: "bias"}]},
+    {name: "terminal_current__source", values: [-1, -50, -899], axes: [{kind: "bias"}]},
+  ];
+  if (pick(mosfet) !== "terminal_current__drain") throw new Error("a MOSFET sweep opens on the drain current");
+  const diode = [dataset("charge_density", 800, ["bias", "position"]), dataset("terminal_current__anode", 8, ["bias"])];
+  if (pick(diode) !== "terminal_current__anode") throw new Error("a diode sweep opens on its current, not a profile");
+  // Profiles requested at chosen biases lead instead.
+  const withProfiles = {result: {metadata: {profile_bias_values_v: [0, 0.4]}}};
+  const bands = [dataset("charge_density", 800, ["bias", "position"]), dataset("conduction_band", 800, ["bias", "position"]),
+    dataset("terminal_current__anode", 8, ["bias"])];
+  if (pick(bands, withProfiles) !== "conduction_band") throw new Error("requested profiles lead");
+  // A requested observable names the profile that leads, even without profile biases recorded.
+  const bandRequest = {experiment: {observables: ["conduction_band", "valence_band"]}};
+  const twoD = [dataset("potential", 800, ["bias", "position"]), dataset("conduction_band", 800, ["bias", "position"]),
+    {name: "terminal_current__source", values: [1, 2, 3], axes: [{kind: "bias"}]}];
+  if (pick(twoD, bandRequest) !== "conduction_band") throw new Error("a band-diagram request opens on the band");
+  const currentOnly = {experiment: {observables: ["terminal_current_density"]}};
+  if (pick(twoD, currentOnly) !== "terminal_current__source") throw new Error("a current-only request opens on the current");
 })();

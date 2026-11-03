@@ -435,6 +435,7 @@
 
   function positionLabel(meters) {
     const absolute = Math.abs(meters);
+    if (absolute === 0) return "0 nm";
     if (absolute >= 1e-3) return `${formatNumber(meters * 1e3)} mm`;
     if (absolute >= 1e-6) return `${formatNumber(meters * 1e6)} µm`;
     if (absolute >= 1e-9) return `${formatNumber(meters * 1e9)} nm`;
@@ -486,6 +487,14 @@
     return element("span", `result-badge${kind ? ` is-${kind}` : ""}`, text);
   }
 
+  // The headline badge says what the status cards say: a run whose only failed check is a
+  // review flag is "Needs review", not a red "Failed" beside "Execution: Completed".
+  function overallBadge(payload) {
+    const state = statusDimensions(payload).scientific.state;
+    const kinds = {passed: "passed", needs_review: "warning", unavailable: "not_applicable"};
+    return badge(label(state), kinds[state] || "");
+  }
+
   function metricCard(name, value, unit = "") {
     const card = element("article", "result-metric");
     card.append(element("span", "result-metric-label", name));
@@ -523,9 +532,11 @@
     const profiles = payload.experiment?.profiles || [];
     for (const region of payload.experiment?.regions || []) {
       const item = element("article", "result-region");
-      const profile = profiles.find((entry) => entry.region === region.id);
+      const regionProfiles = profiles.filter((entry) => entry.region === region.id);
       const start = Number(region.x0?.magnitude_si);
       const end = Number(region.x1?.magnitude_si);
+      const lateralStart = Number(region.y0?.magnitude_si);
+      const lateralEnd = Number(region.y1?.magnitude_si);
       item.append(element("strong", "", region.id));
       item.append(element("span", "", label(region.material)));
       item.append(element(
@@ -535,13 +546,24 @@
           ? `${positionLabel(start)} to ${positionLabel(end)}`
           : "Extent unavailable",
       ));
-      item.append(element(
-        "small",
-        "",
-        profile
-          ? `${label(profile.species)} · ${formatNumber(Number(profile.value?.magnitude_si) / 1e6)} cm⁻³`
-          : "No configured profile",
-      ));
+      if (region.y0 && region.y1 && Number.isFinite(lateralStart) && Number.isFinite(lateralEnd)) {
+        item.append(element("small", "", `lateral ${positionLabel(lateralStart)} to ${positionLabel(lateralEnd)}`));
+      }
+      // Every doping profile of the region: a transistor's body plus its source and drain windows.
+      regionProfiles.forEach((profile) => {
+        const window = ["x0", "x1", "y0", "y1"].map((key) => Number(profile[key]?.magnitude_si));
+        const hasWindow = profile.kind === "box" && window.every((value) => Number.isFinite(value));
+        item.append(element(
+          "small",
+          "",
+          `${label(profile.species)} · ${formatNumber(Number(profile.value?.magnitude_si) / 1e6)} cm⁻³`
+            + (hasWindow
+              ? ` · window ${positionLabel(window[0])} to ${positionLabel(window[1])} deep, `
+                + `${positionLabel(window[2])} to ${positionLabel(window[3])} lateral`
+              : ""),
+        ));
+      });
+      if (!regionProfiles.length) item.append(element("small", "", "No configured profile"));
       strip.append(item);
     }
     if (!strip.children.length) strip.append(element("p", "result-empty", "No region geometry is available."));
@@ -557,9 +579,15 @@
   function renderMetrics(payload) {
     const values = summarize(payload);
     const grid = element("section", "result-metrics");
+    // A two-dimensional run keeps its fields in the datasets below rather than as one summary
+    // number; say that instead of a bare "Unavailable".
+    const twoDimensional = Number(payload?.experiment?.dimension) === 2;
+    const fieldMetric = (name, value, unit) => (value === null && twoDimensional
+      ? metricCard(name, "In datasets", "two-dimensional fields are listed below")
+      : metricCard(name, formatNumber(value), value === null ? "" : unit));
     grid.append(
-      metricCard("Potential span · all points", formatNumber(values.potentialRange), values.potentialRange === null ? "" : "V"),
-      metricCard("Peak electric field", formatNumber(values.peakElectricField), values.peakElectricField === null ? "" : "V/m"),
+      fieldMetric("Potential span · all points", values.potentialRange, "V"),
+      fieldMetric("Peak electric field", values.peakElectricField, "V/m"),
       metricCard("Maximum terminal current", formatNumber(values.maximumTerminalCurrent), values.maximumTerminalCurrent === null ? "" : "A/m²"),
       metricCard(
         "Validation",
@@ -920,18 +948,40 @@
   // operating point has no curve to draw, so it opens on its band structure or potential.
   const OPENING_PROFILES = ["conduction_band", "potential", "electron_density", "electric_field"];
 
-  function defaultDatasetName(datasets) {
+  function defaultDatasetName(datasets, payload) {
     if (!datasets.length) return "";
     const samples = (dataset) => (Array.isArray(dataset.values) ? dataset.values.length : 0);
-    if (samples(datasets[0]) > 1) return datasets[0].name;
-    const profiles = datasets.filter((dataset) => samples(dataset) > 1
-      && dataset.axes.some((axis) => axis.kind === "position"));
+    const onPosition = (dataset) => dataset.axes.some((axis) => axis.kind === "position");
     const base = (dataset) => String(dataset.name).split("__")[0];
-    for (const wanted of OPENING_PROFILES) {
-      const match = profiles.find((dataset) => base(dataset) === wanted);
-      if (match) return match.name;
+    const profiles = datasets.filter((dataset) => samples(dataset) > 1 && onPosition(dataset));
+    const curves = datasets.filter((dataset) => samples(dataset) > 1
+      && !onPosition(dataset) && dataset.axes.length === 1);
+    const openingProfile = () => {
+      for (const wanted of OPENING_PROFILES) {
+        const match = profiles.find((dataset) => base(dataset) === wanted);
+        if (match) return match.name;
+      }
+      return "";
+    };
+    // A researcher who asked for a profile (a band diagram, a field) sees that profile first,
+    // in the order they named them; one who asked only for currents sees the current curve.
+    const requested = (Array.isArray(payload?.experiment?.observables) ? payload.experiment.observables : [])
+      .map(String);
+    const requestedProfile = requested
+      .map((name) => profiles.find((dataset) => base(dataset) === name))
+      .find(Boolean);
+    if (requestedProfile) return requestedProfile.name;
+    const wantsProfiles = finiteValues(payload?.result?.metadata?.profile_bias_values_v).length > 0;
+    if (wantsProfiles && openingProfile()) return openingProfile();
+    if (curves.length) {
+      // The sweep curve of the terminal that carries the current: a MOSFET's drain, not its
+      // insulated gate.
+      const peak = (dataset) => Math.max(...dataset.values.map((value) => Math.abs(value)));
+      const terminal = curves.filter((dataset) => base(dataset) === "terminal_current");
+      return (terminal.length ? terminal : curves)
+        .reduce((best, dataset) => (peak(dataset) > peak(best) ? dataset : best)).name;
     }
-    return (profiles[0] || datasets[0]).name;
+    return openingProfile() || (profiles[0] || datasets[0]).name;
   }
 
   function renderDatasets(payload, datasets) {
@@ -948,7 +998,7 @@
       option.value = dataset.name;
       select.append(option);
     });
-    select.value = defaultDatasetName(datasets);
+    select.value = defaultDatasetName(datasets, payload);
     const slice = element("select");
     slice.setAttribute("aria-label", "Displayed operating point");
     const mode = element("select");
@@ -1204,7 +1254,7 @@
     section.dataset.resultSection = "validation";
     const heading = element("div", "result-section-heading");
     heading.append(element("h2", "", "Validation"));
-    heading.append(badge(label(payload.validation?.overall || "unavailable"), payload.validation?.overall || ""));
+    heading.append(overallBadge(payload));
     section.append(heading);
     const presentation = validationPresentation(payload.validation?.checks || []);
     const summary = element("div", `result-validation-summary is-${presentation.tone}`);
@@ -1384,7 +1434,7 @@
     ));
     const badges = element("div", "result-badges");
     badges.append(
-      badge(label(payload.validation?.overall || "unavailable"), payload.validation?.overall || ""),
+      overallBadge(payload),
       badge(`backend: ${payload.result?.backend || "unavailable"}`),
       badge(`schema: ${payload.result?.schema_version || "unavailable"}`),
     );
