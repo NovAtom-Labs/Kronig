@@ -364,7 +364,8 @@ assertEqual(
     dataset("terminal_current__anode", 8, ["bias"])];
   if (pick(bands, withProfiles) !== "conduction_band") throw new Error("requested profiles lead");
   // A requested observable names the profile that leads, even without profile biases recorded.
-  const bandRequest = {experiment: {observables: ["conduction_band", "valence_band"]}};
+  const bandRequest = {experiment: {observables: ["conduction_band", "valence_band"],
+    profile_sampling: {mode: "explicit", bias_values: [0, 0.5, 1]}}};
   const twoD = [dataset("potential", 800, ["bias", "position"]), dataset("conduction_band", 800, ["bias", "position"]),
     {name: "terminal_current__source", values: [1, 2, 3], axes: [{kind: "bias"}]}];
   if (pick(twoD, bandRequest) !== "conduction_band") throw new Error("a band-diagram request opens on the band");
@@ -376,6 +377,10 @@ assertEqual(
   const prefixed = (item) => ({...item, name: `0:run-a:${item.name}`, canonicalDatasetName: item.name});
   if (pick(equilibriumProfiles.map(prefixed), manyProfiles) !== "0:run-a:conduction_band") throw new Error("a prefixed band edge leads");
   if (pick(balanced.map(prefixed)) !== "0:run-a:terminal_current__drain") throw new Error("a prefixed drain leads");
+  // An Id-Vg sweep whose planner also listed a potential profile still opens on the current,
+  // because no profile biases were asked for.
+  const idvg = {experiment: {observables: ["terminal_current_density", "potential"]}};
+  if (pick(twoD, idvg) !== "terminal_current__source") throw new Error("a sweep without profile biases opens on the current");
   const currentOnly = {experiment: {observables: ["terminal_current_density"]}};
   if (pick(twoD, currentOnly) !== "terminal_current__source") throw new Error("a current-only request opens on the current");
 })();

@@ -972,15 +972,21 @@
     const requestedProfiles = requested
       .map((name) => profiles.find((dataset) => base(dataset) === name))
       .filter(Boolean);
-    if (requestedProfiles.length) {
+    const leadingRequestedProfile = () => {
       // Of several requested profiles the band edge leads, then potential, density and field.
       const preferred = OPENING_PROFILES
         .map((wanted) => requestedProfiles.find((dataset) => base(dataset) === wanted))
         .find(Boolean);
       return (preferred || requestedProfiles[0]).name;
-    }
-    const wantsProfiles = finiteValues(payload?.result?.metadata?.profile_bias_values_v).length > 0;
-    if (wantsProfiles && openingProfile()) return openingProfile();
+    };
+    const sampling = payload?.experiment?.profile_sampling;
+    const profileBiases = Boolean(sampling
+      && ((Array.isArray(sampling.bias_values) && sampling.bias_values.length > 0)
+        || sampling.mode === "automatic"))
+      || finiteValues(payload?.result?.metadata?.profile_bias_values_v).length > 0;
+    // Profiles at chosen biases were asked for: they lead the sweep's current.
+    if (profileBiases && requestedProfiles.length) return leadingRequestedProfile();
+    if (profileBiases && openingProfile()) return openingProfile();
     if (curves.length) {
       // The sweep curve of the terminal that carries the current: a MOSFET's drain, not its
       // insulated gate.
@@ -994,6 +1000,7 @@
       const preferred = carrying.find((dataset) => /^(drain|collector|anode)$/.test(terminalOf(dataset)));
       return (preferred || carrying[0]).name;
     }
+    if (requestedProfiles.length) return leadingRequestedProfile();
     return openingProfile() || (profiles[0] || datasets[0]).name;
   }
 
