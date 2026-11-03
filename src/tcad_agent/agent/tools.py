@@ -357,9 +357,11 @@ class DomainTools:
                 code="gated_surface_requires_fermi_statistics",
                 message=(
                     "A gate over an insulator drives the silicon surface into accumulation or "
-                    "inversion, where Boltzmann statistics do not hold. Select Fermi-Dirac "
-                    "statistics (physics.models 'fermi' in place of 'boltzmann') and say why in "
-                    "the plan, or ask the researcher to confirm Boltzmann explicitly."
+                    "inversion, where Boltzmann statistics do not hold. This is a physics "
+                    "requirement, not a change to the scientific request: select Fermi-Dirac "
+                    "statistics (physics.models 'fermi' in place of 'boltzmann'), state the "
+                    "reason in the plan, and prepare again without asking the researcher. Only a "
+                    "researcher who stated Boltzmann in their own words keeps it."
                 ),
             )
         for contact in spec.contacts:
@@ -394,8 +396,11 @@ class DomainTools:
                         f"The {work_function_ev:g} eV contact lies within {margin_ev} eV of a "
                         "silicon band edge or beyond it, so the surface carrier density reaches "
                         "the density of states and Boltzmann statistics cannot hold, whatever the "
-                        "bulk doping. Select Fermi-Dirac statistics (physics.models 'fermi' in "
-                        "place of 'boltzmann') and say why in the plan."
+                        "bulk doping. This is a physics requirement, not a change to the "
+                        "scientific request: select Fermi-Dirac statistics (physics.models "
+                        "'fermi' in place of 'boltzmann'), state the reason in the plan, and "
+                        "prepare again without asking the researcher. Only a researcher who "
+                        "stated Boltzmann in their own words keeps it."
                     ),
                 )
         return None
