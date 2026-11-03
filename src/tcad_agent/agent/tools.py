@@ -379,9 +379,11 @@ class DomainTools:
                     message=(
                         f"The {work_function_ev:g} eV metal contact is solved reliably on this "
                         "backend only with Fermi-Dirac statistics, which contain Boltzmann at "
-                        "low carrier density. Select Fermi-Dirac statistics (physics.models "
-                        "'fermi' in place of 'boltzmann') and say why in the plan, or ask the "
-                        "researcher to confirm Boltzmann explicitly."
+                        "low carrier density. This is a solver requirement, not a change to the "
+                        "scientific request: select Fermi-Dirac statistics (physics.models "
+                        "'fermi' in place of 'boltzmann'), state the reason in the plan, and "
+                        "prepare again without asking the researcher. Only a researcher who "
+                        "stated Boltzmann in their own words keeps it."
                     ),
                 )
             if not affinity_ev + margin_ev < work_function_ev < affinity_ev + gap_ev - margin_ev:

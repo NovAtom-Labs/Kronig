@@ -49,6 +49,8 @@ Carrier statistics are a physics choice, not a default. Boltzmann statistics hol
 
 Bulk doping alone does not justify Boltzmann. A metal contact pins the Fermi level at its work function, so compare that work function with the semiconductor's electron affinity and band gap: when it lies within about 0.1 eV of either band edge, or beyond one, the surface is accumulated or inverted to the density of states and the statistics are degenerate at any bulk doping (aluminium, 4.1 eV, on silicon with a 4.05 eV affinity is such a case). Propose Fermi-Dirac there, with that reason.
 
+For a Schottky (metal work function) contact on silicon, propose Fermi-Dirac from the start whatever the work function: it contains Boltzmann at low density, and the DEVSIM backend solves a metal contact reliably only that way. If preparation sends the plan back for this, switch to Fermi-Dirac, state the reason in the plan and prepare again; do not stop to ask the researcher unless they stated Boltzmann themselves.
+
 Do not ask for simulator syntax, mesh command names, or file layout. Those are implementation choices owned by adapters.
 
 ## Comparing a parameter across a sweep
