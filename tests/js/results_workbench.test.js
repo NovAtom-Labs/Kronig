@@ -361,6 +361,10 @@ assertEqual(
   const twoD = [dataset("potential", 800, ["bias", "position"]), dataset("conduction_band", 800, ["bias", "position"]),
     {name: "terminal_current__source", values: [1, 2, 3], axes: [{kind: "bias"}]}];
   if (pick(twoD, bandRequest) !== "conduction_band") throw new Error("a band-diagram request opens on the band");
+  const manyProfiles = {experiment: {observables: ["charge_density", "electric_field", "conduction_band"]}};
+  const equilibriumProfiles = [dataset("charge_density", 800, ["position"]), dataset("electric_field", 800, ["position"]),
+    dataset("conduction_band", 800, ["position"])];
+  if (pick(equilibriumProfiles, manyProfiles) !== "conduction_band") throw new Error("the band edge leads among requested profiles");
   const currentOnly = {experiment: {observables: ["terminal_current_density"]}};
   if (pick(twoD, currentOnly) !== "terminal_current__source") throw new Error("a current-only request opens on the current");
 })();

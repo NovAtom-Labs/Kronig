@@ -967,10 +967,16 @@
     // in the order they named them; one who asked only for currents sees the current curve.
     const requested = (Array.isArray(payload?.experiment?.observables) ? payload.experiment.observables : [])
       .map(String);
-    const requestedProfile = requested
+    const requestedProfiles = requested
       .map((name) => profiles.find((dataset) => base(dataset) === name))
-      .find(Boolean);
-    if (requestedProfile) return requestedProfile.name;
+      .filter(Boolean);
+    if (requestedProfiles.length) {
+      // Of several requested profiles the band edge leads, then potential, density and field.
+      const preferred = OPENING_PROFILES
+        .map((wanted) => requestedProfiles.find((dataset) => base(dataset) === wanted))
+        .find(Boolean);
+      return (preferred || requestedProfiles[0]).name;
+    }
     const wantsProfiles = finiteValues(payload?.result?.metadata?.profile_bias_values_v).length > 0;
     if (wantsProfiles && openingProfile()) return openingProfile();
     if (curves.length) {
