@@ -349,6 +349,13 @@ assertEqual(
     {name: "terminal_current__source", values: [-1, -50, -899], axes: [{kind: "bias"}]},
   ];
   if (pick(mosfet) !== "terminal_current__drain") throw new Error("a MOSFET sweep opens on the drain current");
+  // Source and drain carry the same current: the drain leads, as the researcher asked for Id.
+  const balanced = [
+    {name: "terminal_current__gate", values: [0, 1e-9], axes: [{kind: "bias"}]},
+    {name: "terminal_current__source", values: [-1000, -9001], axes: [{kind: "bias"}]},
+    {name: "terminal_current__drain", values: [1000, 9000], axes: [{kind: "bias"}]},
+  ];
+  if (pick(balanced) !== "terminal_current__drain") throw new Error("the drain leads when source and drain balance");
   const diode = [dataset("charge_density", 800, ["bias", "position"]), dataset("terminal_current__anode", 8, ["bias"])];
   if (pick(diode) !== "terminal_current__anode") throw new Error("a diode sweep opens on its current, not a profile");
   // Profiles requested at chosen biases lead instead.

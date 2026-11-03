@@ -984,8 +984,14 @@
       // insulated gate.
       const peak = (dataset) => Math.max(...dataset.values.map((value) => Math.abs(value)));
       const terminal = curves.filter((dataset) => base(dataset) === "terminal_current");
-      return (terminal.length ? terminal : curves)
-        .reduce((best, dataset) => (peak(dataset) > peak(best) ? dataset : best)).name;
+      const pool = terminal.length ? terminal : curves;
+      const strongest = Math.max(...pool.map(peak));
+      // Terminals that carry the same current (a MOSFET's source and drain) are within a
+      // fraction of a percent of each other: lead with the drain, collector or anode.
+      const carrying = pool.filter((dataset) => peak(dataset) >= strongest * 0.99);
+      const preferred = carrying.find((dataset) => /^(drain|collector|anode)$/.test(
+        String(dataset.name).split("__")[1] || ""));
+      return (preferred || carrying[0]).name;
     }
     return openingProfile() || (profiles[0] || datasets[0]).name;
   }
@@ -1531,9 +1537,11 @@
         console.error(`Result section failed: ${name}`, error);
       }
     };
-    section("Structure", () => renderStructure(payload));
+    // The plot the researcher came for sits right under the headline numbers; the structure
+    // summary, which is tall, follows it.
     section("Metrics", () => renderMetrics(payload));
     section("Plots", () => renderFields(payload, comparisonRuns));
+    section("Structure", () => renderStructure(payload));
     const lower = element("div", "result-lower-grid");
     workbench.append(lower);
     section("Operating points", () => renderOperatingPoints(payload), lower);

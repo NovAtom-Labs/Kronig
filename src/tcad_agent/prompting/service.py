@@ -355,7 +355,7 @@ class PromptPreparationService:
             raise ModelResponseError(
                 "Request preparation did not resolve the submitted answers. No simulation was "
                 "started and the same questions will not be repeated. Your answers are retained; "
-                "retry preparation or revise the request."
+                "send the request again, or reword it, in the message box below."
             )
         compiled = None
         if decision.status == "ready":
