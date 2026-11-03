@@ -42,7 +42,10 @@ studies: [equilibrium, dc, dc_points, ac, frequency, transient, temperature, par
   stack is the MOS capacitor. Other contacts keep a fixed voltage through their voltage offset, so a
   drain bias for an Id-Vgs curve is an offset on the drain. In two dimensions a contact on silicon is
   ohmic and a contact on an insulator is a gate with its work function; a metal contact directly on
-  silicon (a Schottky contact) is available in one dimension only.
+  silicon (a Schottky contact) is available in one dimension only. Each semiconductor is one silicon
+  region: a bipolar transistor is one silicon block whose emitter, base and collector are doped
+  rectangular windows (layers), not three silicon regions, so ask for each layer's extent and doping
+  as a window and for each contact's face and span, never for separate silicon regions.
 - Contacts: ohmic; a metal with an explicit work function in eV (on silicon it is a Schottky
   contact, on an oxide it is a gate); an ideal gate; insulating.
 - Carrier statistics: Boltzmann or Fermi-Dirac, in one and two dimensions.
