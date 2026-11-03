@@ -372,6 +372,10 @@ assertEqual(
   const equilibriumProfiles = [dataset("charge_density", 800, ["position"]), dataset("electric_field", 800, ["position"]),
     dataset("conduction_band", 800, ["position"])];
   if (pick(equilibriumProfiles, manyProfiles) !== "conduction_band") throw new Error("the band edge leads among requested profiles");
+  // The browser lists datasets under a run prefix; a request still finds its profile and terminal.
+  const prefixed = (item) => ({...item, name: `0:run-a:${item.name}`, canonicalDatasetName: item.name});
+  if (pick(equilibriumProfiles.map(prefixed), manyProfiles) !== "0:run-a:conduction_band") throw new Error("a prefixed band edge leads");
+  if (pick(balanced.map(prefixed)) !== "0:run-a:terminal_current__drain") throw new Error("a prefixed drain leads");
   const currentOnly = {experiment: {observables: ["terminal_current_density"]}};
   if (pick(twoD, currentOnly) !== "terminal_current__source") throw new Error("a current-only request opens on the current");
 })();

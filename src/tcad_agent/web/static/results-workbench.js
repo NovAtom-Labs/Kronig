@@ -952,7 +952,9 @@
     if (!datasets.length) return "";
     const samples = (dataset) => (Array.isArray(dataset.values) ? dataset.values.length : 0);
     const onPosition = (dataset) => dataset.axes.some((axis) => axis.kind === "position");
-    const base = (dataset) => String(dataset.name).split("__")[0];
+    // The workbench lists datasets under a run prefix; the canonical name is what a request names.
+    const base = (dataset) => String(dataset.canonicalDatasetName || dataset.name).split("__")[0];
+    const terminalOf = (dataset) => String(dataset.canonicalDatasetName || dataset.name).split("__")[1] || "";
     const profiles = datasets.filter((dataset) => samples(dataset) > 1 && onPosition(dataset));
     const curves = datasets.filter((dataset) => samples(dataset) > 1
       && !onPosition(dataset) && dataset.axes.length === 1);
@@ -989,8 +991,7 @@
       // Terminals that carry the same current (a MOSFET's source and drain) are within a
       // fraction of a percent of each other: lead with the drain, collector or anode.
       const carrying = pool.filter((dataset) => peak(dataset) >= strongest * 0.99);
-      const preferred = carrying.find((dataset) => /^(drain|collector|anode)$/.test(
-        String(dataset.name).split("__")[1] || ""));
+      const preferred = carrying.find((dataset) => /^(drain|collector|anode)$/.test(terminalOf(dataset)));
       return (preferred || carrying[0]).name;
     }
     return openingProfile() || (profiles[0] || datasets[0]).name;
