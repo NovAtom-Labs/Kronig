@@ -399,8 +399,8 @@ class SentaurusAdapter:
             str(region.material) == "silicon_dioxide" for region in spec.regions
         ):
             # Next to an insulator the field along the channel is the driving force. The
-            # simulator's default form stalled the Newton solve of a two-dimensional MOSFET
-            # at its first bias point; this standard channel form converged in minutes.
+            # simulator's default form stalled the Newton solve of a two-dimensional gated
+            # channel at its first bias point; this standard channel form converged in minutes.
             mobility_terms[mobility_terms.index("HighFieldSaturation")] = (
                 "HighFieldSaturation( EparallelToInterface )"
             )
